@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neuroforge"
+version = "0.1.0"
+description = "A biologically inspired spiking liquid brain simulation toolkit"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "NeuroForge Contributors" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.3", "numpy>=1.26"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.7",
+    "mypy>=1.10",
+    "pyright",
+    "types-setuptools",
+]
+
+[project.scripts]
+neuroforge = "neuroforge.runners.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/neuroforge"]
+
+# ── ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "TCH"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["neuroforge"]
+
+# ── mypy ──────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+mypy_path = "src"
+packages = ["neuroforge"]
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*"]
+ignore_missing_imports = true
