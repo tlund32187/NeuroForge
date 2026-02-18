@@ -12,6 +12,7 @@ Budget:
 from __future__ import annotations
 
 import pytest
+
 from neuroforge.tasks.logic_gates import GATE_TABLES, LogicGateConfig, LogicGateTask
 
 # ── Parametrised test for simple gates ──────────────────────────────

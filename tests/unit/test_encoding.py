@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from neuroforge.encoding.decode import RateDecoder, RateDecoderParams
 from neuroforge.encoding.rate import RateEncoder, RateEncoderParams
 

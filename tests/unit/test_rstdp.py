@@ -9,6 +9,7 @@ import math
 
 import pytest
 import torch
+
 from neuroforge.contracts.learning import LearningBatch, LearningStepResult
 from neuroforge.learning.rstdp import RSTDPParams, RSTDPRule
 

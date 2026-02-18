@@ -6,9 +6,23 @@
         "src"
     ],
     "include": [
-        "src"
+        "src",
+        "tests"
     ],
     "reportMissingTypeStubs": "warning",
     "reportUnusedImport": "error",
-    "reportUnusedVariable": "error"
+    "reportUnusedVariable": "error",
+    "executionEnvironments": [
+        {
+            "root": "src"
+        },
+        {
+            "root": "tests",
+            "reportUnknownMemberType": false,
+            "reportUnknownVariableType": false,
+            "reportUnknownArgumentType": false,
+            "reportPrivateUsage": false,
+            "reportMissingTypeStubs": false
+        }
+    ]
 }

@@ -10,6 +10,7 @@ import math
 
 import pytest
 import torch
+
 from neuroforge.contracts.simulation import SimulationConfig
 from neuroforge.contracts.synapses import SynapseTopology
 from neuroforge.contracts.types import Compartment

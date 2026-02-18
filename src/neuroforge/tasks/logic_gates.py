@@ -6,16 +6,22 @@ Architecture (simple gates: AND, OR, NAND, NOR):
 Architecture (XOR, XNOR):
     2 input neurons → N hidden neurons → 1 output neuron  (two layers)
 
-Training loop (spike-count error learning):
+Training — simple gates (spike-count error rule):
 1. Pick a random input pattern (00, 01, 10, 11)
 2. Encode inputs as constant drive currents (rate encoding)
 3. Run simulation for ``window`` steps
-4. Count input, (hidden,) and output spikes
-5. Decode output (binary decode based on spike count)
-6. Compute error signal: expected - predicted  (+1 / 0 / -1)
-7. Update weights: dw = lr * error * input_rate  (perceptron-like rule
-   operating on spike counts — biologically plausible rate-coded update)
-8. Repeat until convergence or max trials
+4. Decode output (binary decode based on spike count)
+5. Update weights: dw = lr × error × input_rate  (perceptron-like)
+6. Repeat until convergence or max trials
+
+Training — XOR/XNOR (surrogate-gradient descent + Dale's Law):
+1-4 same as above, but the forward pass builds a differentiable
+    computation graph via a **surrogate spike function** (fast-sigmoid
+    backward through the Heaviside spike non-linearity).
+5. **Dale's Law** — effective weights are ``|w_raw| × sign_mask``:
+    input neurons are excitatory, hidden neurons are split E/I.
+6. MSE loss on differentiable spike count → ``loss.backward()`` →
+    gradient-clipped weight update.
 
 All 6 gates must pass for the milestone.
 """
@@ -24,7 +30,12 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from neuroforge.contracts.monitors import IEventBus
 
 __all__ = ["LogicGateTask", "LogicGateConfig", "LogicGateResult", "GATE_TABLES"]
 
@@ -57,8 +68,14 @@ class LogicGateConfig:
         Simulation time step.
     convergence_streak:
         Number of consecutive correct trials to declare convergence.
+    per_pattern_streak:
+        Each pattern must be individually correct for this many
+        consecutive appearances before declaring convergence.
     n_hidden:
         Number of hidden neurons (used for XOR/XNOR only).
+    n_inhibitory:
+        Number of inhibitory hidden neurons (Dale's Law).
+        The remaining ``n_hidden - n_inhibitory`` are excitatory.
     amplitude:
         Input encoding amplitude.
     spike_threshold:
@@ -78,11 +95,13 @@ class LogicGateConfig:
     window_steps: int = 50
     dt: float = 1e-3
     convergence_streak: int = 20
+    per_pattern_streak: int = 5
     n_hidden: int = 6
+    n_inhibitory: int = 2
     amplitude: float = 50.0
     spike_threshold: int = 3
     seed: int = 42
-    lr: float = 0.02
+    lr: float = 5e-3
     w_min: float = -2.0
     w_max: float = 2.0
 
@@ -122,9 +141,43 @@ class LogicGateTask:
         assert result.converged
     """
 
-    def __init__(self, config: LogicGateConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: LogicGateConfig | None = None,
+        event_bus: IEventBus | None = None,
+        *,
+        stop_check: Callable[[], bool] | None = None,
+    ) -> None:
         self.config = config or LogicGateConfig()
         self._truth_table = GATE_TABLES[self.config.gate]
+        self._bus = event_bus
+        self._stop_check = stop_check
+
+    # ── Event helpers ───────────────────────────────────────────────
+
+    def _emit(
+        self,
+        topic: str,
+        step: int,
+        source: str,
+        data: dict[str, Any],
+        *,
+        t: float = 0.0,
+    ) -> None:
+        """Publish an event if the bus is connected."""
+        if self._bus is None:
+            return
+        from neuroforge.contracts.monitors import EventTopic, MonitorEvent
+
+        self._bus.publish(
+            MonitorEvent(
+                topic=EventTopic(topic),
+                step=step,
+                t=t,
+                source=source,
+                data=data,
+            )
+        )
 
     @property
     def needs_hidden(self) -> bool:
@@ -156,6 +209,9 @@ class LogicGateTask:
         b_h = torch.empty(0, dtype=torch.float64)
         w_ho = torch.empty(0, dtype=torch.float64)
         b_o = torch.zeros(1, dtype=torch.float64)
+        spike_fn: Any = None
+        dale_in: Any = None
+        dale_h: Any = None
 
         if self.needs_hidden:
             n_h = cfg.n_hidden
@@ -163,17 +219,78 @@ class LogicGateTask:
             b_h = torch.zeros(n_h, dtype=torch.float64)
             w_ho = torch.empty(n_h, dtype=torch.float64).uniform_(-0.3, 0.3)
             b_o = torch.zeros(1, dtype=torch.float64)
+            # Enable gradient tracking for surrogate-gradient training.
+            for _p in (w_ih, b_h, w_ho, b_o):
+                _p.requires_grad_(True)
+            spike_fn = self._make_surrogate_spike(torch)
+
+            # Dale's Law: build per-population sign masks.
+            from neuroforge.core.dales_law import make_dale_mask
+
+            n_exc = n_h - cfg.n_inhibitory
+            # Input neurons → excitatory (all outgoing weights ≥ 0).
+            dale_in = make_dale_mask(2, 0)
+            # Hidden neurons → first n_exc excitatory, rest inhibitory.
+            dale_h = make_dale_mask(n_exc, cfg.n_inhibitory)
         else:
             w_io = torch.empty(2, dtype=torch.float64).uniform_(-0.3, 0.3)
             b_o = torch.zeros(1, dtype=torch.float64)
 
+        # ── Emit training start + topology ───────────────────────
+        self._emit(
+            "training_start", 0, cfg.gate,
+            {"gate": cfg.gate, "max_trials": cfg.max_trials,
+             "window_steps": cfg.window_steps,
+             "per_pattern_streak": cfg.per_pattern_streak},
+        )
+        if self.needs_hidden:
+            topo_data: dict[str, Any] = {
+                "layers": ["input(2)", f"hidden({cfg.n_hidden})", "output(1)"],
+                "edges": [
+                    {"src": "input", "dst": "hidden",
+                     "weights": w_ih.detach().cpu().tolist()},
+                    {"src": "hidden", "dst": "output",
+                     "weights": w_ho.detach().cpu().tolist()},
+                ],
+            }
+        else:
+            topo_data = {
+                "layers": ["input(2)", "output(1)"],
+                "edges": [
+                    {"src": "input", "dst": "output",
+                     "weights": w_io.detach().cpu().tolist()},
+                ],
+            }
+        self._emit("topology", 0, cfg.gate, topo_data)
+
         # ── Training loop ───────────────────────────────────────────
         patterns = [(0, 0), (0, 1), (1, 0), (1, 1)]
         streak = 0
+        pattern_streaks = {p: 0 for p in patterns}
         accuracy_history: list[float] = []
         recent_correct: list[bool] = []
 
         for trial in range(cfg.max_trials):
+            # Check for external cancellation.
+            if self._stop_check is not None and self._stop_check():
+                weights = self._collect_weights(
+                    w_ih if self.needs_hidden else w_io,
+                    w_ho if self.needs_hidden else None,
+                    b_o,
+                    b_h if self.needs_hidden else None,
+                )
+                self._emit(
+                    "training_end", trial, cfg.gate,
+                    {"converged": False, "trials": trial, "stopped": True},
+                )
+                return LogicGateResult(
+                    gate=cfg.gate,
+                    converged=False,
+                    trials=trial,
+                    final_weights=weights,
+                    accuracy_history=accuracy_history,
+                )
+
             inp = random.choice(patterns)
             expected = self._truth_table[inp]
 
@@ -183,17 +300,17 @@ class LogicGateTask:
             )
 
             hid_counts = torch.zeros(0, dtype=torch.float64)
+            out_diff: Any = None
             if self.needs_hidden:
-                out_count, in_counts, hid_counts = self._forward_hidden(
-                    lif,
-                    drives,
-                    w_ih,
-                    b_h,
-                    w_ho,
-                    b_o,
-                    cfg.dt,
-                    cfg.window_steps,
-                    torch,
+                # Zero gradients before the differentiable forward pass.
+                for _p in (w_ih, b_h, w_ho, b_o):
+                    if _p.grad is not None:
+                        _p.grad.zero_()
+                out_diff, out_count, in_counts, hid_counts = (
+                    self._forward_hidden(
+                        drives, w_ih, b_h, w_ho, b_o, cfg, torch, spike_fn,
+                        dale_in, dale_h,
+                    )
                 )
             else:
                 out_count, in_counts = self._forward_simple(
@@ -204,23 +321,22 @@ class LogicGateTask:
             predicted = 1 if out_count >= cfg.spike_threshold else 0
             correct = predicted == expected
 
-            # Error signal: direction of needed weight change
-            # +1 when should fire more, -1 when should fire less, 0 when correct
+            # Error signal
             error = float(expected - predicted)
 
-            # Update weights + biases using spike-count error rule
+            # Weight update
             if self.needs_hidden:
-                self._update_hidden(
-                    w_ih,
-                    b_h,
-                    w_ho,
-                    b_o,
-                    in_counts,
-                    hid_counts,
-                    error,
-                    cfg,
-                    torch,
-                )
+                if error != 0.0:
+                    # Surrogate-gradient MSE loss on spike count.
+                    target = float(expected) * cfg.spike_threshold
+                    loss = (out_diff - target) ** 2
+                    loss.backward()
+                    with torch.no_grad():
+                        for _p in (w_ih, b_h, w_ho, b_o):
+                            if _p.grad is not None:
+                                _p.grad.clamp_(-1.0, 1.0)
+                                _p.sub_(cfg.lr * _p.grad)
+                                _p.clamp_(cfg.w_min, cfg.w_max)
             else:
                 self._update_simple(w_io, b_o, in_counts, error, cfg, torch)
 
@@ -231,17 +347,59 @@ class LogicGateTask:
             accuracy = sum(recent_correct) / len(recent_correct)
             accuracy_history.append(accuracy)
 
+            # ── Emit per-trial events ───────────────────────────────
+            # Build per-neuron spike data for the dashboard.
+            spike_data: dict[str, Any] = {
+                "input": list(inp),
+                "expected": expected,
+                "predicted": predicted,
+                "correct": correct,
+                "error": error,
+                "accuracy": accuracy,
+                "out_spike_count": out_count,
+                "input_spikes": in_counts.detach().cpu().tolist(),
+            }
+            if self.needs_hidden:
+                spike_data["hidden_spikes"] = hid_counts.detach().cpu().tolist()
+            spike_data["output_spikes"] = [out_count]
+            self._emit("training_trial", trial, cfg.gate, spike_data)
+            # Emit weight snapshot (every trial — monitors bound memory).
+            if self.needs_hidden:
+                self._emit(
+                    "weight", trial, f"{cfg.gate}/input-hidden",
+                    {"weights": w_ih.detach()},
+                )
+                self._emit(
+                    "weight", trial, f"{cfg.gate}/hidden-output",
+                    {"weights": w_ho.detach()},
+                )
+            else:
+                self._emit(
+                    "weight", trial, f"{cfg.gate}/input-output",
+                    {"weights": w_io},
+                )
+
             if correct:
                 streak += 1
+                pattern_streaks[inp] += 1
             else:
                 streak = 0
+                pattern_streaks[inp] = 0
 
-            if streak >= cfg.convergence_streak:
+            all_patterns_reliable = all(
+                s >= cfg.per_pattern_streak
+                for s in pattern_streaks.values()
+            )
+            if streak >= cfg.convergence_streak and all_patterns_reliable:
                 weights = self._collect_weights(
                     w_ih if self.needs_hidden else w_io,
                     w_ho if self.needs_hidden else None,
                     b_o,
                     b_h if self.needs_hidden else None,
+                )
+                self._emit(
+                    "training_end", trial + 1, cfg.gate,
+                    {"converged": True, "trials": trial + 1},
                 )
                 return LogicGateResult(
                     gate=cfg.gate,
@@ -256,6 +414,10 @@ class LogicGateTask:
             w_ho if self.needs_hidden else None,
             b_o,
             b_h if self.needs_hidden else None,
+        )
+        self._emit(
+            "training_end", cfg.max_trials, cfg.gate,
+            {"converged": False, "trials": cfg.max_trials},
         )
         return LogicGateResult(
             gate=cfg.gate,
@@ -313,61 +475,86 @@ class LogicGateTask:
 
     def _forward_hidden(
         self,
-        lif: Any,
         drives: Any,
         w_ih: Any,
         b_h: Any,
         w_ho: Any,
         b_o: Any,
-        dt: float,
-        window: int,
+        cfg: LogicGateConfig,
         torch: Any,
-    ) -> tuple[int, Any, Any]:
-        """2→N→1 network. Returns (out_count, input_counts, hidden_counts)."""
-        from neuroforge.contracts.neurons import NeuronInputs, StepContext
-        from neuroforge.contracts.types import Compartment
+        spike_fn: Any,
+        dale_in: Any,
+        dale_h: Any,
+    ) -> tuple[Any, int, Any, Any]:
+        """2→N→1 forward pass with surrogate gradients and Dale's Law.
+
+        Uses inline LIF dynamics (tau_mem=20 ms, v_thresh=1.0, hard reset)
+        so the computation graph is differentiable through the surrogate
+        spike function.  Input neurons use hard spikes (non-trainable).
+
+        Dale's Law is enforced via ``|w| × sign`` reparameterization:
+        - Input neurons are excitatory → ``w_ih_eff = |w_ih|``
+        - Hidden neurons obey *dale_h* signs → ``w_ho_eff = |w_ho| × sign``
+
+        Returns
+        -------
+        out_diff : Tensor
+            Differentiable output spike count (for ``loss.backward()``).
+        out_count : int
+            Integer output spike count (for convergence checking).
+        in_counts : Tensor
+            Input spike counts (detached).
+        hid_counts : Tensor
+            Hidden spike counts (detached).
+        """
+        import math as _math
+
+        from neuroforge.core.dales_law import apply_dales_constraint
 
         n_h = w_ho.shape[0]
-        input_state = lif.init_state(2, "cpu", "float64")
-        hidden_state = lif.init_state(n_h, "cpu", "float64")
-        output_state = lif.init_state(1, "cpu", "float64")
+        alpha = _math.exp(-cfg.dt / 20e-3)
+        r_factor = cfg.dt / 20e-3
+        v_thresh = torch.tensor(1.0, dtype=torch.float64)
 
-        out_count = 0
+        # Dale's Law reparameterization.
+        w_ih_eff = apply_dales_constraint(
+            w_ih, dale_in.signs.unsqueeze(1),
+        )  # [2, n_h] — input neurons excitatory
+        w_ho_eff = apply_dales_constraint(
+            w_ho, dale_h.signs,
+        )  # [n_h] — hidden neurons E/I
+
+        v_in = torch.zeros(2, dtype=torch.float64)
+        v_hid = torch.zeros(n_h, dtype=torch.float64)
+        v_out = torch.zeros(1, dtype=torch.float64)
+
         in_counts = torch.zeros(2, dtype=torch.float64)
         hid_counts = torch.zeros(n_h, dtype=torch.float64)
+        out_diff = torch.zeros(1, dtype=torch.float64)
 
-        for s in range(window):
-            ctx = StepContext(dt=dt, step=s, t=s * dt)
+        for _s in range(cfg.window_steps):
+            # Input neurons — hard spikes, not trainable.
+            v_in = v_in * alpha + drives * r_factor
+            in_spikes = (v_in >= 1.0).to(torch.float64)
+            v_in = (v_in * (1.0 - in_spikes)).detach()
+            in_counts = in_counts + in_spikes
 
-            inp_result = lif.step(
-                input_state,
-                NeuronInputs(drive={Compartment.SOMA: drives}),
-                ctx,
-            )
-            in_counts += inp_result.spikes.float()
+            # Hidden neurons — surrogate spike for gradient flow.
+            ih_current = (in_spikes @ w_ih_eff) + b_h
+            v_hid = v_hid * alpha + ih_current * r_factor
+            hid_spikes = spike_fn(v_hid, v_thresh)
+            v_hid = v_hid * (1.0 - hid_spikes.detach())
+            hid_counts = hid_counts + hid_spikes.detach()
 
-            ih_current = (inp_result.spikes.float().unsqueeze(1) * w_ih).sum(0) + b_h
+            # Output neuron — surrogate spike.
+            ho_current = (hid_spikes * w_ho_eff).sum() + b_o[0]
+            v_out = v_out * alpha + ho_current.unsqueeze(0) * r_factor
+            out_spikes = spike_fn(v_out, v_thresh)
+            v_out = v_out * (1.0 - out_spikes.detach())
+            out_diff = out_diff + out_spikes
 
-            hid_result = lif.step(
-                hidden_state,
-                NeuronInputs(drive={Compartment.SOMA: ih_current}),
-                ctx,
-            )
-            hid_counts += hid_result.spikes.float()
-
-            ho_current = ((hid_result.spikes.float() * w_ho).sum() + b_o[0]).unsqueeze(
-                0
-            )
-
-            out_result = lif.step(
-                output_state,
-                NeuronInputs(drive={Compartment.SOMA: ho_current}),
-                ctx,
-            )
-            if out_result.spikes.any().item():
-                out_count += 1
-
-        return out_count, in_counts, hid_counts
+        out_count = int(out_diff.detach().sum().item())
+        return out_diff.sum(), out_count, in_counts.detach(), hid_counts.detach()
 
     # ── Weight update helpers ───────────────────────────────────────
 
@@ -394,44 +581,31 @@ class LogicGateTask:
         bias.add_(cfg.lr * error)
         bias.clamp_(cfg.w_min, cfg.w_max)
 
-    def _update_hidden(
-        self,
-        w_ih: Any,
-        b_h: Any,
-        w_ho: Any,
-        b_o: Any,
-        in_counts: Any,
-        hid_counts: Any,
-        error: float,
-        cfg: LogicGateConfig,
-        torch: Any,
-    ) -> None:
-        """Spike-count error-backprop update for 2→N→1 network.
+    @staticmethod
+    def _make_surrogate_spike(torch: Any) -> Any:
+        """Create a spike function with surrogate gradient for backprop.
 
-        Output layer: dw_ho_j = lr * error * hidden_rate_j
-        Hidden layer: dw_ih_ij = lr * (error * sign(w_ho_j)) * input_rate_i
-        Biases update with activity = 1 (always active).
+        The forward pass produces hard Heaviside spikes (0 or 1).
+        The backward pass uses a fast-sigmoid surrogate derivative
+        so that gradients flow through the non-differentiable spike.
         """
-        if error == 0.0:
-            return
+        beta = 5.0
 
-        in_rates = in_counts / cfg.window_steps  # [2]
-        hid_rates = hid_counts / cfg.window_steps  # [n_h]
+        class _Fn(torch.autograd.Function):  # type: ignore[misc]
+            @staticmethod
+            def forward(ctx: Any, v: Any, threshold: Any) -> Any:  # noqa: N805
+                spikes = (v >= threshold).to(v.dtype)
+                ctx.save_for_backward(v, threshold)
+                return spikes
 
-        # Output layer
-        dw_ho = cfg.lr * error * hid_rates
-        w_ho.add_(dw_ho)
-        w_ho.clamp_(cfg.w_min, cfg.w_max)
-        b_o.add_(cfg.lr * error)
-        b_o.clamp_(cfg.w_min, cfg.w_max)
+            @staticmethod
+            def backward(ctx: Any, grad_output: Any) -> tuple[Any, None]:  # noqa: N805
+                v, threshold = ctx.saved_tensors
+                x = v - threshold
+                sg = beta / (1.0 + beta * torch.abs(x)) ** 2
+                return grad_output * sg, None
 
-        # Hidden layer — propagate error through output weights
-        hidden_error = error * w_ho.sign()  # [n_h]
-        dw_ih = cfg.lr * in_rates.unsqueeze(1) * hidden_error.unsqueeze(0)  # [2, n_h]
-        w_ih.add_(dw_ih)
-        w_ih.clamp_(cfg.w_min, cfg.w_max)
-        b_h.add_(cfg.lr * hidden_error)
-        b_h.clamp_(cfg.w_min, cfg.w_max)
+        return _Fn.apply
 
     def _collect_weights(
         self,

@@ -1,0 +1,304 @@
+/* NeuroForge Dashboard — Dark Mode Theme
+   ───────────────────────────────────────── */
+
+:root {
+  --bg-primary:    #0d1117;
+  --bg-secondary:  #161b22;
+  --bg-panel:      #1c2128;
+  --border:        #30363d;
+  --text-primary:  #e6edf3;
+  --text-secondary:#8b949e;
+  --accent:        #58a6ff;
+  --accent-dim:    #1f6feb;
+  --green:         #3fb950;
+  --red:           #f85149;
+  --orange:        #d29922;
+  --purple:        #bc8cff;
+  --neuron-input:  #58a6ff;
+  --neuron-hidden: #bc8cff;
+  --neuron-output: #3fb950;
+  --synapse-pos:   rgba(63, 185, 80, 0.6);
+  --synapse-neg:   rgba(248, 81, 73, 0.6);
+  --radius:        8px;
+  --font-mono:     'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+select, input[type="number"] {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+input[type="number"] { width: 90px; }
+
+.btn-primary {
+  background: var(--accent-dim);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-primary:hover { background: var(--accent); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-stop {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-stop:hover { background: #da3633; }
+.btn-stop:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.badge-idle     { background: var(--border); color: var(--text-secondary); }
+.badge-training { background: var(--accent-dim); color: #fff; animation: pulse 1.5s infinite; }
+.badge-done     { background: var(--green); color: #000; }
+.badge-failed   { background: var(--red); color: #fff; }
+.badge-stopped  { background: var(--orange); color: #000; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ── Main grid ────────────────────────────────────────────────────── */
+
+#grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto auto;
+  gap: 16px;
+  padding: 16px 24px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+#panel-network   { grid-column: 1; grid-row: 1; }
+#panel-accuracy   { grid-column: 2; grid-row: 1; }
+#panel-truth-table{ grid-column: 1; grid-row: 2; }
+#panel-weights    { grid-column: 2; grid-row: 2; }
+#panel-stats      { grid-column: 1; grid-row: 3; }
+#panel-log        { grid-column: 2; grid-row: 3; }
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-height: 280px;
+  position: relative;
+}
+
+.panel h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+/* ── Canvas ───────────────────────────────────────────────────────── */
+
+canvas {
+  width: 100%;
+  height: 240px;
+  display: block;
+  border-radius: 4px;
+}
+
+/* ── Tooltip ──────────────────────────────────────────────────────── */
+
+.tooltip {
+  position: absolute;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  pointer-events: none;
+  z-index: 200;
+  max-width: 300px;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.tooltip.hidden { display: none; }
+
+/* ── Truth table ──────────────────────────────────────────────────── */
+
+#truth-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+#truth-table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+#truth-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+}
+
+#truth-table tr.correct td { color: var(--green); }
+#truth-table tr.wrong   td { color: var(--red); }
+
+#truth-table tr.gate-header td {
+  background: var(--bg-secondary);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+#panel-truth-table {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.confidence-bar {
+  display: inline-block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  transition: width 0.3s;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+/* ── Stat grid ────────────────────────────────────────────────────── */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stat-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+/* ── Log ──────────────────────────────────────────────────────────── */
+
+#log-container {
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+#log-container .log-correct { color: var(--green); }
+#log-container .log-wrong   { color: var(--red); }
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  #grid {
+    grid-template-columns: 1fr;
+  }
+  #panel-network, #panel-accuracy, #panel-truth-table,
+  #panel-weights, #panel-stats, #panel-log {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
