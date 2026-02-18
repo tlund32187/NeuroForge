@@ -22,6 +22,7 @@ import random
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from neuroforge.network.specs import NetworkSpec, PopulationSpec, ProjectionSpec
 from neuroforge.tasks.logic_gates import GATE_TABLES
 
 if TYPE_CHECKING:
@@ -76,6 +77,10 @@ class MultiGateConfig:
         Weight clamp minimum.
     w_max:
         Weight clamp maximum.
+    device:
+        Torch device string (``"cpu"`` or ``"cuda"``).
+    dtype:
+        Torch dtype string (``"float32"`` or ``"float64"``).
     """
 
     gates: tuple[str, ...] = ALL_GATES
@@ -92,6 +97,8 @@ class MultiGateConfig:
     lr: float = 5e-3
     w_min: float = -2.0
     w_max: float = 2.0
+    device: str = "cpu"
+    dtype: str = "float64"
 
 
 @dataclass
@@ -175,33 +182,73 @@ class MultiGateTask:
             )
         )
 
+    # ── Network spec builder ────────────────────────────────────────
+
+    def _build_network_spec(self) -> NetworkSpec:
+        """Return a :class:`NetworkSpec` for the multi-gate architecture."""
+        cfg = self.config
+        gates = list(cfg.gates)
+        n_gates = len(gates)
+        n_input = 2 + n_gates
+
+        return NetworkSpec(
+            populations=[
+                PopulationSpec("input", n_input, "lif"),
+                PopulationSpec("hidden", cfg.n_hidden, "lif"),
+                PopulationSpec("output", 1, "lif"),
+            ],
+            projections=[
+                ProjectionSpec(
+                    "input_hidden", "input", "hidden", "static",
+                    topology={
+                        "type": "dense", "init": "uniform",
+                        "low": -0.3, "high": 0.3, "bias": True,
+                    },
+                ),
+                ProjectionSpec(
+                    "hidden_output", "hidden", "output", "static",
+                    topology={
+                        "type": "dense", "init": "uniform",
+                        "low": -0.3, "high": 0.3, "bias": True,
+                    },
+                ),
+            ],
+            metadata={"task": "multi_gate", "gates": gates},
+        )
+
     # ── Main training loop ──────────────────────────────────────────
 
     def run(self) -> MultiGateResult:
         """Train all gates with shared weights. Returns result."""
         from neuroforge.core.dales_law import apply_dales_constraint, make_dale_mask
-        from neuroforge.core.torch_utils import require_torch
+        from neuroforge.core.torch_utils import require_torch, resolve_device_dtype
         from neuroforge.encoding.rate import RateEncoder, RateEncoderParams
 
         torch = require_torch()
         cfg = self.config
-
-        random.seed(cfg.seed)
-        torch.manual_seed(cfg.seed)
+        dev, tdt = resolve_device_dtype(cfg.device, cfg.dtype)
 
         gates = list(cfg.gates)
         n_gates = len(gates)
         n_input = 2 + n_gates  # 2 data + one-hot gate context
         n_h = cfg.n_hidden
 
-        # ── Weights ─────────────────────────────────────────────────
-        # All weights are shared — one brain for every gate.
-        w_ih = torch.empty(n_input, n_h, dtype=torch.float64).uniform_(
-            -0.3, 0.3,
-        )
-        b_h = torch.zeros(n_h, dtype=torch.float64)
-        w_ho = torch.empty(n_h, dtype=torch.float64).uniform_(-0.3, 0.3)
-        b_o = torch.zeros(1, dtype=torch.float64)
+        # ── Build network via NetworkFactory ────────────────────────
+        from neuroforge.network.factory import NetworkFactory, to_topology_json
+        from neuroforge.neurons.registry import NEURON_MODELS
+        from neuroforge.synapses.registry import SYNAPSE_MODELS
+
+        spec = self._build_network_spec()
+        factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
+        engine = factory.build(spec, device=cfg.device, dtype=cfg.dtype, seed=cfg.seed)
+
+        # Extract trainable weight tensors owned by the projections.
+        proj_ih = engine.projections["input_hidden"]
+        proj_ho = engine.projections["hidden_output"]
+        w_ih = proj_ih.state["weight_matrix"]   # [n_input, n_h]
+        b_h = proj_ih.state["bias"]             # [n_h]
+        w_ho = proj_ho.state["weight_matrix"]   # [n_h]
+        b_o = proj_ho.state["bias"]             # [1]
 
         params = [w_ih, b_h, w_ho, b_o]
         for _p in params:
@@ -212,13 +259,22 @@ class MultiGateTask:
         spike_fn = self._make_surrogate_spike(torch)
 
         # Dale's Law masks.
-        dale_in = make_dale_mask(n_input, 0)  # all excitatory inputs
+        dale_in = make_dale_mask(n_input, 0, device=cfg.device, dtype=cfg.dtype)
         n_exc = n_h - cfg.n_inhibitory
-        dale_h = make_dale_mask(n_exc, cfg.n_inhibitory)
+        dale_h = make_dale_mask(n_exc, cfg.n_inhibitory, device=cfg.device, dtype=cfg.dtype)
 
         encoder = RateEncoder(RateEncoderParams(amplitude=cfg.amplitude))
 
-        # ── Emit topology ───────────────────────────────────────────
+        # ── Emit run_start + topology ─────────────────────────────
+        self._emit(
+            "run_start", 0, "MULTI",
+            {
+                "task": "multi_gate",
+                "device": cfg.device,
+                "seed": cfg.seed,
+                "dtype": cfg.dtype,
+            },
+        )
         self._emit(
             "training_start", 0, "MULTI",
             {
@@ -231,22 +287,7 @@ class MultiGateTask:
                 "n_hidden": n_h,
             },
         )
-        self._emit(
-            "topology", 0, "MULTI",
-            {
-                "layers": [
-                    f"input({n_input})",
-                    f"hidden({n_h})",
-                    "output(1)",
-                ],
-                "edges": [
-                    {"src": "input", "dst": "hidden",
-                     "weights": w_ih.detach().cpu().tolist()},
-                    {"src": "hidden", "dst": "output",
-                     "weights": w_ho.detach().cpu().tolist()},
-                ],
-            },
-        )
+        self._emit("topology", 0, "MULTI", to_topology_json(engine))
 
         # ── Convergence tracking ────────────────────────────────────
         patterns: list[tuple[int, int]] = [
@@ -265,7 +306,7 @@ class MultiGateTask:
         # ── LIF constants ───────────────────────────────────────────
         alpha = _math.exp(-cfg.dt / 20e-3)
         r_factor = cfg.dt / 20e-3
-        v_thresh = torch.tensor(1.0, dtype=torch.float64)
+        v_thresh = torch.tensor(1.0, dtype=tdt, device=dev)
 
         trial = 0
 
@@ -289,10 +330,10 @@ class MultiGateTask:
                 data_drives = encoder.encode(
                     torch.tensor(
                         [float(inp[0]), float(inp[1])],
-                        dtype=torch.float64,
+                        dtype=tdt, device=dev,
                     ),
                 )
-                ctx_drives = torch.zeros(n_gates, dtype=torch.float64)
+                ctx_drives = torch.zeros(n_gates, dtype=tdt, device=dev)
                 ctx_drives[gate_idx] = cfg.amplitude
                 drives = torch.cat([data_drives, ctx_drives])
 
@@ -307,16 +348,16 @@ class MultiGateTask:
                 )
 
                 # ── Forward pass (inline LIF) ───────────────────────
-                v_in = torch.zeros(n_input, dtype=torch.float64)
-                v_hid = torch.zeros(n_h, dtype=torch.float64)
-                v_out = torch.zeros(1, dtype=torch.float64)
-                hid_counts = torch.zeros(n_h, dtype=torch.float64)
-                out_diff = torch.zeros(1, dtype=torch.float64)
+                v_in = torch.zeros(n_input, dtype=tdt, device=dev)
+                v_hid = torch.zeros(n_h, dtype=tdt, device=dev)
+                v_out = torch.zeros(1, dtype=tdt, device=dev)
+                hid_counts = torch.zeros(n_h, dtype=tdt, device=dev)
+                out_diff = torch.zeros(1, dtype=tdt, device=dev)
 
                 for _s in range(cfg.window_steps):
                     # Input neurons — hard threshold spikes.
                     v_in = v_in * alpha + drives * r_factor
-                    in_spikes = (v_in >= 1.0).to(torch.float64)
+                    in_spikes = (v_in >= 1.0).to(tdt)
                     v_in = (v_in * (1.0 - in_spikes)).detach()
 
                     # Hidden neurons — surrogate spike.
@@ -368,13 +409,14 @@ class MultiGateTask:
                     combo_streaks[combo_key] = 0
 
                 # ── Emit events ─────────────────────────────────────
+                error_val = float(expected - predicted)
                 spike_data: dict[str, Any] = {
                     "gate": gate,
                     "input": list(inp),
                     "expected": expected,
                     "predicted": predicted,
                     "correct": correct,
-                    "error": float(expected - predicted),
+                    "error": error_val,
                     "accuracy": accuracy,
                     "out_spike_count": out_count,
                     "hidden_spikes": hid_counts.detach().cpu().tolist(),
@@ -382,6 +424,18 @@ class MultiGateTask:
                 }
                 self._emit(
                     "training_trial", trial, f"MULTI/{gate}", spike_data,
+                )
+                # Lightweight scalar for ArtifactWriter.
+                self._emit(
+                    "scalar", trial, "MULTI",
+                    {
+                        "trial": trial,
+                        "epoch": epoch,
+                        "gate": gate,
+                        "accuracy": accuracy,
+                        "error": error_val,
+                        "correct": correct,
+                    },
                 )
 
                 if trial % 10 == 0:

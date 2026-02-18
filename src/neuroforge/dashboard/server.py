@@ -2,9 +2,18 @@
 """Dashboard server — aiohttp + WebSocket for real-time SNN visualisation.
 
 Serves static files (HTML/CSS/JS) and provides:
+
+**Live mode** (real-time training):
 - ``POST /api/train``  — start a training run (returns immediately)
 - ``GET  /api/status``  — poll current training state
 - ``GET  /ws``          — WebSocket for live event streaming
+
+**Replay mode** (artifact-driven, read-only):
+- ``GET /api/runs``              — list completed runs
+- ``GET /api/run/<run_id>/meta``    — run_meta.json
+- ``GET /api/run/<run_id>/config``  — config_resolved.json
+- ``GET /api/run/<run_id>/topology``— topology.json
+- ``GET /api/run/<run_id>/scalars`` — metrics/scalars.csv as JSON
 
 The training task runs in a background thread so the event loop stays
 responsive.
@@ -13,8 +22,10 @@ responsive.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -197,6 +208,22 @@ async def _handle_train(request: web.Request) -> web.Response:
     for topic in EventTopic:
         _bus.subscribe(topic, ws_mon)
 
+    # Also record artifacts so the run can be replayed.
+    from dataclasses import asdict
+
+    from neuroforge.monitors.artifact_writer import ArtifactWriter
+    from neuroforge.runners.run_context import create_run_dir
+
+    ctx = create_run_dir(base_dir="artifacts", seed=42)
+    artifact_writer = ArtifactWriter(ctx.run_dir)
+    _bus.subscribe_all(artifact_writer)
+
+    # Emit RUN_START so ArtifactWriter writes run_meta + config.
+    def _make_config_dict(config: Any) -> dict[str, Any]:
+        if hasattr(config, "__dataclass_fields__"):
+            return asdict(config)
+        return dict(vars(config))
+
     def _run() -> None:
         if gate == "MULTI":
             from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
@@ -204,21 +231,56 @@ async def _handle_train(request: web.Request) -> web.Response:
             multi_cfg = MultiGateConfig(
                 max_epochs=max_trials,  # UI field doubles as max_epochs
             )
-            MultiGateTask(
+            _bus.publish(MonitorEvent(
+                topic=EventTopic.RUN_START, step=0, t=0.0,
+                source="dashboard",
+                data={
+                    "run_meta": ctx.to_dict(),
+                    "config": _make_config_dict(multi_cfg),
+                },
+            ))
+            multi_result = MultiGateTask(
                 multi_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
             ).run()
+            _bus.publish(MonitorEvent(
+                topic=EventTopic.RUN_END, step=0, t=0.0,
+                source="dashboard",
+                data={
+                    "converged": multi_result.converged,
+                    "trials": multi_result.trials,
+                    "epochs": multi_result.epochs,
+                },
+            ))
         else:
             from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
             single_cfg = LogicGateConfig(gate=gate, max_trials=max_trials)
-            LogicGateTask(
+            _bus.publish(MonitorEvent(
+                topic=EventTopic.RUN_START, step=0, t=0.0,
+                source="dashboard",
+                data={
+                    "run_meta": ctx.to_dict(),
+                    "config": _make_config_dict(single_cfg),
+                },
+            ))
+            single_result = LogicGateTask(
                 single_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
             ).run()
+            _bus.publish(MonitorEvent(
+                topic=EventTopic.RUN_END, step=0, t=0.0,
+                source="dashboard",
+                data={
+                    "converged": single_result.converged,
+                    "trials": single_result.trials,
+                },
+            ))
 
     _training_thread = threading.Thread(target=_run, daemon=True)
     _training_thread.start()
 
-    return web.json_response({"status": "started", "gate": gate})
+    return web.json_response({
+        "status": "started", "gate": gate, "run_id": ctx.run_id,
+    })
 
 
 async def _handle_stop(_request: web.Request) -> web.Response:
@@ -235,6 +297,138 @@ async def _handle_status(_request: web.Request) -> web.Response:
         "spikes": _spike_monitor.snapshot(),
     }
     return web.json_response(snap)
+
+
+# ── Replay API (artifact-driven, read-only) ────────────────────────
+
+_ARTIFACTS_DIR = Path("artifacts")
+_RUN_ID_RE = re.compile(r"^run_\d{8}_\d{6}_[0-9a-f]{8}$")
+
+
+def _safe_run_dir(run_id: str) -> Path | None:
+    """Return the run directory if *run_id* is valid and exists."""
+    if not _RUN_ID_RE.match(run_id):
+        return None
+    run_dir = _ARTIFACTS_DIR / run_id
+    # Resolve to prevent traversal and ensure it's under artifacts.
+    try:
+        resolved = run_dir.resolve(strict=False)
+        artifacts_resolved = _ARTIFACTS_DIR.resolve(strict=False)
+        if not str(resolved).startswith(str(artifacts_resolved)):
+            return None
+    except (OSError, ValueError):
+        return None
+    if run_dir.is_dir():
+        return run_dir
+    return None
+
+
+async def _handle_runs(_request: web.Request) -> web.Response:
+    """List completed runs under artifacts/, newest first."""
+    if not _ARTIFACTS_DIR.is_dir():
+        return web.json_response([])
+
+    runs: list[dict[str, Any]] = []
+    for d in sorted(_ARTIFACTS_DIR.iterdir(), reverse=True):
+        if not d.is_dir() or not _RUN_ID_RE.match(d.name):
+            continue
+        entry: dict[str, Any] = {"run_id": d.name}
+        meta_path = d / "run_meta.json"
+        if meta_path.is_file():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                entry["created_at"] = meta.get("started_at", "")
+                entry["device"] = meta.get("device", "")
+                entry["seed"] = meta.get("seed", "")
+            except (json.JSONDecodeError, OSError):
+                pass
+        # Try to figure out the task name from config.
+        cfg_path = d / "config_resolved.json"
+        if cfg_path.is_file():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if "max_epochs" in cfg:
+                    entry["task_name"] = "multi_gate"
+                elif "gate" in cfg:
+                    entry["task_name"] = f"logic_gate ({cfg['gate']})"
+            except (json.JSONDecodeError, OSError):
+                pass
+        runs.append(entry)
+
+    return web.json_response(runs)
+
+
+async def _handle_run_meta(request: web.Request) -> web.Response:
+    """Serve run_meta.json for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = run_dir / "run_meta.json"
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        text=path.read_text(encoding="utf-8"),
+        content_type="application/json",
+    )
+
+
+async def _handle_run_config(request: web.Request) -> web.Response:
+    """Serve config_resolved.json for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = run_dir / "config_resolved.json"
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        text=path.read_text(encoding="utf-8"),
+        content_type="application/json",
+    )
+
+
+async def _handle_run_topology(request: web.Request) -> web.Response:
+    """Serve topology.json for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = run_dir / "topology.json"
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        text=path.read_text(encoding="utf-8"),
+        content_type="application/json",
+    )
+
+
+async def _handle_run_scalars(request: web.Request) -> web.Response:
+    """Serve metrics/scalars.csv as a JSON array of objects."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = run_dir / "metrics" / "scalars.csv"
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    rows: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            # Convert numeric fields.
+            parsed: dict[str, Any] = {}
+            for k, v in row.items():
+                if v == "":
+                    parsed[k] = None
+                else:
+                    try:
+                        parsed[k] = float(v) if "." in v else int(v)
+                    except (ValueError, TypeError):
+                        if v == "True":
+                            parsed[k] = True
+                        elif v == "False":
+                            parsed[k] = False
+                        else:
+                            parsed[k] = v
+            rows.append(parsed)
+    return web.json_response(rows)
 
 
 # ── Server bootstrap ───────────────────────────────────────────────
@@ -260,6 +454,14 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     app.router.add_post("/api/train", _handle_train)
     app.router.add_post("/api/stop", _handle_stop)
     app.router.add_get("/api/status", _handle_status)
+
+    # Replay API (artifact-driven, read-only).
+    app.router.add_get("/api/runs", _handle_runs)
+    app.router.add_get("/api/run/{run_id}/meta", _handle_run_meta)
+    app.router.add_get("/api/run/{run_id}/config", _handle_run_config)
+    app.router.add_get("/api/run/{run_id}/topology", _handle_run_topology)
+    app.router.add_get("/api/run/{run_id}/scalars", _handle_run_scalars)
+
     app.router.add_static("/static", STATIC_DIR, show_index=False)
 
     print(f"\n  NeuroForge Dashboard -> http://{host}:{port}\n")

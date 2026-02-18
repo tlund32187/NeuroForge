@@ -202,16 +202,18 @@ class CoreEngine:
             target_pop = self._populations[proj.target]
 
             # Get pre-synaptic spikes (from state, not from "this step" which hasn't happened)
-            # On step 0, use zeros
+            # On step 0, use zeros — allocated on the same device as the population state.
             if "last_spikes" in source_pop.state:
                 pre_spikes = source_pop.state["last_spikes"]
             else:
-                pre_spikes = torch.zeros(source_pop.n, dtype=torch.bool)
+                _src_dev = source_pop.state["v"].device
+                pre_spikes = torch.zeros(source_pop.n, dtype=torch.bool, device=_src_dev)
 
             if "last_spikes" in target_pop.state:
                 post_spikes = target_pop.state["last_spikes"]
             else:
-                post_spikes = torch.zeros(target_pop.n, dtype=torch.bool)
+                _tgt_dev = target_pop.state["v"].device
+                post_spikes = torch.zeros(target_pop.n, dtype=torch.bool, device=_tgt_dev)
 
             syn_inputs = SynapseInputs(pre_spikes=pre_spikes, post_spikes=post_spikes)
             syn_result = proj.model.step(proj.state, proj.topology, syn_inputs, ctx)

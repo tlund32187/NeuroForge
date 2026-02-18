@@ -20,6 +20,10 @@ const state = {
   // Network visualisation
   neurons: [],          // { id, layer, idx, x, y, r, color, label, totalSpikes, trialCount }
   connections: [],      // { src, dst, weight, srcNeuron, dstNeuron }
+
+  // Mode: "live" | "replay"
+  mode: "live",
+  activeRunId: null,    // run_id of the currently loaded replay (or live run)
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────────
@@ -43,6 +47,20 @@ const statAccuracy= $("#stat-accuracy");
 const statConverged=$("#stat-converged");
 const statGate    = $("#stat-gate");
 
+// Replay controls
+const liveControls   = $("#live-controls");
+const replayControls = $("#replay-controls");
+const runSelect      = $("#run-select");
+const btnLoadRun     = $("#btn-load-run");
+const btnRefreshRuns = $("#btn-refresh-runs");
+const btnModeLive    = $("#btn-mode-live");
+const btnModeReplay  = $("#btn-mode-replay");
+
+// Run info banner (live → replay handoff)
+const runInfoBanner    = $("#run-info-banner");
+const runInfoText      = $("#run-info-text");
+const runInfoReplayLink= $("#run-info-replay-link");
+
 // ── High-DPI canvas setup ────────────────────────────────────────────
 
 function setupCanvas(canvas) {
@@ -58,6 +76,7 @@ function setupCanvas(canvas) {
 // ── WebSocket ────────────────────────────────────────────────────────
 
 function connectWS() {
+  if (state.mode === "replay") return;  // Don't connect WS in replay mode.
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   state.ws = new WebSocket(`${proto}//${location.host}/ws`);
 
@@ -70,7 +89,7 @@ function connectWS() {
 
   state.ws.onclose = () => {
     console.log("[ws] disconnected — reconnecting in 2s");
-    setTimeout(connectWS, 2000);
+    if (state.mode === "live") setTimeout(connectWS, 2000);
   };
 }
 
@@ -224,6 +243,7 @@ gateSelect.addEventListener("change", () => {
 btnTrain.addEventListener("click", async () => {
   btnTrain.disabled = true;
   btnStop.disabled = false;
+  hideRunInfoBanner();
   const gate = gateSelect.value;
   const trials = parseInt(maxTrials.value, 10) || 5000;
 
@@ -238,6 +258,11 @@ btnTrain.addEventListener("click", async () => {
     alert(err.error || "Failed to start training");
     btnTrain.disabled = false;
     btnStop.disabled = true;
+  } else {
+    const data = await resp.json();
+    if (data.run_id) {
+      showRunInfoBanner(data.run_id);
+    }
   }
 });
 
@@ -729,6 +754,287 @@ window.addEventListener("resize", () => {
   }, 150);
 });
 
+// ── Mode switching ───────────────────────────────────────────────────
+
+function setMode(mode) {
+  state.mode = mode;
+
+  // Update button visuals.
+  btnModeLive.classList.toggle("mode-active", mode === "live");
+  btnModeReplay.classList.toggle("mode-active", mode === "replay");
+
+  // Toggle control groups.
+  liveControls.style.display   = mode === "live" ? "" : "none";
+  replayControls.style.display = mode === "replay" ? "" : "none";
+
+  // Update URL without reload.
+  const url = new URL(window.location);
+  url.searchParams.set("mode", mode);
+  if (mode === "live") {
+    url.searchParams.delete("run");
+  }
+  window.history.replaceState(null, "", url);
+
+  if (mode === "replay") {
+    fetchRunList();
+  }
+}
+
+btnModeLive.addEventListener("click", () => setMode("live"));
+btnModeReplay.addEventListener("click", () => setMode("replay"));
+
+// ── Replay: fetch run list ───────────────────────────────────────────
+
+async function fetchRunList() {
+  try {
+    const resp = await fetch("/api/runs");
+    if (!resp.ok) return;
+    const runs = await resp.json();
+    // Preserve current selection.
+    const prevVal = runSelect.value;
+    runSelect.innerHTML = '<option value="">— select run —</option>';
+    for (const r of runs) {
+      const opt = document.createElement("option");
+      opt.value = r.run_id;
+      const task = r.task_name || "";
+      const seed = r.seed != null ? ` seed=${r.seed}` : "";
+      const device = r.device || "";
+      opt.textContent = `${r.run_id}${task ? "  " + task : ""}${seed}  ${device}`;
+      runSelect.appendChild(opt);
+    }
+    // Restore selection if still present.
+    if (prevVal && runSelect.querySelector(`option[value="${prevVal}"]`)) {
+      runSelect.value = prevVal;
+    }
+  } catch (e) {
+    console.warn("[replay] failed to fetch run list:", e);
+  }
+}
+
+btnRefreshRuns.addEventListener("click", fetchRunList);
+
+// ── Replay: load a run ───────────────────────────────────────────────
+
+async function loadRun(runId) {
+  if (!runId) return;
+  setStatus("loading");
+
+  try {
+    const [metaResp, cfgResp, topoResp, scalarsResp] = await Promise.all([
+      fetch(`/api/run/${runId}/meta`),
+      fetch(`/api/run/${runId}/config`),
+      fetch(`/api/run/${runId}/topology`),
+      fetch(`/api/run/${runId}/scalars`),
+    ]);
+
+    if (!scalarsResp.ok) {
+      setStatus("failed");
+      alert(`Failed to load run: ${runId}`);
+      return;
+    }
+
+    // Reset dashboard state for fresh replay.
+    resetDashboardState();
+
+    state.activeRunId = runId;
+
+    // Parse responses.
+    const meta    = metaResp.ok   ? await metaResp.json()    : null;
+    const config  = cfgResp.ok    ? await cfgResp.json()     : null;
+    const topo    = topoResp.ok   ? await topoResp.json()    : null;
+    const scalars = await scalarsResp.json();
+
+    // Render config info in log panel.
+    if (meta) {
+      appendLogText(`Run: ${meta.run_id}`, "log-correct");
+      appendLogText(`Device: ${meta.device}  Seed: ${meta.seed}`, "log-correct");
+      if (meta.started_at) {
+        appendLogText(`Started: ${meta.started_at}`, "log-correct");
+      }
+    }
+    if (config) {
+      const cfgStr = Object.entries(config)
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join("  ");
+      appendLogText(`Config: ${cfgStr}`, "log-correct");
+    }
+
+    // Topology.
+    if (topo) {
+      state.topology = topo;
+      buildNetworkLayout();
+      drawNetwork();
+    }
+
+    // Process scalars into accuracy history + truth table.
+    renderReplayScalars(scalars);
+
+    // Update URL.
+    const url = new URL(window.location);
+    url.searchParams.set("run", runId);
+    window.history.replaceState(null, "", url);
+
+    setStatus("replay");
+  } catch (e) {
+    console.error("[replay] error loading run:", e);
+    setStatus("failed");
+  }
+}
+
+function resetDashboardState() {
+  state.accuracyHistory = [];
+  state.truthTable = {};
+  state.weightHistory = {};
+  state.totalTrials = 0;
+  state.converged = null;
+  state.lastAccuracy = 0;
+  state.topology = null;
+  state.neurons = [];
+  state.connections = [];
+  state.activeRunId = null;
+  logContainer.innerHTML = "";
+  truthTbody.innerHTML = "";
+}
+
+function renderReplayScalars(scalars) {
+  if (!scalars || scalars.length === 0) return;
+
+  // Determine gate type — if there are multiple distinct gates, it's MULTI.
+  const gateSet = new Set(scalars.map((r) => r.gate).filter(Boolean));
+  const isMulti = gateSet.size > 1;
+  state.gate = isMulti ? "MULTI" : (scalars[0].gate || "?");
+  statGate.textContent = state.gate;
+
+  for (const row of scalars) {
+    const acc = row.accuracy != null ? row.accuracy : 0;
+    state.accuracyHistory.push(acc);
+    state.totalTrials++;
+    state.lastAccuracy = acc;
+
+    // Build truth table entries if we have enough data.
+    if (row.gate) {
+      // We don't have input/expected/predicted in scalars.csv for
+      // per-pattern truth table, but we can show per-gate accuracy.
+      const key = row.gate;
+      if (!state.truthTable[key]) {
+        state.truthTable[key] = {
+          gate: row.gate,
+          input: "—",
+          expected: "—",
+          last_predicted: "—",
+          confidence: 0,
+          total_count: 0,
+          _window: [],
+        };
+      }
+      const e = state.truthTable[key];
+      e.total_count++;
+      const correct = row.correct === true || row.correct === 1;
+      e._window.push(correct ? 1 : 0);
+      if (e._window.length > 20) e._window.shift();
+      e.confidence = e._window.reduce((a, b) => a + b, 0) / e._window.length;
+      e.last_predicted = correct ? "✓" : "✗";
+      e.expected = "—";
+    }
+  }
+
+  // Determine convergence from last few scalars.
+  if (scalars.length > 10) {
+    const last10 = scalars.slice(-10);
+    const allCorrect = last10.every((r) => r.correct === true || r.correct === 1);
+    const highAcc = last10.every((r) => r.accuracy != null && r.accuracy >= 0.95);
+    state.converged = allCorrect || highAcc ? true : false;
+  }
+
+  updateStats();
+  drawAccuracyChart();
+  renderReplayTruthTable();
+}
+
+function renderReplayTruthTable() {
+  // For replay, show per-gate summary (we don't have per-pattern input data).
+  const gateOrder = ["AND", "OR", "NAND", "NOR", "XOR", "XNOR"];
+  const keys = Object.keys(state.truthTable).sort((a, b) => {
+    const ia = gateOrder.indexOf(a);
+    const ib = gateOrder.indexOf(b);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    return a.localeCompare(b);
+  });
+
+  let html = "";
+  for (const key of keys) {
+    const e = state.truthTable[key];
+    if (!e) continue;
+    const conf = (e.confidence * 100).toFixed(1);
+    const cls = e.confidence >= 0.8 ? "correct" : "wrong";
+    const barW = Math.min(e.confidence * 100, 100);
+    html += `<tr class="${cls}">
+      <td>${e.gate}</td>
+      <td>—</td>
+      <td>${e.last_predicted}</td>
+      <td>${conf}% <span class="confidence-bar" style="width:${barW}px"></span></td>
+      <td>${e.total_count}</td>
+    </tr>`;
+  }
+  truthTbody.innerHTML = html;
+}
+
+function appendLogText(text, cls) {
+  const line = document.createElement("div");
+  line.className = cls || "";
+  line.textContent = text;
+  logContainer.appendChild(line);
+}
+
+btnLoadRun.addEventListener("click", () => {
+  const runId = runSelect.value;
+  if (runId) loadRun(runId);
+});
+
+// ── Live → Replay handoff ────────────────────────────────────────────
+
+function showRunInfoBanner(runId) {
+  if (!runInfoBanner || !runId) return;
+  state.activeRunId = runId;
+  runInfoText.textContent = `Recording to: artifacts/${runId}`;
+  runInfoReplayLink.href = `/?mode=replay&run=${runId}`;
+  runInfoBanner.style.display = "";
+}
+
+function hideRunInfoBanner() {
+  if (runInfoBanner) runInfoBanner.style.display = "none";
+}
+
 // ── Init ─────────────────────────────────────────────────────────────
 
-connectWS();
+// Check URL params.
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const mode = params.get("mode");
+  const runId = params.get("run");
+
+  if (mode === "replay") {
+    setMode("replay");
+    if (runId) {
+      // Auto-load the specified run after the run list is fetched.
+      fetchRunList().then(() => {
+        runSelect.value = runId;
+        loadRun(runId);
+      });
+    }
+  } else {
+    // Default: live mode.
+    setMode("live");
+    connectWS();
+  }
+
+  // In live mode, always connect WS.
+  if (mode !== "replay") {
+    // Already called above.
+  }
+})();
+
+// Always connect WS in live mode (reconnects are handled inside connectWS).
+if (state.mode === "live" && !state.ws) {
+  connectWS();
+}

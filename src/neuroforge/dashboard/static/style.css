@@ -73,6 +73,76 @@ select, input[type="number"] {
 
 input[type="number"] { width: 90px; }
 
+/* ── Mode toggle ──────────────────────────────────────────────────── */
+
+.mode-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mode-btn {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: none;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mode-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
+
+.mode-btn.mode-active {
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+.control-group { display: flex; align-items: center; gap: 12px; }
+
+.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-secondary:hover { background: var(--border); }
+
+#run-select {
+  min-width: 280px;
+  max-width: 400px;
+}
+
+/* ── Run info banner ──────────────────────────────────────────────── */
+
+.run-info-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.replay-link {
+  color: var(--purple);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.2s;
+}
+.replay-link:hover { color: var(--accent); text-decoration: underline; }
+
 .btn-primary {
   background: var(--accent-dim);
   color: #fff;
@@ -114,6 +184,8 @@ input[type="number"] { width: 90px; }
 .badge-done     { background: var(--green); color: #000; }
 .badge-failed   { background: var(--red); color: #fff; }
 .badge-stopped  { background: var(--orange); color: #000; }
+.badge-replay   { background: var(--purple); color: #fff; }
+.badge-loading  { background: var(--accent-dim); color: #fff; animation: pulse 1s infinite; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

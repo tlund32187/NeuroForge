@@ -88,6 +88,10 @@ class LogicGateConfig:
         Minimum weight.
     w_max:
         Maximum weight.
+    device:
+        Torch device string (``"cpu"`` or ``"cuda"``).
+    dtype:
+        Torch dtype string (``"float32"`` or ``"float64"``).
     """
 
     gate: str = "OR"
@@ -104,6 +108,8 @@ class LogicGateConfig:
     lr: float = 5e-3
     w_min: float = -2.0
     w_max: float = 2.0
+    device: str = "cpu"
+    dtype: str = "float64"
 
 
 @dataclass
@@ -186,13 +192,14 @@ class LogicGateTask:
 
     def run(self) -> LogicGateResult:
         """Execute the training loop. Returns result with convergence status."""
-        from neuroforge.core.torch_utils import require_torch
+        from neuroforge.core.torch_utils import require_torch, resolve_device_dtype
 
         torch = require_torch()
         random.seed(self.config.seed)
         torch.manual_seed(self.config.seed)
 
         cfg = self.config
+        dev, dt = resolve_device_dtype(cfg.device, cfg.dtype)
 
         # ── Import components ───────────────────────────────────────
         from neuroforge.encoding.rate import RateEncoder, RateEncoderParams
@@ -204,21 +211,21 @@ class LogicGateTask:
 
         # ── Initialise weights + biases ─────────────────────────────
         # Pre-bind all variables so pyright flow analysis is satisfied.
-        w_io = torch.empty(0, dtype=torch.float64)
-        w_ih = torch.empty(0, 0, dtype=torch.float64)
-        b_h = torch.empty(0, dtype=torch.float64)
-        w_ho = torch.empty(0, dtype=torch.float64)
-        b_o = torch.zeros(1, dtype=torch.float64)
+        w_io = torch.empty(0, dtype=dt, device=dev)
+        w_ih = torch.empty(0, 0, dtype=dt, device=dev)
+        b_h = torch.empty(0, dtype=dt, device=dev)
+        w_ho = torch.empty(0, dtype=dt, device=dev)
+        b_o = torch.zeros(1, dtype=dt, device=dev)
         spike_fn: Any = None
         dale_in: Any = None
         dale_h: Any = None
 
         if self.needs_hidden:
             n_h = cfg.n_hidden
-            w_ih = torch.empty(2, n_h, dtype=torch.float64).uniform_(-0.3, 0.3)
-            b_h = torch.zeros(n_h, dtype=torch.float64)
-            w_ho = torch.empty(n_h, dtype=torch.float64).uniform_(-0.3, 0.3)
-            b_o = torch.zeros(1, dtype=torch.float64)
+            w_ih = torch.empty(2, n_h, dtype=dt, device=dev).uniform_(-0.3, 0.3)
+            b_h = torch.zeros(n_h, dtype=dt, device=dev)
+            w_ho = torch.empty(n_h, dtype=dt, device=dev).uniform_(-0.3, 0.3)
+            b_o = torch.zeros(1, dtype=dt, device=dev)
             # Enable gradient tracking for surrogate-gradient training.
             for _p in (w_ih, b_h, w_ho, b_o):
                 _p.requires_grad_(True)
@@ -229,14 +236,23 @@ class LogicGateTask:
 
             n_exc = n_h - cfg.n_inhibitory
             # Input neurons → excitatory (all outgoing weights ≥ 0).
-            dale_in = make_dale_mask(2, 0)
+            dale_in = make_dale_mask(2, 0, device=cfg.device, dtype=cfg.dtype)
             # Hidden neurons → first n_exc excitatory, rest inhibitory.
-            dale_h = make_dale_mask(n_exc, cfg.n_inhibitory)
+            dale_h = make_dale_mask(n_exc, cfg.n_inhibitory, device=cfg.device, dtype=cfg.dtype)
         else:
-            w_io = torch.empty(2, dtype=torch.float64).uniform_(-0.3, 0.3)
-            b_o = torch.zeros(1, dtype=torch.float64)
+            w_io = torch.empty(2, dtype=dt, device=dev).uniform_(-0.3, 0.3)
+            b_o = torch.zeros(1, dtype=dt, device=dev)
 
-        # ── Emit training start + topology ───────────────────────
+        # ── Emit run_start + topology ────────────────────────────
+        self._emit(
+            "run_start", 0, cfg.gate,
+            {
+                "task": "logic_gate",
+                "device": cfg.device,
+                "seed": cfg.seed,
+                "dtype": cfg.dtype,
+            },
+        )
         self._emit(
             "training_start", 0, cfg.gate,
             {"gate": cfg.gate, "max_trials": cfg.max_trials,
@@ -248,9 +264,9 @@ class LogicGateTask:
                 "layers": ["input(2)", f"hidden({cfg.n_hidden})", "output(1)"],
                 "edges": [
                     {"src": "input", "dst": "hidden",
-                     "weights": w_ih.detach().cpu().tolist()},
+                     "weights": w_ih.detach()},
                     {"src": "hidden", "dst": "output",
-                     "weights": w_ho.detach().cpu().tolist()},
+                     "weights": w_ho.detach()},
                 ],
             }
         else:
@@ -258,7 +274,7 @@ class LogicGateTask:
                 "layers": ["input(2)", "output(1)"],
                 "edges": [
                     {"src": "input", "dst": "output",
-                     "weights": w_io.detach().cpu().tolist()},
+                     "weights": w_io.detach()},
                 ],
             }
         self._emit("topology", 0, cfg.gate, topo_data)
@@ -296,10 +312,10 @@ class LogicGateTask:
 
             # Encode inputs
             drives = encoder.encode(
-                torch.tensor([float(inp[0]), float(inp[1])], dtype=torch.float64)
+                torch.tensor([float(inp[0]), float(inp[1])], dtype=dt, device=dev)
             )
 
-            hid_counts = torch.zeros(0, dtype=torch.float64)
+            hid_counts = torch.zeros(0, dtype=dt, device=dev)
             out_diff: Any = None
             if self.needs_hidden:
                 # Zero gradients before the differentiable forward pass.
@@ -314,7 +330,8 @@ class LogicGateTask:
                 )
             else:
                 out_count, in_counts = self._forward_simple(
-                    lif, drives, w_io, b_o, cfg.dt, cfg.window_steps, torch
+                    lif, drives, w_io, b_o, cfg.dt, cfg.window_steps, torch,
+                    device=cfg.device, dtype=cfg.dtype,
                 )
 
             # Decode
@@ -363,6 +380,18 @@ class LogicGateTask:
                 spike_data["hidden_spikes"] = hid_counts.detach().cpu().tolist()
             spike_data["output_spikes"] = [out_count]
             self._emit("training_trial", trial, cfg.gate, spike_data)
+            # Lightweight scalar for ArtifactWriter.
+            self._emit(
+                "scalar", trial, cfg.gate,
+                {
+                    "trial": trial,
+                    "epoch": 0,
+                    "gate": cfg.gate,
+                    "accuracy": accuracy,
+                    "error": error,
+                    "correct": correct,
+                },
+            )
             # Emit weight snapshot (every trial — monitors bound memory).
             if self.needs_hidden:
                 self._emit(
@@ -438,16 +467,19 @@ class LogicGateTask:
         dt: float,
         window: int,
         torch: Any,
+        *,
+        device: str = "cpu",
+        dtype: str = "float64",
     ) -> tuple[int, Any]:
         """2→1 network. Returns (output_spike_count, input_spike_counts)."""
         from neuroforge.contracts.neurons import NeuronInputs, StepContext
         from neuroforge.contracts.types import Compartment
 
-        input_state = lif.init_state(2, "cpu", "float64")
-        output_state = lif.init_state(1, "cpu", "float64")
+        input_state = lif.init_state(2, device, dtype)
+        output_state = lif.init_state(1, device, dtype)
 
         out_count = 0
-        in_counts = torch.zeros(2, dtype=torch.float64)
+        in_counts = torch.zeros(2, dtype=weights.dtype, device=weights.device)
 
         for s in range(window):
             ctx = StepContext(dt=dt, step=s, t=s * dt)
@@ -514,7 +546,7 @@ class LogicGateTask:
         n_h = w_ho.shape[0]
         alpha = _math.exp(-cfg.dt / 20e-3)
         r_factor = cfg.dt / 20e-3
-        v_thresh = torch.tensor(1.0, dtype=torch.float64)
+        v_thresh = torch.tensor(1.0, dtype=w_ih.dtype, device=w_ih.device)
 
         # Dale's Law reparameterization.
         w_ih_eff = apply_dales_constraint(
@@ -524,18 +556,20 @@ class LogicGateTask:
             w_ho, dale_h.signs,
         )  # [n_h] — hidden neurons E/I
 
-        v_in = torch.zeros(2, dtype=torch.float64)
-        v_hid = torch.zeros(n_h, dtype=torch.float64)
-        v_out = torch.zeros(1, dtype=torch.float64)
+        _dev = w_ih.device
+        _dt = w_ih.dtype
+        v_in = torch.zeros(2, dtype=_dt, device=_dev)
+        v_hid = torch.zeros(n_h, dtype=_dt, device=_dev)
+        v_out = torch.zeros(1, dtype=_dt, device=_dev)
 
-        in_counts = torch.zeros(2, dtype=torch.float64)
-        hid_counts = torch.zeros(n_h, dtype=torch.float64)
-        out_diff = torch.zeros(1, dtype=torch.float64)
+        in_counts = torch.zeros(2, dtype=_dt, device=_dev)
+        hid_counts = torch.zeros(n_h, dtype=_dt, device=_dev)
+        out_diff = torch.zeros(1, dtype=_dt, device=_dev)
 
         for _s in range(cfg.window_steps):
             # Input neurons — hard spikes, not trainable.
             v_in = v_in * alpha + drives * r_factor
-            in_spikes = (v_in >= 1.0).to(torch.float64)
+            in_spikes = (v_in >= 1.0).to(_dt)
             v_in = (v_in * (1.0 - in_spikes)).detach()
             in_counts = in_counts + in_spikes
 

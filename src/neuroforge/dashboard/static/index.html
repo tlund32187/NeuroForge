@@ -11,22 +11,47 @@
   <header id="header">
     <div class="logo">⚡ NeuroForge</div>
     <div class="controls">
-      <select id="gate-select">
-        <option value="AND">AND</option>
-        <option value="OR" selected>OR</option>
-        <option value="NAND">NAND</option>
-        <option value="NOR">NOR</option>
-        <option value="XOR">XOR</option>
-        <option value="XNOR">XNOR</option>
-        <option value="MULTI">MULTI (All 6)</option>
-      </select>
-      <input id="max-trials" type="number" value="5000" min="100" step="100"
-             title="Max trials">
-      <button id="btn-train" class="btn-primary">▶ Train</button>
-      <button id="btn-stop" class="btn-stop" disabled>⏹ Stop</button>
+      <!-- Mode toggle -->
+      <div class="mode-toggle">
+        <button id="btn-mode-live" class="mode-btn mode-active" data-mode="live">Live</button>
+        <button id="btn-mode-replay" class="mode-btn" data-mode="replay">Replay</button>
+      </div>
+
+      <!-- Live controls -->
+      <div id="live-controls" class="control-group">
+        <select id="gate-select">
+          <option value="AND">AND</option>
+          <option value="OR" selected>OR</option>
+          <option value="NAND">NAND</option>
+          <option value="NOR">NOR</option>
+          <option value="XOR">XOR</option>
+          <option value="XNOR">XNOR</option>
+          <option value="MULTI">MULTI (All 6)</option>
+        </select>
+        <input id="max-trials" type="number" value="5000" min="100" step="100"
+               title="Max trials">
+        <button id="btn-train" class="btn-primary">▶ Train</button>
+        <button id="btn-stop" class="btn-stop" disabled>⏹ Stop</button>
+      </div>
+
+      <!-- Replay controls -->
+      <div id="replay-controls" class="control-group" style="display:none">
+        <select id="run-select">
+          <option value="">— select run —</option>
+        </select>
+        <button id="btn-load-run" class="btn-primary">📂 Load Run</button>
+        <button id="btn-refresh-runs" class="btn-secondary" title="Refresh run list">↻</button>
+      </div>
+
       <span id="status-badge" class="badge badge-idle">idle</span>
     </div>
   </header>
+
+  <!-- ── Run info banner (shown during live training) ───────────── -->
+  <div id="run-info-banner" class="run-info-banner" style="display:none">
+    <span id="run-info-text"></span>
+    <a id="run-info-replay-link" href="#" target="_blank" class="replay-link">▶ Replay this run</a>
+  </div>
 
   <!-- ── Main grid ──────────────────────────────────────────────── -->
   <main id="grid">
