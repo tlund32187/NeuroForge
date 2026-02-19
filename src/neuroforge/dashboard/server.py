@@ -37,7 +37,9 @@ from neuroforge.monitors.bus import EventBus
 from neuroforge.monitors.event_recorder import EventRecorderMonitor
 from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
+from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
+from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
 
 __all__ = ["start_server"]
@@ -85,7 +87,7 @@ def _setup_monitors() -> None:
 
 def _parse_resource_monitor_cfg(body: dict[str, Any]) -> dict[str, Any]:
     """Parse opt-in resource monitor config from request JSON."""
-    default = {
+    default: dict[str, Any] = {
         "enabled": False,
         "every_n_steps": 10,
         "include_process": True,
@@ -285,6 +287,14 @@ async def _handle_train(request: web.Request) -> web.Response:
 
     _setup_monitors()
     _stop_event.clear()
+
+    # Phase 6 enrichment monitors for live dashboard + replay artifacts.
+    trial_stats_monitor = TrialStatsMonitor(enabled=True)
+    stability_monitor = StabilityMonitor(
+        StabilityConfig(enabled=True, check_every_n_trials=5, fail_fast=False),
+    )
+    _bus.subscribe_all(trial_stats_monitor)
+    _bus.subscribe_all(stability_monitor)
 
     # Optional resource monitor: enriches SCALAR payloads.
     resource_monitor: ResourceMonitor | None = None

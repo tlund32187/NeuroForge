@@ -19,13 +19,9 @@ from pathlib import Path
 from typing import Any
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
+from neuroforge.monitors.scalars_schema import build_scalar_fields
 
 __all__ = ["ArtifactWriter"]
-
-_BASE_SCALAR_FIELDS = (
-    "trial", "epoch", "gate", "accuracy", "loss", "correct", "wall_ms",
-    "cuda_mem_allocated", "cuda_mem_reserved", "cuda_mem_peak",
-)
 
 
 def _json_default(obj: object) -> Any:
@@ -72,13 +68,17 @@ class ArtifactWriter:
         *,
         enabled: bool = True,
         flush_every_n: int = 50,
+        include_resource_fields: bool = False,
     ) -> None:
         self.enabled = enabled
         self._run_dir = run_dir
         self._flush_every_n = max(1, int(flush_every_n))
+        self._include_resource_fields = include_resource_fields
 
         # CSV state.
-        self._csv_fields: list[str] = list(_BASE_SCALAR_FIELDS)
+        self._csv_fields: list[str] = build_scalar_fields(
+            include_resource=self._include_resource_fields,
+        )
         self._pending_rows: list[dict[str, Any]] = []
         self._csv_header_dirty = False
         self._csv_rows = 0
@@ -105,7 +105,9 @@ class ArtifactWriter:
 
     def reset(self) -> None:
         """Clear internal buffers."""
-        self._csv_fields = list(_BASE_SCALAR_FIELDS)
+        self._csv_fields = build_scalar_fields(
+            include_resource=self._include_resource_fields,
+        )
         self._pending_rows.clear()
         self._csv_header_dirty = False
         self._csv_rows = 0
@@ -179,6 +181,27 @@ class ArtifactWriter:
 
     # Utilities
 
+    @staticmethod
+    def _resolve_cuda_mb(
+        data: dict[str, Any],
+        *,
+        mb_key: str,
+        legacy_bytes_key: str,
+    ) -> Any:
+        if mb_key in data:
+            return data.get(mb_key)
+        raw = data.get(legacy_bytes_key)
+        if raw is None:
+            return ""
+        if raw == "":
+            return ""
+        if isinstance(raw, (int, float)):
+            return float(raw) / (1024.0 * 1024.0)
+        try:
+            return float(str(raw)) / (1024.0 * 1024.0)
+        except (TypeError, ValueError):
+            return ""
+
     def _build_scalar_row(self, event: MonitorEvent) -> dict[str, Any]:
         d = event.data
         error = d.get("error", 0)
@@ -195,12 +218,36 @@ class ArtifactWriter:
             "gate": _to_csv_scalar(d.get("gate", "")),
             "accuracy": _to_csv_scalar(d.get("accuracy", "")),
             "loss": _to_csv_scalar(loss_val),
+            "error": _to_csv_scalar(d.get("error", "")),
             "correct": _to_csv_scalar(d.get("correct", "")),
             "wall_ms": _to_csv_scalar(d.get("wall_ms", "")),
-            "cuda_mem_allocated": _to_csv_scalar(d.get("cuda_mem_allocated", "")),
-            "cuda_mem_reserved": _to_csv_scalar(d.get("cuda_mem_reserved", "")),
-            "cuda_mem_peak": _to_csv_scalar(d.get("cuda_mem_peak", "")),
+            "cuda_mem_allocated_mb": _to_csv_scalar(
+                self._resolve_cuda_mb(
+                    d,
+                    mb_key="cuda_mem_allocated_mb",
+                    legacy_bytes_key="cuda_mem_allocated",
+                )
+            ),
+            "cuda_mem_reserved_mb": _to_csv_scalar(
+                self._resolve_cuda_mb(
+                    d,
+                    mb_key="cuda_mem_reserved_mb",
+                    legacy_bytes_key="cuda_mem_reserved",
+                )
+            ),
+            "cuda_mem_peak_mb": _to_csv_scalar(
+                self._resolve_cuda_mb(
+                    d,
+                    mb_key="cuda_mem_peak_mb",
+                    legacy_bytes_key="cuda_mem_peak",
+                )
+            ),
         }
+
+        for field in self._csv_fields:
+            if field in row:
+                continue
+            row[field] = _to_csv_scalar(d.get(field, ""))
 
         for key, value in d.items():
             if key in row:

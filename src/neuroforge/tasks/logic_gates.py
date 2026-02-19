@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.core.torch_utils import smart_device
+from neuroforge.learning.stats import grad_stats, tensor_stats
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,8 +126,13 @@ class LogicGateConfig:
     image_h: int = 8
     image_w: int = 8
     loss_fn: str = "mse_count"
+    emit_param_grad_stats: bool = True
+    stats_every_n_trials: int = 10
 
     def __post_init__(self) -> None:
+        if self.stats_every_n_trials <= 0:
+            msg = "stats_every_n_trials must be > 0"
+            raise ValueError(msg)
         if self.device == "auto":
             n_total = self.image_h * self.image_w + self.n_hidden + 1
             object.__setattr__(
@@ -192,6 +199,26 @@ def _pattern_to_image(
     if bits[1]:
         img[2, 5] = 1.0
     return img
+
+
+def _param_grad_stats(
+    w_ih: Any,
+    w_ho: Any,
+) -> dict[str, float]:
+    w_ih_stats = tensor_stats(w_ih, "w_ih")
+    w_ho_stats = tensor_stats(w_ho, "w_ho")
+    g_ih_stats = grad_stats(w_ih, "ih")
+    g_ho_stats = grad_stats(w_ho, "ho")
+    return {
+        "w_norm_ih": w_ih_stats["w_ih_norm"],
+        "w_maxabs_ih": w_ih_stats["w_ih_maxabs"],
+        "w_norm_ho": w_ho_stats["w_ho_norm"],
+        "w_maxabs_ho": w_ho_stats["w_ho_maxabs"],
+        "g_norm_ih": g_ih_stats["g_norm_ih"],
+        "g_maxabs_ih": g_ih_stats["g_maxabs_ih"],
+        "g_norm_ho": g_ho_stats["g_norm_ho"],
+        "g_maxabs_ho": g_ho_stats["g_maxabs_ho"],
+    }
 
 
 class LogicGateTask:
@@ -419,6 +446,7 @@ class LogicGateTask:
         self._emit(
             "training_start", 0, cfg.gate,
             {"gate": cfg.gate, "max_trials": cfg.max_trials,
+             "dt": cfg.dt,
              "window_steps": cfg.window_steps,
              "per_pattern_streak": cfg.per_pattern_streak},
         )
@@ -444,6 +472,7 @@ class LogicGateTask:
         recent_correct: list[bool] = []
 
         for trial in range(cfg.max_trials):
+            trial_t0 = perf_counter()
             # Check for external cancellation.
             if self._stop_check is not None and self._stop_check():
                 self._emit(
@@ -482,19 +511,31 @@ class LogicGateTask:
             error = float(expected - predicted)
 
             # ── Weight update (only on error) ───────────────────────
+            if cfg.loss_fn == "bce_logits":
+                target_t = torch.tensor(
+                    [float(expected)], dtype=dt, device=dev,
+                )
+                loss = loss_fn(ro_result.logits, target_t)
+            else:
+                target_count = float(expected) * cfg.spike_threshold
+                target_t = torch.tensor(
+                    [target_count], dtype=dt, device=dev,
+                )
+                loss = loss_fn(ro_result.count, target_t)
+
+            emit_stats = (
+                cfg.emit_param_grad_stats
+                and (trial % cfg.stats_every_n_trials == 0)
+            )
+            param_grad_payload: dict[str, float] = {}
+
             if error != 0.0:
-                if cfg.loss_fn == "bce_logits":
-                    target_t = torch.tensor(
-                        [float(expected)], dtype=dt, device=dev,
-                    )
-                    loss = loss_fn(ro_result.logits, target_t)
-                else:
-                    target_count = float(expected) * cfg.spike_threshold
-                    target_t = torch.tensor(
-                        [target_count], dtype=dt, device=dev,
-                    )
-                    loss = loss_fn(ro_result.count, target_t)
                 loss.backward()
+                if emit_stats:
+                    param_grad_payload = _param_grad_stats(
+                        gn.trainables["raw_w_in_to_hidden"],
+                        gn.trainables["raw_w_hidden_to_out"],
+                    )
                 # Gradient clipping.
                 for _p in params_list:
                     if _p.grad is not None:
@@ -504,6 +545,11 @@ class LogicGateTask:
                 with torch.no_grad():
                     for _p in params_list:
                         _p.clamp_(cfg.w_min, cfg.w_max)
+            elif emit_stats:
+                param_grad_payload = _param_grad_stats(
+                    gn.trainables["raw_w_in_to_hidden"],
+                    gn.trainables["raw_w_hidden_to_out"],
+                )
 
             # ── Convergence tracking ────────────────────────────────
             recent_correct.append(correct)
@@ -536,7 +582,10 @@ class LogicGateTask:
                     "gate": cfg.gate,
                     "accuracy": accuracy,
                     "error": error,
+                    "loss": float(loss.detach().item()),
+                    "wall_ms": (perf_counter() - trial_t0) * 1_000.0,
                     "correct": correct,
+                    **param_grad_payload,
                 },
             )
 

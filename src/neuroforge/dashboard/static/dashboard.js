@@ -2,6 +2,16 @@
    ──────────────────────────────────────────────── */
 "use strict";
 
+function makeDefaultStabilityFlags() {
+  return {
+    nanInf: null,
+    weightExplode: null,
+    saturation: null,
+    oscillation: null,
+    stagnation: null,
+  };
+}
+
 // ── State ────────────────────────────────────────────────────────────
 
 const state = {
@@ -18,6 +28,7 @@ const state = {
   epoch: 0,
   trainStartTime: null, // Date.now() when training began
   _elapsedTimer: null,  // setInterval id for elapsed clock
+  dt: 1e-3,             // simulation timestep (s)
   windowSteps: 50,      // sim steps per trial (for computing spike rates)
   resourceSeries: {
     cpuSystem: [],
@@ -34,6 +45,17 @@ const state = {
   },
   resourceLastStep: -1,
   resourceSamples: 0,
+  stabilitySeries: {
+    rateOut: [],
+    wMaxAbsIh: [],
+    wMaxAbsHo: [],
+    gNormIh: [],
+    gNormHo: [],
+    accuracy: [],
+  },
+  stabilityFlags: makeDefaultStabilityFlags(),
+  stabilityLastStep: -1,
+  stabilitySamples: 0,
 
   // Network visualisation
   neurons: [],          // { id, layer, idx, x, y, r, color, label, totalSpikes, trialCount }
@@ -79,11 +101,24 @@ const canvasResCpu = $("#canvas-resource-cpu");
 const canvasResRam = $("#canvas-resource-ram");
 const canvasResGpu = $("#canvas-resource-gpu");
 const canvasResCuda = $("#canvas-resource-cuda");
+const canvasStabilityRate = $("#canvas-stability-rate");
+const canvasStabilityWMax = $("#canvas-stability-wmax");
+const canvasStabilityGNorm = $("#canvas-stability-gnorm");
+const canvasStabilityAcc = $("#canvas-stability-acc");
 const resourceNote = $("#resource-note");
 const resourceStatsCpu = $("#resource-stats-cpu");
 const resourceStatsRam = $("#resource-stats-ram");
 const resourceStatsGpu = $("#resource-stats-gpu");
 const resourceStatsCuda = $("#resource-stats-cuda");
+const stabilityStatsRate = $("#stability-stats-rate");
+const stabilityStatsWMax = $("#stability-stats-wmax");
+const stabilityStatsGNorm = $("#stability-stats-gnorm");
+const stabilityStatsAcc = $("#stability-stats-acc");
+const stabBadgeNanInf = $("#stab-badge-nan-inf");
+const stabBadgeWeightExplode = $("#stab-badge-weight-explode");
+const stabBadgeSaturation = $("#stab-badge-saturation");
+const stabBadgeOscillation = $("#stab-badge-oscillation");
+const stabBadgeStagnation = $("#stab-badge-stagnation");
 const tooltip     = $("#tooltip");
 const edgeModeSel = $("#topology-edge-mode");
 const edgeCountWrap = $("#topology-edge-count-wrap");
@@ -174,6 +209,7 @@ function handleMessage(msg) {
       state.training = true;
       state.gate = msg.data.gate || "OR";
       state.multiGates = msg.data.gates || null;  // list for MULTI mode
+      state.dt = msg.data.dt || state.dt || 1e-3;
       state.windowSteps = msg.data.window_steps || 50;
       state.perPatternStreak = msg.data.per_pattern_streak || 5;
       state.accuracyHistory = [];
@@ -196,8 +232,10 @@ function handleMessage(msg) {
       }
       state.weightHistory = {};
       resetResourceSeries();
+      resetStabilitySeries();
       updateResourceNote();
       drawResourceCharts();
+      drawStabilityCharts();
       // Reset per-neuron spike stats.
       for (const n of state.neurons) {
         n.totalSpikes = 0;
@@ -225,6 +263,7 @@ function handleMessage(msg) {
       if (msg.data.epoch !== undefined) state.epoch = msg.data.epoch + 1;
       state.accuracyHistory.push(state.lastAccuracy);
       ingestResourceMetrics(msg.data, msg.step);
+      ingestStabilityMetrics(msg.data, msg.step, { deferDraw: true });
 
       updateTruthTableEntry(msg.data);
       updateNeuronSpikes(msg.data);
@@ -238,11 +277,13 @@ function handleMessage(msg) {
         drawAccuracyChart();
         renderTruthTable();
         drawNetwork();
+        drawStabilityCharts();
       }
       break;
 
     case "scalar":
       ingestResourceMetrics(msg.data, msg.step);
+      ingestStabilityMetrics(msg.data, msg.step);
       break;
 
     case "weight":
@@ -280,6 +321,7 @@ function handleMessage(msg) {
       drawWeightChart();
       renderTruthTable();
       drawNetwork();
+      drawStabilityCharts();
       break;
   }
 }
@@ -301,12 +343,21 @@ function applyTrainingSnapshot(snap) {
     state.topology = snap.topology;
     buildNetworkLayout();
   }
+  resetStabilitySeries();
+  state.accuracyHistory.forEach((value, idx) => {
+    const parsed = parseMetricNumber(value);
+    if (parsed === null) return;
+    pushStabilityPoint("accuracy", idx, parsed);
+  });
+  state.stabilitySamples = state.stabilitySeries.accuracy.length;
+  state.stabilityLastStep = state.stabilitySamples > 0 ? state.stabilitySamples - 1 : -1;
 
   statGate.textContent = state.gate || "—";
   if (snap.epoch) state.epoch = snap.epoch;
   updateStats();
   renderTruthTable();
   drawAccuracyChart();
+  drawStabilityCharts();
   drawNetwork();
 }
 
@@ -337,10 +388,38 @@ function resetResourceSeries() {
   state.resourceSamples = 0;
 }
 
+function resetStabilitySeries() {
+  state.stabilitySeries = {
+    rateOut: [],
+    wMaxAbsIh: [],
+    wMaxAbsHo: [],
+    gNormIh: [],
+    gNormHo: [],
+    accuracy: [],
+  };
+  state.stabilityFlags = makeDefaultStabilityFlags();
+  state.stabilityLastStep = -1;
+  state.stabilitySamples = 0;
+}
+
 function parseMetricNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function parseFlagValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") return value !== 0 ? 1 : 0;
+  if (typeof value === "string") {
+    const norm = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(norm)) return 1;
+    if (["0", "false", "no", "n", "off"].includes(norm)) return 0;
+    const parsed = Number(norm);
+    if (Number.isFinite(parsed)) return parsed !== 0 ? 1 : 0;
+  }
+  return null;
 }
 
 function latestSeriesValue(seriesName) {
@@ -407,8 +486,69 @@ function updateResourceStats() {
   );
 }
 
+function latestStabilityValue(seriesName) {
+  const series = state.stabilitySeries[seriesName];
+  if (!series || series.length === 0) return null;
+  const point = series[series.length - 1];
+  if (!Array.isArray(point) || point.length < 2) return null;
+  return parseMetricNumber(point[1]);
+}
+
+function formatValue(value, unit, digits = 2) {
+  if (value === null) return "--";
+  return `${value.toFixed(digits)}${unit ? ` ${unit}` : ""}`;
+}
+
+function setStabilityBadge(el, label, value) {
+  if (!el) return;
+  const isUnknown = value === null;
+  const isActive = value === 1;
+  const status = isUnknown ? "n/a" : (isActive ? "ON" : "OK");
+  el.textContent = `${label}: ${status}`;
+  el.classList.toggle("is-na", isUnknown);
+  el.classList.toggle("is-active", isActive);
+  el.classList.toggle("is-ok", !isUnknown && !isActive);
+}
+
+function updateStabilityBadges() {
+  const f = state.stabilityFlags;
+  setStabilityBadge(stabBadgeNanInf, "NaN/Inf", f.nanInf);
+  setStabilityBadge(stabBadgeWeightExplode, "Weight explode", f.weightExplode);
+  setStabilityBadge(stabBadgeSaturation, "Saturation", f.saturation);
+  setStabilityBadge(stabBadgeOscillation, "Oscillation", f.oscillation);
+  setStabilityBadge(stabBadgeStagnation, "Stagnation", f.stagnation);
+}
+
+function updateStabilityStats() {
+  const rateOut = latestStabilityValue("rateOut");
+  const wIh = latestStabilityValue("wMaxAbsIh");
+  const wHo = latestStabilityValue("wMaxAbsHo");
+  const gIh = latestStabilityValue("gNormIh");
+  const gHo = latestStabilityValue("gNormHo");
+  const acc = latestStabilityValue("accuracy");
+
+  setText(stabilityStatsRate, rateOut === null ? "n/a" : `${rateOut.toFixed(1)} Hz`);
+  setText(
+    stabilityStatsWMax,
+    `ih ${formatValue(wIh, "", 3)} | ho ${formatValue(wHo, "", 3)}`,
+  );
+  setText(
+    stabilityStatsGNorm,
+    `ih ${formatValue(gIh, "", 4)} | ho ${formatValue(gHo, "", 4)}`,
+  );
+  const accText = acc === null ? "--%" : `${(acc * 100).toFixed(1)}%`;
+  setText(stabilityStatsAcc, accText);
+}
+
 function pushMetricPoint(seriesName, step, value) {
   const series = state.resourceSeries[seriesName];
+  if (!series) return;
+  series.push([step, value]);
+  if (series.length > 1500) series.shift();
+}
+
+function pushStabilityPoint(seriesName, step, value) {
+  const series = state.stabilitySeries[seriesName];
   if (!series) return;
   series.push([step, value]);
   if (series.length > 1500) series.shift();
@@ -597,6 +737,159 @@ function drawResourceCharts() {
     { points: collectPoints("torchCudaMax"), color: "#d2a8ff", label: "max" },
   ]);
   updateResourceStats();
+}
+
+function collectStabilityPoints(seriesName) {
+  return state.stabilitySeries[seriesName] || [];
+}
+
+function ingestStabilityMetrics(data, stepRaw, opts = {}) {
+  const dataObj = data || {};
+  const step = Number.isFinite(stepRaw) ? stepRaw : state.stabilityLastStep + 1;
+  const deferDraw = !!opts.deferDraw;
+  let added = false;
+  let flagsChanged = false;
+
+  const metricMapping = [
+    ["rate_out_hz", "rateOut"],
+    ["w_maxabs_ih", "wMaxAbsIh"],
+    ["w_maxabs_ho", "wMaxAbsHo"],
+    ["g_norm_ih", "gNormIh"],
+    ["g_norm_ho", "gNormHo"],
+    ["accuracy", "accuracy"],
+  ];
+  for (const [key, seriesName] of metricMapping) {
+    if (!(key in dataObj)) continue;
+    const parsed = parseMetricNumber(dataObj[key]);
+    if (parsed === null) continue;
+    pushStabilityPoint(seriesName, step, parsed);
+    added = true;
+  }
+
+  if (!("rate_out_hz" in dataObj) && ("out_spike_count" in dataObj)) {
+    const outCount = parseMetricNumber(dataObj.out_spike_count);
+    const windowS = Math.max((state.dt || 1e-3) * (state.windowSteps || 50), 1e-12);
+    if (outCount !== null) {
+      pushStabilityPoint("rateOut", step, outCount / windowS);
+      added = true;
+    }
+  }
+
+  const flagMapping = [
+    ["stab_nan_inf", "nanInf"],
+    ["stab_weight_explode", "weightExplode"],
+    ["stab_rate_saturation", "saturation"],
+    ["stab_oscillation", "oscillation"],
+    ["stab_stagnation", "stagnation"],
+  ];
+  for (const [key, flagName] of flagMapping) {
+    if (!(key in dataObj)) continue;
+    const parsed = parseFlagValue(dataObj[key]);
+    if (parsed === null) continue;
+    const current = state.stabilityFlags[flagName];
+    const next = parsed === 1 ? 1 : (current === 1 ? 1 : 0);
+    if (current !== next) {
+      state.stabilityFlags[flagName] = next;
+      flagsChanged = true;
+    }
+  }
+
+  if (!("stab_nan_inf" in dataObj)) {
+    const hasNaNInf = Object.values(dataObj).some(
+      (v) => typeof v === "number" && !Number.isFinite(v),
+    );
+    if (hasNaNInf && state.stabilityFlags.nanInf !== 1) {
+      state.stabilityFlags.nanInf = 1;
+      flagsChanged = true;
+    } else if (state.stabilityFlags.nanInf === null) {
+      state.stabilityFlags.nanInf = 0;
+      flagsChanged = true;
+    }
+  }
+
+  if (!("stab_weight_explode" in dataObj)) {
+    const wIh = parseMetricNumber(dataObj.w_maxabs_ih);
+    const wHo = parseMetricNumber(dataObj.w_maxabs_ho);
+    const hasMetric = wIh !== null || wHo !== null;
+    if (hasMetric) {
+      const explode = (wIh !== null && wIh > 50) || (wHo !== null && wHo > 50);
+      const next = explode ? 1 : 0;
+      if (state.stabilityFlags.weightExplode !== next) {
+        state.stabilityFlags.weightExplode = next;
+        flagsChanged = true;
+      }
+    }
+  }
+
+  if (!("stab_rate_saturation" in dataObj)) {
+    const rate = latestStabilityValue("rateOut");
+    if (rate !== null) {
+      const sat = rate < 0.1 || rate > 200.0;
+      const next = sat ? 1 : 0;
+      if (state.stabilityFlags.saturation !== next) {
+        state.stabilityFlags.saturation = next;
+        flagsChanged = true;
+      }
+    }
+  }
+
+  if (!added && !flagsChanged) return false;
+
+  if (added) {
+    state.stabilityLastStep = step;
+    state.stabilitySamples += 1;
+  }
+  if (!deferDraw) {
+    drawStabilityCharts();
+  }
+  return true;
+}
+
+function drawStabilityCharts() {
+  drawResourceChart(canvasStabilityRate, [
+    {
+      points: collectStabilityPoints("rateOut"),
+      color: "#d29922",
+      label: "rate_out_hz",
+    },
+  ], { fixedMin: 0 });
+
+  drawResourceChart(canvasStabilityWMax, [
+    {
+      points: collectStabilityPoints("wMaxAbsIh"),
+      color: "#58a6ff",
+      label: "w_maxabs_ih",
+    },
+    {
+      points: collectStabilityPoints("wMaxAbsHo"),
+      color: "#bc8cff",
+      label: "w_maxabs_ho",
+    },
+  ], { fixedMin: 0 });
+
+  drawResourceChart(canvasStabilityGNorm, [
+    {
+      points: collectStabilityPoints("gNormIh"),
+      color: "#3fb950",
+      label: "g_norm_ih",
+    },
+    {
+      points: collectStabilityPoints("gNormHo"),
+      color: "#ff7b72",
+      label: "g_norm_ho",
+    },
+  ], { fixedMin: 0 });
+
+  drawResourceChart(canvasStabilityAcc, [
+    {
+      points: collectStabilityPoints("accuracy"),
+      color: "#79c0ff",
+      label: "accuracy",
+    },
+  ], { fixedMin: 0, fixedMax: 1 });
+
+  updateStabilityStats();
+  updateStabilityBadges();
 }
 
 // ── Training control ─────────────────────────────────────────────────
@@ -1644,6 +1937,7 @@ window.addEventListener("resize", () => {
     drawAccuracyChart();
     drawWeightChart();
     drawResourceCharts();
+    drawStabilityCharts();
   }, 150);
 });
 
@@ -1854,6 +2148,7 @@ function resetDashboardState(opts = {}) {
   state.runConfig = null;
   state.replayCursor = -1;
   resetResourceSeries();
+  resetStabilitySeries();
   if (!preserveReplay) {
     state.replayEvents = [];
     state.replayIndex = [];
@@ -1870,6 +2165,7 @@ function resetDashboardState(opts = {}) {
   drawWeightChart();
   updateResourceNote();
   drawResourceCharts();
+  drawStabilityCharts();
   drawNetwork();
   updateReplayScrubberUi();
 }
@@ -1884,9 +2180,12 @@ function renderReplayScalars(scalars) {
   statGate.textContent = state.gate;
 
   for (const row of scalars) {
-    ingestResourceMetrics(row, row.trial != null ? Number(row.trial) : state.totalTrials, { deferDraw: true });
+    const scalarStep = row.trial != null ? Number(row.trial) : state.totalTrials;
+    ingestResourceMetrics(row, scalarStep, { deferDraw: true });
+    ingestStabilityMetrics(row, scalarStep, { deferDraw: true });
 
-    const acc = row.accuracy != null ? row.accuracy : 0;
+    const parsedAcc = parseMetricNumber(row.accuracy);
+    const acc = parsedAcc !== null ? parsedAcc : 0;
     state.accuracyHistory.push(acc);
     state.totalTrials++;
     state.lastAccuracy = acc;
@@ -1931,6 +2230,7 @@ function renderReplayScalars(scalars) {
   renderReplayTruthTable();
   updateResourceNote();
   drawResourceCharts();
+  drawStabilityCharts();
 }
 
 function renderReplayTruthTable() {
@@ -2011,6 +2311,8 @@ function hideRunInfoBanner() {
   initTopologyControls();
   updateResourceNote();
   drawResourceCharts();
+  updateStabilityBadges();
+  drawStabilityCharts();
   setReplayControlsVisible(false);
   updateReplayScrubberUi();
 

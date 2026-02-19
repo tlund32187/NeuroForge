@@ -8,7 +8,7 @@ import json
 import queue
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 
@@ -254,7 +254,8 @@ class EventRecorderMonitor:
             tensor = tensor.reshape(-1).cpu()
             flat_tensor = tensor.tolist()
             if isinstance(flat_tensor, list):
-                return [self._coerce_scalar(v) for v in flat_tensor]
+                flat_list = cast("list[Any]", flat_tensor)  # type: ignore[redundant-cast]
+                return [self._coerce_scalar(v) for v in flat_list]
             return [self._coerce_scalar(flat_tensor)]
         except AttributeError:
             pass
@@ -264,7 +265,8 @@ class EventRecorderMonitor:
 
         if isinstance(value, (list, tuple)):
             out: list[Any] = []
-            for item in value:
+            seq = cast("list[Any] | tuple[Any, ...]", value)  # type: ignore[redundant-cast]
+            for item in seq:
                 out.extend(self._flatten_value(item))
             return out
 
@@ -285,11 +287,13 @@ class EventRecorderMonitor:
             pass
 
         if isinstance(value, dict):
-            return {str(k): self._small_json(v, max_values) for k, v in value.items()}
+            mapping = cast("dict[Any, Any]", value)  # type: ignore[redundant-cast]
+            return {str(k): self._small_json(v, max_values) for k, v in mapping.items()}
         if isinstance(value, (list, tuple)):
-            if len(value) <= max_values:
-                return [self._small_json(v, max_values) for v in value]
-            sampled, total, _ = self._sample_flat_values(value, max_values)
+            seq = cast("list[Any] | tuple[Any, ...]", value)  # type: ignore[redundant-cast]
+            if len(seq) <= max_values:
+                return [self._small_json(v, max_values) for v in seq]
+            sampled, total, _ = self._sample_flat_values(seq, max_values)
             return {
                 "sample": sampled,
                 "numel": total,

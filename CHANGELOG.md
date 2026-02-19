@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Phase 6 - Stability and instrumentation
+
+- Determinism controls wired into CLI startup:
+  - `--seed`
+  - `--deterministic` / `--no-deterministic`
+  - `--benchmark`
+  - `--warn-only` / `--strict-determinism`
+- Added `TrialStatsMonitor` (opt-in) to enrich trial/scalar events with:
+  - spike rates (`rate_in_*`, `rate_hid_*`, `rate_out_hz`)
+  - sparsity (`sparsity_in`, `sparsity_hid`)
+  - convergence counters (`conv_streak`, `conv_per_pattern_*`)
+- Added `StabilityMonitor` (opt-in) with flags:
+  - `stab_nan_inf`
+  - `stab_weight_explode`
+  - `stab_rate_saturation`
+  - `stab_oscillation`
+  - `stab_stagnation`
+- Added optional fail-fast for critical instability via `--fail-fast`.
+- Added Phase 6 scalar schema/header support in artifact writing so new fields
+  are persisted safely while remaining backward-compatible with older runs.
+- Added multi-seed stability harness and CLI command:
+  - `neuroforge stability --task multi_gate --seeds ...`
+  - JSON summary includes pass rate, convergence stats, and stability flag counts.
+- Dashboard live and replay paths now surface Phase 6 stability signals so users
+  can interpret flags and trends from both websocket events and `scalars.csv`.
+
 ## [0.1.0] — 2026-02-16
 
 ### Phase 8 — Logic gate task (milestone)
@@ -71,3 +99,4 @@
 - Project structure, build config, test infrastructure
 - `pyproject.toml` (Hatchling), `pytest.ini`, `pyrightconfig.json`
 - `src/neuroforge` package layout with `py.typed` marker
+

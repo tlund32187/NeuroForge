@@ -189,6 +189,47 @@
         </div>
       </section>
 
+      <section class="panel" id="panel-stability">
+        <h2>Stability</h2>
+        <div class="stability-badges">
+          <span id="stab-badge-nan-inf" class="stability-badge">NaN/Inf: n/a</span>
+          <span id="stab-badge-weight-explode" class="stability-badge">Weight explode: n/a</span>
+          <span id="stab-badge-saturation" class="stability-badge">Saturation: n/a</span>
+          <span id="stab-badge-oscillation" class="stability-badge">Oscillation: n/a</span>
+          <span id="stab-badge-stagnation" class="stability-badge">Stagnation: n/a</span>
+        </div>
+        <div class="stability-grid">
+          <div class="stability-chart">
+            <div class="stability-chart-head">
+              <h3>Rate Out (Hz)</h3>
+              <div id="stability-stats-rate" class="stability-stats">n/a</div>
+            </div>
+            <canvas id="canvas-stability-rate"></canvas>
+          </div>
+          <div class="stability-chart">
+            <div class="stability-chart-head">
+              <h3>W MaxAbs</h3>
+              <div id="stability-stats-wmax" class="stability-stats">ih -- | ho --</div>
+            </div>
+            <canvas id="canvas-stability-wmax"></canvas>
+          </div>
+          <div class="stability-chart">
+            <div class="stability-chart-head">
+              <h3>Gradient Norm</h3>
+              <div id="stability-stats-gnorm" class="stability-stats">ih -- | ho --</div>
+            </div>
+            <canvas id="canvas-stability-gnorm"></canvas>
+          </div>
+          <div class="stability-chart">
+            <div class="stability-chart-head">
+              <h3>Accuracy</h3>
+              <div id="stability-stats-acc" class="stability-stats">--%</div>
+            </div>
+            <canvas id="canvas-stability-acc"></canvas>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="panel-log">
         <h2>Training Log</h2>
         <div id="log-container"></div>

@@ -1,8 +1,4 @@
-"""Seed management for reproducibility.
-
-Sets seeds for torch, CUDA, and Python's random module to ensure
-deterministic behaviour across runs.
-"""
+"""Legacy seed helper for backward compatibility."""
 
 from __future__ import annotations
 
@@ -10,25 +6,20 @@ __all__ = ["set_global_seed"]
 
 
 def set_global_seed(seed: int) -> None:
-    """Set the global random seed for reproducibility.
-
-    Sets seeds for:
-    - ``torch.manual_seed``
-    - ``torch.cuda.manual_seed_all`` (if CUDA available)
-    - Python's ``random.seed``
-
-    Parameters
-    ----------
-    seed:
-        Integer seed value.
-    """
-    import random
-
+    """Set global RNG seeds while preserving current determinism mode."""
+    from neuroforge.core.determinism.mode import DeterminismConfig, apply_determinism
     from neuroforge.core.torch_utils import require_torch
 
-    random.seed(seed)
-
     torch = require_torch()
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    deterministic_enabled = bool(torch.are_deterministic_algorithms_enabled())
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    benchmark_enabled = bool(getattr(cudnn_backend, "benchmark", False))
+
+    apply_determinism(
+        DeterminismConfig(
+            seed=seed,
+            deterministic=deterministic_enabled,
+            benchmark=benchmark_enabled,
+            warn_only=True,
+        )
+    )

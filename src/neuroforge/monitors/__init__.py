@@ -19,7 +19,9 @@ from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
 from neuroforge.monitors.event_recorder import EventRecorderMonitor
 from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
+from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
+from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
 from neuroforge.monitors.voltage_monitor import VoltageMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
 
@@ -34,6 +36,9 @@ __all__ = [
     "MonitorEvent",
     "ResourceMonitor",
     "SpikeMonitor",
+    "StabilityConfig",
+    "StabilityMonitor",
+    "TrialStatsMonitor",
     "TrainingMonitor",
     "VoltageMonitor",
     "WeightMonitor",

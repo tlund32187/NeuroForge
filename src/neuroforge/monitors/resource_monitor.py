@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 
@@ -47,7 +48,7 @@ class ResourceMonitor:
 
         self._psutil: ModuleType | None = None
         self._process: Any = None
-        self._pynvml: ModuleType | None = None
+        self._pynvml: Any = None
         self._nvml_handle: Any = None
         self._nvml_ready = False
         self._first_cpu_sample = True
@@ -95,7 +96,7 @@ class ResourceMonitor:
         if not (self._include_process or self._include_system):
             return
         try:
-            import psutil
+            psutil_any = cast("Any", importlib.import_module("psutil"))
         except ImportError:
             if not ResourceMonitor._warned_psutil_missing:
                 _LOGGER.warning(
@@ -106,13 +107,13 @@ class ResourceMonitor:
             self._include_system = False
             return
 
-        self._psutil = psutil
-        self._process = psutil.Process()
+        self._psutil = psutil_any
+        self._process = psutil_any.Process()
 
         # Prime CPU counters so the first real sample is meaningful.
         with suppress_exceptions():
             if self._include_system:
-                psutil.cpu_percent(interval=None)
+                psutil_any.cpu_percent(interval=None)
             if self._include_process:
                 self._process.cpu_percent(interval=None)
 
@@ -120,7 +121,7 @@ class ResourceMonitor:
         if not self._include_gpu:
             return
         try:
-            import pynvml
+            pynvml_any = cast("Any", importlib.import_module("pynvml"))
         except ImportError:
             if not ResourceMonitor._warned_nvml_missing:
                 _LOGGER.warning(
@@ -129,10 +130,10 @@ class ResourceMonitor:
                 ResourceMonitor._warned_nvml_missing = True
             return
 
-        self._pynvml = pynvml
+        self._pynvml = pynvml_any
         try:
-            pynvml.nvmlInit()
-            self._nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(self._gpu_index)
+            pynvml_any.nvmlInit()
+            self._nvml_handle = pynvml_any.nvmlDeviceGetHandleByIndex(self._gpu_index)
             self._nvml_ready = True
         except Exception:  # pragma: no cover - dependent on host GPU runtime
             if not ResourceMonitor._warned_nvml_init:
