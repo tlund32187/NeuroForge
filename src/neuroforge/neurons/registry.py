@@ -1,22 +1,21 @@
-"""Neuron model registry."""
+"""Neuron model registry — thin wrapper around :data:`DEFAULT_HUB.neurons`.
+
+The module-level :data:`NEURON_MODELS` is an alias for
+``DEFAULT_HUB.neurons`` so every existing import keeps working.
+"""
 
 from __future__ import annotations
 
-from neuroforge.core.registry import Registry
+from typing import TYPE_CHECKING
+
+from neuroforge.factories.hub import DEFAULT_HUB
+
+if TYPE_CHECKING:
+    from neuroforge.core.registry import Registry
 
 __all__ = ["NEURON_MODELS", "create_neuron_model"]
 
-NEURON_MODELS: Registry = Registry("neurons")
-
-
-def _register_builtins() -> None:
-    """Register built-in neuron models."""
-    from neuroforge.neurons.lif.model import LIFModel
-
-    NEURON_MODELS.register("lif", LIFModel)
-
-
-_register_builtins()
+NEURON_MODELS: Registry = DEFAULT_HUB.neurons
 
 
 def create_neuron_model(key: str, **kwargs: object) -> object:

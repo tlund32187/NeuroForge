@@ -167,17 +167,20 @@ class NetworkFactory:
 
 
 def to_topology_json(engine: CoreEngine) -> dict[str, Any]:
-    """Return a JSON-friendly topology dict from *engine*.
+    """Return a JSON-serialisable topology dict from *engine*.
 
     The format is compatible with the existing ``TOPOLOGY`` event::
 
         {
             "layers": ["input(8)", "hidden(24)", "output(1)"],
             "edges": [
-                {"src": "input", "dst": "hidden", "weights": <Tensor>},
+                {"src": "input", "dst": "hidden", "weights": [[...]]},
                 ...
             ],
         }
+
+    All tensors are converted to nested Python lists so the result can
+    be passed directly to ``json.dumps``.
     """
     layers: list[str] = [
         f"{name}({pop.n})" for name, pop in engine.populations.items()
@@ -191,7 +194,7 @@ def to_topology_json(engine: CoreEngine) -> dict[str, Any]:
         }
         wm = proj.state.get("weight_matrix")
         if wm is not None:
-            edge["weights"] = wm.detach()
+            edge["weights"] = wm.detach().cpu().tolist()
         edges.append(edge)
 
     return {"layers": layers, "edges": edges}
@@ -219,11 +222,12 @@ def _make_dense_weights(
     if init == "uniform":
         low = float(cfg.get("low", -0.3))
         high = float(cfg.get("high", 0.3))
+        # Init on CPU so the same seed yields identical weights on any device.
         if squeeze:
-            weight_matrix = torch.empty(n_pre, dtype=tdt, device=dev).uniform_(low, high)
+            weight_matrix = torch.empty(n_pre, dtype=tdt).uniform_(low, high).to(dev)
         else:
-            weight_matrix = torch.empty(n_pre, n_post, dtype=tdt, device=dev).uniform_(
-                low, high,
+            weight_matrix = (
+                torch.empty(n_pre, n_post, dtype=tdt).uniform_(low, high).to(dev)
             )
     elif init == "zeros":
         if squeeze:
@@ -251,7 +255,9 @@ def _dense_edge_topology(
     """Create a :class:`SynapseTopology` edge-list from a dense matrix."""
     pre_idx = torch.arange(n_pre, device=dev).repeat_interleave(n_post)
     post_idx = torch.arange(n_post, device=dev).repeat(n_pre)
-    flat_w = weight_matrix.detach().reshape(-1)
+    # Keep a live view so autograd can flow from synapse propagation
+    # back to the trainable dense weight tensor.
+    flat_w = weight_matrix.reshape(-1)
     delays = torch.zeros(n_pre * n_post, dtype=torch.int64, device=dev)
 
     return SynapseTopology(

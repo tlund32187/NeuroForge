@@ -15,15 +15,28 @@ const state = {
   totalTrials: 0,
   converged: null,      // null | true | false
   lastAccuracy: 0,
+  epoch: 0,
+  trainStartTime: null, // Date.now() when training began
+  _elapsedTimer: null,  // setInterval id for elapsed clock
   windowSteps: 50,      // sim steps per trial (for computing spike rates)
 
   // Network visualisation
   neurons: [],          // { id, layer, idx, x, y, r, color, label, totalSpikes, trialCount }
-  connections: [],      // { src, dst, weight, srcNeuron, dstNeuron }
+  connections: [],      // rendered connections after edge-mode filtering
+  allConnections: [],   // full connection list from topology
+  topologyVersion: 0,
+  edgeSampleCache: {},  // key -> sampled connections
 
   // Mode: "live" | "replay"
   mode: "live",
   activeRunId: null,    // run_id of the currently loaded replay (or live run)
+  runConfig: null,      // resolved config dict from run_start or replay API
+
+  // Topology view controls
+  edgeMode: "sampled",  // off | sampled | full
+  maxEdgesPerProjection: 200,
+  strongestOnly: true,
+  detailedNodes: false, // collapsed-by-default for large populations
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────────
@@ -32,6 +45,7 @@ const $ = (sel) => document.querySelector(sel);
 const btnTrain    = $("#btn-train");
 const btnStop     = $("#btn-stop");
 const gateSelect  = $("#gate-select");
+const deviceSelect= $("#device-select");
 const maxTrials   = $("#max-trials");
 const statusBadge = $("#status-badge");
 
@@ -39,13 +53,23 @@ const canvasNet   = $("#canvas-network");
 const canvasAcc   = $("#canvas-accuracy");
 const canvasWgt   = $("#canvas-weights");
 const tooltip     = $("#tooltip");
+const edgeModeSel = $("#topology-edge-mode");
+const edgeCountWrap = $("#topology-edge-count-wrap");
+const edgeCountSlider = $("#topology-edge-count");
+const edgeCountValue = $("#topology-edge-count-value");
+const strongestOnlyChk = $("#topology-strongest");
+const detailedNodesChk = $("#topology-detailed-nodes");
 const truthTbody  = $("#truth-table tbody");
 const logContainer= $("#log-container");
+const configGrid  = $("#config-grid");
+const panelConfig = $("#panel-config");
 
 const statTrial   = $("#stat-trial");
 const statAccuracy= $("#stat-accuracy");
 const statConverged=$("#stat-converged");
 const statGate    = $("#stat-gate");
+const statEpoch   = $("#stat-epoch");
+const statElapsed = $("#stat-elapsed");
 
 // Replay controls
 const liveControls   = $("#live-controls");
@@ -98,10 +122,18 @@ function handleMessage(msg) {
     // Full state snapshot on connect.
     if (msg.training) applyTrainingSnapshot(msg.training);
     if (msg.weights)  applyWeightSnapshot(msg.weights);
+    if (msg.config)   { state.runConfig = msg.config; renderConfigPanel(); }
     return;
   }
 
   switch (msg.topic) {
+    case "run_start":
+      if (msg.data && msg.data.config) {
+        state.runConfig = msg.data.config;
+        renderConfigPanel();
+      }
+      break;
+
     case "training_start":
       state.training = true;
       state.gate = msg.data.gate || "OR";
@@ -112,6 +144,12 @@ function handleMessage(msg) {
       state.truthTable = {};
       state.totalTrials = 0;
       state.converged = null;
+      state.epoch = 0;
+      state.trainStartTime = Date.now();
+      if (state._elapsedTimer) clearInterval(state._elapsedTimer);
+      state._elapsedTimer = setInterval(() => {
+        if (statElapsed) statElapsed.textContent = formatElapsed(Date.now() - state.trainStartTime);
+      }, 1000);
       state.weightHistory = {};
       // Reset per-neuron spike stats.
       for (const n of state.neurons) {
@@ -135,6 +173,7 @@ function handleMessage(msg) {
     case "training_trial":
       state.totalTrials = msg.step + 1;
       state.lastAccuracy = msg.data.accuracy || 0;
+      if (msg.data.epoch !== undefined) state.epoch = msg.data.epoch + 1;
       state.accuracyHistory.push(state.lastAccuracy);
 
       updateTruthTableEntry(msg.data);
@@ -154,7 +193,7 @@ function handleMessage(msg) {
 
     case "weight":
       recordWeight(msg);
-      if (state.totalTrials % 20 === 0) drawWeightChart();
+      drawWeightChart();
       break;
 
     case "training_end":
@@ -177,8 +216,10 @@ function handleMessage(msg) {
         line.textContent = `Per-gate: ${summary}`;
         logContainer.appendChild(line);
       }
+      if (state._elapsedTimer) { clearInterval(state._elapsedTimer); state._elapsedTimer = null; }
       btnTrain.disabled = false;
       btnStop.disabled = true;
+      updateStats();
       drawAccuracyChart();
       drawWeightChart();
       renderTruthTable();
@@ -206,6 +247,7 @@ function applyTrainingSnapshot(snap) {
   }
 
   statGate.textContent = state.gate || "—";
+  if (snap.epoch) state.epoch = snap.epoch;
   updateStats();
   renderTruthTable();
   drawAccuracyChart();
@@ -246,11 +288,12 @@ btnTrain.addEventListener("click", async () => {
   hideRunInfoBanner();
   const gate = gateSelect.value;
   const trials = parseInt(maxTrials.value, 10) || 5000;
+  const device = deviceSelect ? deviceSelect.value : "cuda";
 
   const resp = await fetch("/api/train", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ gate, max_trials: trials }),
+    body: JSON.stringify({ gate, max_trials: trials, device }),
   });
 
   if (!resp.ok) {
@@ -276,7 +319,116 @@ function setStatus(s) {
   statusBadge.textContent = s;
 }
 
+function syncTopologyControlUi() {
+  if (edgeCountValue) edgeCountValue.textContent = String(state.maxEdgesPerProjection);
+  const sampled = state.edgeMode === "sampled";
+  if (edgeCountSlider) edgeCountSlider.disabled = !sampled;
+  if (strongestOnlyChk) strongestOnlyChk.disabled = !sampled;
+  if (edgeCountWrap) edgeCountWrap.style.opacity = sampled ? "1" : "0.55";
+}
+
+function handleTopologyEdgeControlChange() {
+  if (edgeModeSel) state.edgeMode = edgeModeSel.value;
+  if (edgeCountSlider) state.maxEdgesPerProjection = parseInt(edgeCountSlider.value, 10) || 200;
+  if (strongestOnlyChk) state.strongestOnly = !!strongestOnlyChk.checked;
+  syncTopologyControlUi();
+  state.edgeSampleCache = {};
+  refreshRenderedConnections();
+  drawNetwork();
+}
+
+function handleTopologyDetailChange() {
+  if (detailedNodesChk) state.detailedNodes = !!detailedNodesChk.checked;
+  state.edgeSampleCache = {};
+  buildNetworkLayout();
+  drawNetwork();
+}
+
+function initTopologyControls() {
+  if (edgeModeSel) state.edgeMode = edgeModeSel.value || state.edgeMode;
+  if (edgeCountSlider) state.maxEdgesPerProjection = parseInt(edgeCountSlider.value, 10) || state.maxEdgesPerProjection;
+  if (strongestOnlyChk) state.strongestOnly = !!strongestOnlyChk.checked;
+  if (detailedNodesChk) state.detailedNodes = !!detailedNodesChk.checked;
+
+  if (edgeModeSel) edgeModeSel.addEventListener("change", handleTopologyEdgeControlChange);
+  if (edgeCountSlider) edgeCountSlider.addEventListener("input", handleTopologyEdgeControlChange);
+  if (strongestOnlyChk) strongestOnlyChk.addEventListener("change", handleTopologyEdgeControlChange);
+  if (detailedNodesChk) detailedNodesChk.addEventListener("change", handleTopologyDetailChange);
+  syncTopologyControlUi();
+}
+
+// ── Config panel ─────────────────────────────────────────────────────
+
+const CONFIG_DISPLAY_ORDER = [
+  "gate", "gates", "device", "dtype", "seed",
+  "n_hidden", "n_inhibitory", "lr",
+  "max_trials", "max_epochs", "window_steps", "dt",
+  "convergence_streak", "per_pattern_streak",
+  "amplitude", "spike_threshold", "w_min", "w_max",
+];
+
+const CONFIG_LABELS = {
+  gate: "Gate",
+  gates: "Gates",
+  device: "Device",
+  dtype: "Dtype",
+  seed: "Seed",
+  n_hidden: "Hidden",
+  n_inhibitory: "Inhibitory",
+  lr: "Learn Rate",
+  max_trials: "Max Trials",
+  max_epochs: "Max Epochs",
+  window_steps: "Window Steps",
+  dt: "dt",
+  convergence_streak: "Conv. Streak",
+  per_pattern_streak: "Pattern Streak",
+  amplitude: "Amplitude",
+  spike_threshold: "Spike Thresh",
+  w_min: "W Min",
+  w_max: "W Max",
+};
+
+function renderConfigPanel() {
+  if (!configGrid || !panelConfig) return;
+  const cfg = state.runConfig;
+  if (!cfg || Object.keys(cfg).length === 0) {
+    panelConfig.style.display = "none";
+    return;
+  }
+
+  // Build items in display order, then append any remaining keys.
+  const seen = new Set();
+  const items = [];
+  for (const key of CONFIG_DISPLAY_ORDER) {
+    if (key in cfg) {
+      seen.add(key);
+      items.push({ key, value: cfg[key] });
+    }
+  }
+  for (const key of Object.keys(cfg)) {
+    if (!seen.has(key)) items.push({ key, value: cfg[key] });
+  }
+
+  configGrid.innerHTML = items.map(({ key, value }) => {
+    const label = CONFIG_LABELS[key] || key;
+    let display = value;
+    if (Array.isArray(value)) display = value.join(", ");
+    else if (typeof value === "object" && value !== null) display = JSON.stringify(value);
+    return `<div class="config-item"><span class="config-key">${label}:</span><span class="config-val">${display}</span></div>`;
+  }).join("");
+  panelConfig.style.display = "";
+}
+
 // ── Stats ────────────────────────────────────────────────────────────
+
+function formatElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 function updateStats() {
   statTrial.textContent = state.totalTrials.toLocaleString();
@@ -284,6 +436,14 @@ function updateStats() {
   if (state.converged === true)       statConverged.textContent = "✓ Yes";
   else if (state.converged === false) statConverged.textContent = "✗ No";
   else                                statConverged.textContent = "—";
+  statEpoch.textContent = state.epoch > 0 ? state.epoch.toLocaleString() : "—";
+  if (statElapsed) {
+    if (state.trainStartTime) {
+      statElapsed.textContent = formatElapsed(Date.now() - state.trainStartTime);
+    } else {
+      statElapsed.textContent = "—";
+    }
+  }
 }
 
 // ── Truth table ──────────────────────────────────────────────────────
@@ -325,7 +485,17 @@ function updateNeuronSpikes(d) {
   };
   for (const n of state.neurons) {
     const arr = layerSpikes[n.layer];
-    if (arr && n.idx < arr.length) {
+    if (!arr || arr.length === 0) {
+      n.lastSpikes = 0;
+      n.trialCount++;
+      continue;
+    }
+    if (n.isAggregate) {
+      let total = 0;
+      for (const v of arr) total += Number(v || 0);
+      n.lastSpikes = total;
+      n.totalSpikes += total;
+    } else if (n.idx < arr.length) {
       n.lastSpikes = arr[n.idx];
       n.totalSpikes += arr[n.idx];
     } else {
@@ -401,44 +571,338 @@ function appendLog(msg) {
 
 // ── Network topology visualisation ───────────────────────────────────
 
+function parseLayerInfo(topology) {
+  const layers = topology.layers || [];
+  const popHints = topology.populations || {};
+  return layers.map((layerLabel, layerIdx) => {
+    const m = layerLabel.match(/^([\w-]+)\((\d+)\)$/);
+    const name = m ? m[1] : String(layerLabel);
+    const count = m ? parseInt(m[2], 10) : 1;
+    const hintObj = Array.isArray(popHints)
+      ? popHints.find((p) => p && p.name === name)
+      : popHints[name];
+    return {
+      name,
+      count,
+      layerIdx,
+      viz: (hintObj && hintObj.viz) ? hintObj.viz : {},
+    };
+  });
+}
+
+function isInputLikeLayerName(layerName) {
+  const s = String(layerName || "").toLowerCase();
+  return s.includes("input") || s.includes("pixel") || s.includes("image");
+}
+
+function inferGridDims(layer) {
+  const viz = layer.viz || {};
+  if (viz.layout === "grid" && Number.isFinite(viz.grid_w) && Number.isFinite(viz.grid_h)) {
+    return { w: Math.max(1, Math.floor(viz.grid_w)), h: Math.max(1, Math.floor(viz.grid_h)) };
+  }
+  if (!isInputLikeLayerName(layer.name)) return null;
+  const n = layer.count;
+  const side = Math.round(Math.sqrt(n));
+  // Inference rule: use grid for input-like populations when n is square,
+  // with an explicit 64->8x8 special-case for pixel-encoded tasks.
+  if (n === 64) return { w: 8, h: 8 };
+  if (side * side === n) return { w: side, h: side };
+  return null;
+}
+
+function shouldCollapseLayer(layer) {
+  if (layer.viz && layer.viz.collapsed === false) return false;
+  if (state.detailedNodes) return false;
+  return layer.count > 32;
+}
+
+function makeNeuronLabel(layerName, idx, count, isAggregate) {
+  if (isAggregate) return `${layerName} (${count})`;
+  return `${layerName}[${idx}]`;
+}
+
+function shouldShowNeuronLabel(layerName, idx, count, isAggregate) {
+  if (isAggregate) return true;
+  const lower = String(layerName).toLowerCase();
+  if (lower.includes("output")) return true;
+  if (isInputLikeLayerName(layerName)) return false;
+  if (lower.includes("hidden")) {
+    const step = Math.max(1, Math.ceil(count / 10)); // show ~10 hidden labels max
+    return idx % step === 0;
+  }
+  return idx % 4 === 0;
+}
+
+function createDeterministicRandom(seedStr) {
+  let h = 2166136261 >>> 0;
+  const s = String(seedStr || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  let stateVal = h >>> 0;
+  return () => {
+    stateVal = (Math.imul(1664525, stateVal) + 1013904223) >>> 0;
+    return stateVal / 4294967296;
+  };
+}
+
+function deterministicSample(items, maxItems, seedStr) {
+  if (items.length <= maxItems) return items.slice();
+  const rnd = createDeterministicRandom(seedStr);
+  const idx = Array.from({ length: items.length }, (_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    const tmp = idx[i];
+    idx[i] = idx[j];
+    idx[j] = tmp;
+  }
+  const keep = idx.slice(0, maxItems).sort((a, b) => a - b);
+  return keep.map((i) => items[i]);
+}
+
+function flattenWeights(weights) {
+  if (!Array.isArray(weights)) return [];
+  if (Array.isArray(weights[0])) return weights.flat().map((v) => Number(v || 0));
+  return weights.map((v) => Number(v || 0));
+}
+
+function buildAllConnections(layerInfo) {
+  const all = [];
+  const byLayerIdx = {};
+  for (const n of state.neurons) {
+    if (!byLayerIdx[n.layerIdx]) byLayerIdx[n.layerIdx] = [];
+    byLayerIdx[n.layerIdx].push(n);
+  }
+  const edges = state.topology.edges || [];
+  edges.forEach((edge, edgeIdx) => {
+    const srcLayer = layerInfo.findIndex((l) => l.name === edge.src);
+    const dstLayer = layerInfo.findIndex((l) => l.name === edge.dst);
+    if (srcLayer < 0 || dstLayer < 0) return;
+
+    const srcNeurons = byLayerIdx[srcLayer] || [];
+    const dstNeurons = byLayerIdx[dstLayer] || [];
+    if (srcNeurons.length === 0 || dstNeurons.length === 0) return;
+
+    const projection = edge.name || edge.projection || `${edge.src}->${edge.dst}#${edgeIdx}`;
+    const weights = edge.weights;
+
+    if (srcNeurons.length === 1 && dstNeurons.length === 1) {
+      const flat = flattenWeights(weights);
+      const meanW = flat.length
+        ? flat.reduce((acc, v) => acc + Number(v || 0), 0) / flat.length
+        : 0;
+      all.push({
+        projection,
+        src: srcNeurons[0].id,
+        dst: dstNeurons[0].id,
+        weight: Number(meanW || 0),
+        hasWeight: flat.length > 0,
+        srcNeuron: srcNeurons[0],
+        dstNeuron: dstNeurons[0],
+      });
+      return;
+    }
+
+    if (Array.isArray(weights) && Array.isArray(weights[0])) {
+      for (let si = 0; si < srcNeurons.length; si++) {
+        for (let di = 0; di < dstNeurons.length; di++) {
+          const row = weights[si] || [];
+          all.push({
+            projection,
+            src: srcNeurons[si].id,
+            dst: dstNeurons[di].id,
+            weight: Number(row[di] || 0),
+            hasWeight: true,
+            srcNeuron: srcNeurons[si],
+            dstNeuron: dstNeurons[di],
+          });
+        }
+      }
+      return;
+    }
+
+    if (Array.isArray(weights)) {
+      for (let si = 0; si < srcNeurons.length; si++) {
+        for (let di = 0; di < dstNeurons.length; di++) {
+          const wIdx = srcNeurons.length > 1 ? si : di;
+          all.push({
+            projection,
+            src: srcNeurons[si].id,
+            dst: dstNeurons[di].id,
+            weight: Number(weights[wIdx] || 0),
+            hasWeight: true,
+            srcNeuron: srcNeurons[si],
+            dstNeuron: dstNeurons[di],
+          });
+        }
+      }
+      return;
+    }
+
+    for (const sn of srcNeurons) {
+      for (const dn of dstNeurons) {
+        all.push({
+          projection,
+          src: sn.id,
+          dst: dn.id,
+          weight: 0,
+          hasWeight: false,
+          srcNeuron: sn,
+          dstNeuron: dn,
+        });
+      }
+    }
+  });
+  return all;
+}
+
+function refreshRenderedConnections() {
+  if (!state.allConnections || state.allConnections.length === 0) {
+    state.connections = [];
+    return;
+  }
+  if (state.edgeMode === "off") {
+    state.connections = [];
+    return;
+  }
+  if (state.edgeMode === "full") {
+    state.connections = state.allConnections;
+    return;
+  }
+
+  const maxPerProj = Math.max(1, state.maxEdgesPerProjection || 200);
+  const runSeed = state.activeRunId || (state.gate || "live");
+  const cacheKey = `${state.topologyVersion}|${runSeed}|${state.edgeMode}|${maxPerProj}|${state.strongestOnly}`;
+  if (state.edgeSampleCache[cacheKey]) {
+    state.connections = state.edgeSampleCache[cacheKey];
+    return;
+  }
+
+  const grouped = {};
+  for (const c of state.allConnections) {
+    if (!grouped[c.projection]) grouped[c.projection] = [];
+    grouped[c.projection].push(c);
+  }
+
+  const sampled = [];
+  for (const [projection, edges] of Object.entries(grouped)) {
+    if (edges.length <= maxPerProj) {
+      sampled.push(...edges);
+      continue;
+    }
+    const hasExplicitWeights = edges.some((e) => e.hasWeight);
+    if (state.strongestOnly && hasExplicitWeights) {
+      const top = edges
+        .slice()
+        .sort((a, b) => Math.abs(Number(b.weight || 0)) - Math.abs(Number(a.weight || 0)))
+        .slice(0, maxPerProj);
+      sampled.push(...top);
+      continue;
+    }
+    const pick = deterministicSample(edges, maxPerProj, `${runSeed}|${projection}`);
+    sampled.push(...pick);
+  }
+
+  state.edgeSampleCache[cacheKey] = sampled;
+  state.connections = sampled;
+}
+
 function buildNetworkLayout() {
   state.neurons = [];
   state.connections = [];
+  state.allConnections = [];
   if (!state.topology) return;
 
-  const layers = state.topology.layers; // e.g. ["input(2)", "hidden(6)", "output(1)"]
-  const layerInfo = layers.map((l) => {
-    const m = l.match(/^(\w+)\((\d+)\)$/);
-    return m ? { name: m[1], count: parseInt(m[2], 10) } : { name: l, count: 1 };
-  });
-
+  const layerInfo = parseLayerInfo(state.topology);
   const colors = {
-    input:  "#58a6ff",
+    input: "#58a6ff",
     hidden: "#bc8cff",
     output: "#3fb950",
   };
 
   const { w, h } = setupCanvas(canvasNet);
-  const padX = 60, padY = 30;
-  const usableW = w - 2 * padX;
-  const usableH = h - 2 * padY;
-
-  // Position neurons.
+  const padX = 60;
+  const padY = 24;
+  const usableW = Math.max(1, w - 2 * padX);
+  const usableH = Math.max(1, h - 2 * padY);
   const nLayers = layerInfo.length;
   let id = 0;
+
   layerInfo.forEach((layer, li) => {
-    const x = padX + (li / (nLayers - 1 || 1)) * usableW;
+    const centerX = padX + (li / (nLayers - 1 || 1)) * usableW;
+    const lower = layer.name.toLowerCase();
+    const layerColor = colors[lower] || "#8b949e";
+    const collapsed = shouldCollapseLayer(layer);
+    const grid = !collapsed ? inferGridDims(layer) : null;
+
+    if (collapsed) {
+      state.neurons.push({
+        id: id++,
+        layer: layer.name,
+        layerIdx: li,
+        idx: 0,
+        x: centerX,
+        y: padY + usableH / 2,
+        r: 11,
+        color: layerColor,
+        label: makeNeuronLabel(layer.name, 0, layer.count, true),
+        showLabel: true,
+        isAggregate: true,
+        memberCount: layer.count,
+        totalSpikes: 0,
+        lastSpikes: 0,
+        trialCount: 0,
+      });
+      return;
+    }
+
+    if (grid && grid.w * grid.h >= layer.count) {
+      const bandW = Math.min(160, usableW / Math.max(3, nLayers));
+      const bandH = Math.min(180, usableH * 0.9);
+      const cellW = bandW / grid.w;
+      const cellH = bandH / grid.h;
+      const dotR = Math.max(2.4, Math.min(6.2, Math.min(cellW, cellH) * 0.28));
+      const x0 = centerX - bandW / 2;
+      const y0 = padY + (usableH - bandH) / 2;
+      for (let ni = 0; ni < layer.count; ni++) {
+        const row = Math.floor(ni / grid.w);
+        const col = ni % grid.w;
+        state.neurons.push({
+          id: id++,
+          layer: layer.name,
+          layerIdx: li,
+          idx: ni,
+          x: x0 + (col + 0.5) * cellW,
+          y: y0 + (row + 0.5) * cellH,
+          r: dotR,
+          color: layerColor,
+          label: makeNeuronLabel(layer.name, ni, layer.count, false),
+          showLabel: shouldShowNeuronLabel(layer.name, ni, layer.count, false),
+          isAggregate: false,
+          totalSpikes: 0,
+          lastSpikes: 0,
+          trialCount: 0,
+        });
+      }
+      return;
+    }
+
     for (let ni = 0; ni < layer.count; ni++) {
-      const y = padY + ((ni + 0.5) / layer.count) * usableH;
+      const y = padY + ((ni + 0.5) / Math.max(1, layer.count)) * usableH;
+      const radius = Math.max(3.6, Math.min(10, 16 - layer.count * 0.2));
       state.neurons.push({
         id: id++,
         layer: layer.name,
         layerIdx: li,
         idx: ni,
-        x, y,
-        r: Math.max(8, 18 - layer.count),
-        color: colors[layer.name] || "#8b949e",
-        label: `${layer.name}[${ni}]`,
+        x: centerX,
+        y,
+        r: radius,
+        color: layerColor,
+        label: makeNeuronLabel(layer.name, ni, layer.count, false),
+        showLabel: shouldShowNeuronLabel(layer.name, ni, layer.count, false),
+        isAggregate: false,
         totalSpikes: 0,
         lastSpikes: 0,
         trialCount: 0,
@@ -446,59 +910,22 @@ function buildNetworkLayout() {
     }
   });
 
-  // Build connections from topology edges.
-  const edges = state.topology.edges || [];
-  edges.forEach((edge) => {
-    const srcLayer = layerInfo.findIndex((l) => l.name === edge.src);
-    const dstLayer = layerInfo.findIndex((l) => l.name === edge.dst);
-    if (srcLayer < 0 || dstLayer < 0) return;
-
-    const srcNeurons = state.neurons.filter((n) => n.layerIdx === srcLayer);
-    const dstNeurons = state.neurons.filter((n) => n.layerIdx === dstLayer);
-
-    const weights = edge.weights;
-    if (Array.isArray(weights) && Array.isArray(weights[0])) {
-      // 2D weights [src, dst].
-      for (let si = 0; si < srcNeurons.length; si++) {
-        for (let di = 0; di < dstNeurons.length; di++) {
-          state.connections.push({
-            src: srcNeurons[si].id,
-            dst: dstNeurons[di].id,
-            weight: weights[si][di],
-            srcNeuron: srcNeurons[si],
-            dstNeuron: dstNeurons[di],
-          });
-        }
-      }
-    } else if (Array.isArray(weights)) {
-      // 1D weights — one per dst or one per src.
-      for (let si = 0; si < srcNeurons.length; si++) {
-        for (let di = 0; di < dstNeurons.length; di++) {
-          const wIdx = srcNeurons.length > 1 ? si : di;
-          state.connections.push({
-            src: srcNeurons[si].id,
-            dst: dstNeurons[di].id,
-            weight: weights[wIdx] || 0,
-            srcNeuron: srcNeurons[si],
-            dstNeuron: dstNeurons[di],
-          });
-        }
-      }
-    }
-  });
+  state.allConnections = buildAllConnections(layerInfo);
+  state.topologyVersion += 1;
+  state.edgeSampleCache = {};
+  refreshRenderedConnections();
 }
 
 function drawNetwork() {
   const { ctx, w, h } = setupCanvas(canvasNet);
   ctx.clearRect(0, 0, w, h);
 
-  // Draw connections.
-  state.connections.forEach((c) => {
+  for (const c of state.connections) {
     const s = c.srcNeuron;
     const d = c.dstNeuron;
-    const absW = Math.abs(c.weight);
-    const alpha = Math.min(0.2 + absW * 0.4, 0.9);
-    const lw = Math.max(0.5, Math.min(absW * 3, 5));
+    const absW = Math.abs(Number(c.weight || 0));
+    const alpha = Math.min(0.05 + absW * 0.08, 0.2);
+    const lw = Math.max(0.4, Math.min(0.7 + absW * 1.2, 2.4));
 
     ctx.beginPath();
     ctx.moveTo(s.x, s.y);
@@ -508,16 +935,14 @@ function drawNetwork() {
       : `rgba(248, 81, 73, ${alpha})`;
     ctx.lineWidth = lw;
     ctx.stroke();
-  });
+  }
 
-  // Draw neurons.
-  state.neurons.forEach((n) => {
-    // Glow effect for recently-active neurons.
+  for (const n of state.neurons) {
     const rate = n.trialCount > 0 ? n.totalSpikes / n.trialCount : 0;
-    const glowAlpha = Math.min(rate / 20, 0.7);
+    const glowAlpha = Math.min(rate / 20, 0.65);
     if (glowAlpha > 0.05) {
       ctx.beginPath();
-      ctx.arc(n.x, n.y, n.r + 6, 0, Math.PI * 2);
+      ctx.arc(n.x, n.y, n.r + 5, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(255, 255, 100, ${glowAlpha})`;
       ctx.fill();
     }
@@ -527,15 +952,15 @@ function drawNetwork() {
     ctx.fillStyle = n.color;
     ctx.fill();
     ctx.strokeStyle = "#e6edf3";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = n.isAggregate ? 1.8 : 1.2;
     ctx.stroke();
 
-    // Label.
+    if (!n.showLabel) continue;
     ctx.fillStyle = "#e6edf3";
     ctx.font = "10px monospace";
     ctx.textAlign = "center";
-    ctx.fillText(n.label, n.x, n.y + n.r + 14);
-  });
+    ctx.fillText(n.label, n.x, n.y + n.r + 12);
+  }
 }
 
 // ── Network tooltip on hover ─────────────────────────────────────────
@@ -556,9 +981,10 @@ canvasNet.addEventListener("mousemove", (ev) => {
       tooltip.classList.remove("hidden");
       tooltip.style.left = (ev.clientX - canvasNet.closest(".panel").getBoundingClientRect().left + 12) + "px";
       tooltip.style.top  = (ev.clientY - canvasNet.closest(".panel").getBoundingClientRect().top  + 12) + "px";
+      const indexLabel = n.isAggregate ? "aggregate" : String(n.idx);
       tooltip.textContent =
-        `${n.label}\n` +
-        `Layer: ${n.layer}  |  Index: ${n.idx}\n` +
+        `${n.layer}\n` +
+        `Neuron: ${indexLabel}\n` +
         `Position: (${n.x.toFixed(0)}, ${n.y.toFixed(0)})\n` +
         `Last spikes: ${n.lastSpikes}\n` +
         `Avg spikes/trial: ${avgSpikes}\n` +
@@ -577,7 +1003,7 @@ canvasNet.addEventListener("mousemove", (ev) => {
       tooltip.style.left = (ev.clientX - canvasNet.closest(".panel").getBoundingClientRect().left + 12) + "px";
       tooltip.style.top  = (ev.clientY - canvasNet.closest(".panel").getBoundingClientRect().top  + 12) + "px";
       tooltip.textContent =
-        `${s.label} → ${d.label}\nWeight: ${c.weight.toFixed(4)}`;
+        `${s.layer}[${s.idx}] -> ${d.layer}[${d.idx}]\nProjection: ${c.projection}\nWeight: ${Number(c.weight || 0).toFixed(4)}`;
       return;
     }
   }
@@ -844,7 +1270,7 @@ async function loadRun(runId) {
     const topo    = topoResp.ok   ? await topoResp.json()    : null;
     const scalars = await scalarsResp.json();
 
-    // Render config info in log panel.
+    // Render run info in log panel (compact summary).
     if (meta) {
       appendLogText(`Run: ${meta.run_id}`, "log-correct");
       appendLogText(`Device: ${meta.device}  Seed: ${meta.seed}`, "log-correct");
@@ -852,11 +1278,11 @@ async function loadRun(runId) {
         appendLogText(`Started: ${meta.started_at}`, "log-correct");
       }
     }
+
+    // Show config in dedicated panel.
     if (config) {
-      const cfgStr = Object.entries(config)
-        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-        .join("  ");
-      appendLogText(`Config: ${cfgStr}`, "log-correct");
+      state.runConfig = config;
+      renderConfigPanel();
     }
 
     // Topology.
@@ -891,9 +1317,14 @@ function resetDashboardState() {
   state.topology = null;
   state.neurons = [];
   state.connections = [];
+  state.allConnections = [];
+  state.edgeSampleCache = {};
+  state.topologyVersion = 0;
   state.activeRunId = null;
+  state.runConfig = null;
   logContainer.innerHTML = "";
   truthTbody.innerHTML = "";
+  if (panelConfig) panelConfig.style.display = "none";
 }
 
 function renderReplayScalars(scalars) {
@@ -1012,6 +1443,7 @@ function hideRunInfoBanner() {
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("mode");
   const runId = params.get("run");
+  initTopologyControls();
 
   if (mode === "replay") {
     setMode("replay");

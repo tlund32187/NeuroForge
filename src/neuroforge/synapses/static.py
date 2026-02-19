@@ -31,6 +31,9 @@ class StaticSynapseModel:
     all edges whose pre-synaptic neuron fired.
     """
 
+    def __init__(self, **_kwargs: object) -> None:  # noqa: B027
+        """Accept and discard extra keyword arguments for registry compatibility."""
+
     # ── ISynapseModel implementation ────────────────────────────────
 
     def init_state(
@@ -71,17 +74,20 @@ class StaticSynapseModel:
 
         torch = require_torch()
 
-        pre_spikes = inputs.pre_spikes  # [N_pre] bool
+        pre_spikes = inputs.pre_spikes  # [N_pre] bool or float
         weights = topology.weights  # [E]
         pre_idx = topology.pre_idx  # [E] int
         post_idx = topology.post_idx  # [E] int
         n_post = topology.n_post
 
-        # Mask edges where pre-neuron fired
-        active = pre_spikes[pre_idx]  # [E] bool
-
-        # Weighted contribution from active edges
-        contrib = torch.where(active, weights, torch.zeros_like(weights))  # [E]
+        # Mask/scale edges by pre-neuron activation.
+        # Boolean spikes → existing bool-index path.
+        # Float spikes  → multiply weight by spike value (0..1).
+        spike_vals = pre_spikes[pre_idx]  # [E]
+        if spike_vals.dtype == torch.bool:
+            contrib = torch.where(spike_vals, weights, torch.zeros_like(weights))
+        else:
+            contrib = weights * spike_vals.to(weights.dtype)
 
         # Accumulate into post-synaptic current vector
         post_current = torch.zeros(n_post, device=weights.device, dtype=weights.dtype)

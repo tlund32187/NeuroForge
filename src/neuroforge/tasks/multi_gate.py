@@ -1,34 +1,35 @@
-"""Multi-gate task — train ONE brain on ALL 6 logic gates simultaneously.
+"""Multi-gate task: train one shared brain on all six logic gates.
 
-Architecture
-------------
-(2 data + 6 gate-context) input neurons → N hidden → 1 output
+This task uses pixel-only inputs with gate-context pixels:
+- 8x8 image by default
+- data bit pixels at (2, 2) and (2, 5)
+- gate one-hot pixels at top row columns 0..5
 
-The 6 gate-context neurons form a one-hot encoding so the brain knows
-which gate it is currently solving.  **All** weights are shared —
-input→hidden (``w_ih``), hidden→output (``w_ho``), and biases
-(``b_h``, ``b_o``).  The network must learn to route signals
-differently based on the gate-context input alone.
-
-Training uses surrogate-gradient descent (fast-sigmoid β=5) with
-Dale's Law and the Adam optimiser.  Each *epoch* presents all 24
-gate × pattern combos in shuffled order for balanced coverage.
+Network and training are factory-driven:
+- CoreEngine built through NetworkFactory
+- input population: lif
+- hidden/output populations: lif_surr
+- synapses: static_dales
+- encoder/readout/loss from DEFAULT_HUB factories
 """
 
 from __future__ import annotations
 
-import math as _math
 import random
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from neuroforge.core.torch_utils import smart_device
 from neuroforge.network.specs import NetworkSpec, PopulationSpec, ProjectionSpec
 from neuroforge.tasks.logic_gates import GATE_TABLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from neuroforge.contracts.encoding import ILoss, IReadout
     from neuroforge.contracts.monitors import IEventBus
+    from neuroforge.encoding.rate import RateEncoder
+    from neuroforge.engine.core_engine import CoreEngine
 
 __all__ = [
     "MultiGateTask",
@@ -36,6 +37,7 @@ __all__ = [
     "MultiGateResult",
     "ALL_GATES",
     "GATE_INDEX",
+    "build_gate_network",
 ]
 
 ALL_GATES: tuple[str, ...] = ("AND", "OR", "NAND", "NOR", "XOR", "XNOR")
@@ -44,44 +46,7 @@ GATE_INDEX: dict[str, int] = {g: i for i, g in enumerate(ALL_GATES)}
 
 @dataclass(frozen=True, slots=True)
 class MultiGateConfig:
-    """Configuration for the multi-gate task.
-
-    Attributes
-    ----------
-    gates:
-        Which gates to train (default: all six).
-    max_epochs:
-        Maximum training epochs (each epoch = one pass through every
-        gate × pattern combo, i.e. 24 trials for 6 gates).
-    window_steps:
-        LIF simulation steps per trial.
-    dt:
-        Simulation time-step (seconds).
-    convergence_streak:
-        Overall consecutive-correct streak required.
-    per_pattern_streak:
-        Per (gate, pattern) combo streak required.
-    n_hidden:
-        Hidden neuron count.
-    n_inhibitory:
-        Inhibitory hidden neurons (Dale's Law).
-    amplitude:
-        Rate-encoding amplitude for active inputs.
-    spike_threshold:
-        Output spike count for binary decode (≥ threshold ⇒ 1).
-    seed:
-        Random seed.
-    lr:
-        Adam learning rate.
-    w_min:
-        Weight clamp minimum.
-    w_max:
-        Weight clamp maximum.
-    device:
-        Torch device string (``"cpu"`` or ``"cuda"``).
-    dtype:
-        Torch dtype string (``"float32"`` or ``"float64"``).
-    """
+    """Configuration for the multi-gate task."""
 
     gates: tuple[str, ...] = ALL_GATES
     max_epochs: int = 1_500
@@ -94,34 +59,40 @@ class MultiGateConfig:
     amplitude: float = 50.0
     spike_threshold: int = 3
     seed: int = 42
-    lr: float = 5e-3
+    lr: float = 1e-2
     w_min: float = -2.0
     w_max: float = 2.0
-    device: str = "cpu"
+    device: str = "auto"
     dtype: str = "float64"
+    image_h: int = 8
+    image_w: int = 8
+    loss_fn: str = "mse_count"
+
+    def __post_init__(self) -> None:
+        unknown = [g for g in self.gates if g not in GATE_INDEX]
+        if unknown:
+            msg = f"Unsupported gates: {unknown}"
+            raise ValueError(msg)
+        if self.n_inhibitory < 0 or self.n_inhibitory > self.n_hidden:
+            msg = "n_inhibitory must be in [0, n_hidden]"
+            raise ValueError(msg)
+        if self.image_h < 3:
+            msg = "image_h must be >= 3"
+            raise ValueError(msg)
+        if self.image_w < 6:
+            msg = "image_w must be >= 6"
+            raise ValueError(msg)
+        if self.image_w < len(ALL_GATES):
+            msg = f"image_w must be >= {len(ALL_GATES)} for gate-context pixels"
+            raise ValueError(msg)
+        if self.device == "auto":
+            n_total = self.image_h * self.image_w + self.n_hidden + 1
+            object.__setattr__(self, "device", smart_device(n_total))
 
 
 @dataclass
 class MultiGateResult:
-    """Result of a multi-gate training run.
-
-    Attributes
-    ----------
-    gates:
-        Gates that were trained.
-    converged:
-        Whether *all* gates converged.
-    trials:
-        Total trials run.
-    epochs:
-        Epochs completed.
-    per_gate_converged:
-        Convergence status per gate.
-    final_weights:
-        Shared weight tensors (``w_ih``, ``w_ho``, ``b_h``, ``b_o``).
-    accuracy_history:
-        Rolling accuracy per trial.
-    """
+    """Result of a multi-gate training run."""
 
     gates: tuple[str, ...]
     converged: bool
@@ -132,19 +103,126 @@ class MultiGateResult:
     accuracy_history: list[float] = field(default_factory=lambda: [])
 
 
+def _build_hidden_signs(n_hidden: int, n_inhibitory: int, torch_mod: Any, dev: Any, tdt: Any) -> Any:
+    """Build hidden pre-synaptic sign mask (+1 excit, -1 inhib)."""
+    sign_hidden = torch_mod.ones(n_hidden, device=dev, dtype=tdt)
+    n_exc = max(0, n_hidden - n_inhibitory)
+    sign_hidden[n_exc:] = -1.0
+    return sign_hidden
+
+
+def _pattern_gate_to_image(
+    bits: tuple[int, int],
+    gate_idx: int,
+    n_gates: int,
+    h: int,
+    w: int,
+    torch_mod: Any,
+) -> Any:
+    """Convert (pattern, gate) to an [H, W] pixel image."""
+    img = torch_mod.zeros(h, w)
+    if bits[0]:
+        img[2, 2] = 1.0
+    if bits[1]:
+        img[2, 5] = 1.0
+    if 0 <= gate_idx < n_gates:
+        img[0, gate_idx] = 1.0
+    return img
+
+
+def build_gate_network(
+    cfg: MultiGateConfig,
+    *,
+    torch_mod: Any,
+    dev: Any,
+    tdt: Any,
+) -> tuple[CoreEngine, dict[str, Any]]:
+    """Build the shared multi-gate CoreEngine via NetworkFactory."""
+    from neuroforge.factories.hub import DEFAULT_HUB
+    from neuroforge.network.factory import NetworkFactory
+
+    input_size = cfg.image_h * cfg.image_w
+    hidden_size = cfg.n_hidden
+
+    sign_input = torch_mod.ones(input_size, device=dev, dtype=tdt)
+    sign_hidden = _build_hidden_signs(
+        hidden_size,
+        cfg.n_inhibitory,
+        torch_mod,
+        dev,
+        tdt,
+    )
+
+    spec = NetworkSpec(
+        populations=[
+            PopulationSpec("input", input_size, "lif"),
+            PopulationSpec("hidden", hidden_size, "lif_surr"),
+            PopulationSpec("output", 1, "lif_surr"),
+        ],
+        projections=[
+            ProjectionSpec(
+                "input_hidden",
+                "input",
+                "hidden",
+                "static_dales",
+                synapse_params={"sign_pre": sign_input},
+                topology={
+                    "type": "dense",
+                    "init": "uniform",
+                    "low": -0.3,
+                    "high": 0.3,
+                    "bias": True,
+                },
+            ),
+            ProjectionSpec(
+                "hidden_output",
+                "hidden",
+                "output",
+                "static_dales",
+                synapse_params={"sign_pre": sign_hidden},
+                topology={
+                    "type": "dense",
+                    "init": "uniform",
+                    "low": -0.3,
+                    "high": 0.3,
+                    "bias": True,
+                },
+            ),
+        ],
+        metadata={"task": "multi_gate", "gates": list(cfg.gates)},
+    )
+
+    factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
+    engine = factory.build(spec, device=cfg.device, dtype=cfg.dtype, seed=cfg.seed)
+
+    proj_ih = engine.projections["input_hidden"]
+    proj_ho = engine.projections["hidden_output"]
+    trainables = {
+        "w_ih": proj_ih.state["weight_matrix"],
+        "b_h": proj_ih.state["bias"],
+        "w_ho": proj_ho.state["weight_matrix"],
+        "b_o": proj_ho.state["bias"],
+    }
+    return engine, trainables
+
+
+def _rebind_projection_weights(proj: Any, weight_matrix: Any) -> None:
+    """Rebind projection topology weights to a live view of raw weights."""
+    from neuroforge.contracts.synapses import SynapseTopology
+
+    topo = proj.topology
+    proj.topology = SynapseTopology(
+        pre_idx=topo.pre_idx,
+        post_idx=topo.post_idx,
+        weights=weight_matrix.reshape(-1),
+        delays=topo.delays,
+        n_pre=topo.n_pre,
+        n_post=topo.n_post,
+    )
+
+
 class MultiGateTask:
-    """Train one brain on all logic gates with gate-context inputs.
-
-    Each training *epoch* presents every (gate, pattern) combo once in
-    shuffled order.  All weights are fully shared — the network must
-    learn to route differently based on the one-hot gate-context input.
-
-    Usage::
-
-        task = MultiGateTask(MultiGateConfig())
-        result = task.run()
-        assert result.converged
-    """
+    """Train one shared network on all configured logic gates."""
 
     def __init__(
         self,
@@ -157,7 +235,20 @@ class MultiGateTask:
         self._bus = event_bus
         self._stop_check = stop_check
 
-    # ── Event helpers ───────────────────────────────────────────────
+    @staticmethod
+    def _pattern_gate_to_image(
+        bits: tuple[int, int],
+        gate_idx: int,
+        n_gates: int,
+        h: int = 8,
+        w: int = 8,
+        torch_mod: Any = None,
+    ) -> Any:
+        """Backward-compatible wrapper for image encoding helper."""
+        if torch_mod is None:
+            import torch as torch_mod
+
+        return _pattern_gate_to_image(bits, gate_idx, n_gates, h, w, torch_mod)
 
     def _emit(
         self,
@@ -182,92 +273,147 @@ class MultiGateTask:
             )
         )
 
-    # ── Network spec builder ────────────────────────────────────────
+    def _forward(
+        self,
+        drives: Any,
+        engine: CoreEngine,
+        cfg: MultiGateConfig,
+        b_h: Any,
+        b_o: Any,
+        torch_mod: Any,
+    ) -> tuple[Any, Any, Any]:
+        """Run one presentation window and return output spikes + counts."""
+        from neuroforge.contracts.neurons import NeuronInputs, StepContext
+        from neuroforge.contracts.synapses import SynapseInputs
+        from neuroforge.contracts.types import Compartment
 
-    def _build_network_spec(self) -> NetworkSpec:
-        """Return a :class:`NetworkSpec` for the multi-gate architecture."""
-        cfg = self.config
-        gates = list(cfg.gates)
-        n_gates = len(gates)
-        n_input = 2 + n_gates
+        pops = engine._populations  # pyright: ignore[reportPrivateUsage]
+        projs = engine._projections  # pyright: ignore[reportPrivateUsage]
 
-        return NetworkSpec(
-            populations=[
-                PopulationSpec("input", n_input, "lif"),
-                PopulationSpec("hidden", cfg.n_hidden, "lif"),
-                PopulationSpec("output", 1, "lif"),
-            ],
-            projections=[
-                ProjectionSpec(
-                    "input_hidden", "input", "hidden", "static",
-                    topology={
-                        "type": "dense", "init": "uniform",
-                        "low": -0.3, "high": 0.3, "bias": True,
-                    },
+        engine.reset()
+        for pop in pops.values():
+            for k in list(pop.state):
+                pop.state[k] = pop.state[k].detach()
+
+        inp_pop = pops["input"]
+        hid_pop = pops["hidden"]
+        out_pop = pops["output"]
+        proj_ih = projs["input_hidden"]
+        proj_ho = projs["hidden_output"]
+
+        in_counts = torch_mod.zeros(inp_pop.n, dtype=drives.dtype, device=drives.device)
+        hid_counts = torch_mod.zeros(hid_pop.n, dtype=drives.dtype, device=drives.device)
+        out_spikes_list: list[Any] = []
+        zero_h_post = torch_mod.zeros(hid_pop.n, dtype=drives.dtype, device=drives.device)
+        zero_o_post = torch_mod.zeros(out_pop.n, dtype=drives.dtype, device=drives.device)
+
+        for _s in range(cfg.window_steps):
+            ctx = StepContext(dt=cfg.dt, step=_s, t=_s * cfg.dt)
+
+            inp_result = inp_pop.model.step(
+                inp_pop.state,
+                NeuronInputs(drive={Compartment.SOMA: drives}),
+                ctx,
+            )
+            in_spikes = inp_result.spikes
+            in_counts = in_counts + in_spikes.detach().to(drives.dtype)
+
+            ih_syn = proj_ih.model.step(
+                proj_ih.state,
+                proj_ih.topology,
+                SynapseInputs(
+                    pre_spikes=in_spikes,
+                    post_spikes=zero_h_post,
                 ),
-                ProjectionSpec(
-                    "hidden_output", "hidden", "output", "static",
-                    topology={
-                        "type": "dense", "init": "uniform",
-                        "low": -0.3, "high": 0.3, "bias": True,
-                    },
+                ctx,
+            )
+            h_current = ih_syn.post_current[Compartment.SOMA] + b_h
+
+            hid_result = hid_pop.model.step(
+                hid_pop.state,
+                NeuronInputs(drive={Compartment.SOMA: h_current}),
+                ctx,
+            )
+            hid_spikes = hid_result.spikes
+            hid_counts = hid_counts + hid_spikes.detach().to(drives.dtype)
+
+            ho_syn = proj_ho.model.step(
+                proj_ho.state,
+                proj_ho.topology,
+                SynapseInputs(
+                    pre_spikes=hid_spikes,
+                    post_spikes=zero_o_post,
                 ),
-            ],
-            metadata={"task": "multi_gate", "gates": gates},
-        )
+                ctx,
+            )
+            o_current = ho_syn.post_current[Compartment.SOMA] + b_o
 
-    # ── Main training loop ──────────────────────────────────────────
+            out_result = out_pop.model.step(
+                out_pop.state,
+                NeuronInputs(drive={Compartment.SOMA: o_current}),
+                ctx,
+            )
+            out_spikes_list.append(out_result.spikes)
 
-    def run(self) -> MultiGateResult:
-        """Train all gates with shared weights. Returns result."""
-        from neuroforge.core.dales_law import apply_dales_constraint, make_dale_mask
+        spike_tensor = torch_mod.stack(out_spikes_list, dim=0)
+        return spike_tensor, in_counts, hid_counts
+
+    def run(self) -> MultiGateResult:  # noqa: C901, PLR0912, PLR0915
+        """Train all gates with shared weights and return result."""
         from neuroforge.core.torch_utils import require_torch, resolve_device_dtype
-        from neuroforge.encoding.rate import RateEncoder, RateEncoderParams
+        from neuroforge.encoding.rate import RateEncoderParams
+        from neuroforge.factories.hub import DEFAULT_HUB
+        from neuroforge.network.factory import to_topology_json
 
         torch = require_torch()
         cfg = self.config
+
+        rng = random.Random(cfg.seed)
+        torch.manual_seed(cfg.seed)
+
         dev, tdt = resolve_device_dtype(cfg.device, cfg.dtype)
 
         gates = list(cfg.gates)
-        n_gates = len(gates)
-        n_input = 2 + n_gates  # 2 data + one-hot gate context
+        n_input = cfg.image_h * cfg.image_w
         n_h = cfg.n_hidden
 
-        # ── Build network via NetworkFactory ────────────────────────
-        from neuroforge.network.factory import NetworkFactory, to_topology_json
-        from neuroforge.neurons.registry import NEURON_MODELS
-        from neuroforge.synapses.registry import SYNAPSE_MODELS
-
-        spec = self._build_network_spec()
-        factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
-        engine = factory.build(spec, device=cfg.device, dtype=cfg.dtype, seed=cfg.seed)
-
-        # Extract trainable weight tensors owned by the projections.
+        engine, trainables = build_gate_network(cfg, torch_mod=torch, dev=dev, tdt=tdt)
         proj_ih = engine.projections["input_hidden"]
         proj_ho = engine.projections["hidden_output"]
-        w_ih = proj_ih.state["weight_matrix"]   # [n_input, n_h]
-        b_h = proj_ih.state["bias"]             # [n_h]
-        w_ho = proj_ho.state["weight_matrix"]   # [n_h]
-        b_o = proj_ho.state["bias"]             # [1]
+
+        w_ih = trainables["w_ih"]
+        b_h = trainables["b_h"]
+        w_ho = trainables["w_ho"]
+        b_o = trainables["b_o"]
 
         params = [w_ih, b_h, w_ho, b_o]
-        for _p in params:
-            _p.requires_grad_(True)
+        for p in params:
+            p.requires_grad_(True)
+        _rebind_projection_weights(proj_ih, w_ih)
+        _rebind_projection_weights(proj_ho, w_ho)
 
         optimizer = torch.optim.Adam(params, lr=cfg.lr)
 
-        spike_fn = self._make_surrogate_spike(torch)
+        encoder = cast(
+            "RateEncoder",
+            DEFAULT_HUB.encoders.create(
+                "rate",
+                params=RateEncoderParams(amplitude=cfg.amplitude),
+            ),
+        )
+        readout = cast(
+            "IReadout",
+            DEFAULT_HUB.readouts.create(
+                "spike_count",
+                threshold=float(cfg.spike_threshold),
+            ),
+        )
+        loss_fn = cast("ILoss", DEFAULT_HUB.losses.create(cfg.loss_fn))
 
-        # Dale's Law masks.
-        dale_in = make_dale_mask(n_input, 0, device=cfg.device, dtype=cfg.dtype)
-        n_exc = n_h - cfg.n_inhibitory
-        dale_h = make_dale_mask(n_exc, cfg.n_inhibitory, device=cfg.device, dtype=cfg.dtype)
-
-        encoder = RateEncoder(RateEncoderParams(amplitude=cfg.amplitude))
-
-        # ── Emit run_start + topology ─────────────────────────────
         self._emit(
-            "run_start", 0, "MULTI",
+            "run_start",
+            0,
+            "MULTI",
             {
                 "task": "multi_gate",
                 "device": cfg.device,
@@ -276,7 +422,9 @@ class MultiGateTask:
             },
         )
         self._emit(
-            "training_start", 0, "MULTI",
+            "training_start",
+            0,
+            "MULTI",
             {
                 "gate": "MULTI",
                 "gates": list(gates),
@@ -285,115 +433,83 @@ class MultiGateTask:
                 "per_pattern_streak": cfg.per_pattern_streak,
                 "n_input": n_input,
                 "n_hidden": n_h,
+                "image_h": cfg.image_h,
+                "image_w": cfg.image_w,
             },
         )
         self._emit("topology", 0, "MULTI", to_topology_json(engine))
 
-        # ── Convergence tracking ────────────────────────────────────
-        patterns: list[tuple[int, int]] = [
-            (0, 0), (0, 1), (1, 0), (1, 1),
-        ]
-        all_combos: list[tuple[str, tuple[int, int]]] = [
-            (g, p) for g in gates for p in patterns
-        ]
-        combo_streaks: dict[tuple[str, tuple[int, int]], int] = {
-            c: 0 for c in all_combos
-        }
+        patterns: list[tuple[int, int]] = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        all_combos: list[tuple[str, tuple[int, int]]] = [(g, p) for g in gates for p in patterns]
+        combo_streaks: dict[tuple[str, tuple[int, int]], int] = {c: 0 for c in all_combos}
+
         streak = 0
         recent_correct: list[bool] = []
         accuracy_history: list[float] = []
-
-        # ── LIF constants ───────────────────────────────────────────
-        alpha = _math.exp(-cfg.dt / 20e-3)
-        r_factor = cfg.dt / 20e-3
-        v_thresh = torch.tensor(1.0, dtype=tdt, device=dev)
-
         trial = 0
 
         for epoch in range(cfg.max_epochs):
-            # Each epoch: present every combo in shuffled order.
             order = list(all_combos)
-            random.shuffle(order)
+            rng.shuffle(order)
 
             for gate, inp in order:
                 if self._stop_check is not None and self._stop_check():
                     return self._make_result(
-                        cfg, gates, combo_streaks, False, trial,
-                        epoch, w_ih, w_ho, b_h, b_o, accuracy_history,
+                        cfg,
+                        gates,
+                        combo_streaks,
+                        False,
+                        trial,
+                        epoch,
+                        w_ih,
+                        w_ho,
+                        b_h,
+                        b_o,
+                        accuracy_history,
                         stopped=True,
                     )
 
                 gate_idx = GATE_INDEX[gate]
                 expected = GATE_TABLES[gate][inp]
 
-                # Build drive vector: [data0, data1, ctx0..ctx5].
-                data_drives = encoder.encode(
-                    torch.tensor(
-                        [float(inp[0]), float(inp[1])],
-                        dtype=tdt, device=dev,
-                    ),
+                img = _pattern_gate_to_image(
+                    inp,
+                    gate_idx,
+                    len(ALL_GATES),
+                    cfg.image_h,
+                    cfg.image_w,
+                    torch,
                 )
-                ctx_drives = torch.zeros(n_gates, dtype=tdt, device=dev)
-                ctx_drives[gate_idx] = cfg.amplitude
-                drives = torch.cat([data_drives, ctx_drives])
+                flat = img.reshape(-1).to(device=dev, dtype=tdt)
+                drives = encoder.encode(flat)
 
                 optimizer.zero_grad()
 
-                # Dale's Law reparameterization.
-                w_ih_eff = apply_dales_constraint(
-                    w_ih, dale_in.signs.unsqueeze(1),
+                spike_tensor, in_counts, hid_counts = self._forward(
+                    drives,
+                    engine,
+                    cfg,
+                    b_h,
+                    b_o,
+                    torch,
                 )
-                w_ho_eff = apply_dales_constraint(
-                    w_ho, dale_h.signs,
-                )
 
-                # ── Forward pass (inline LIF) ───────────────────────
-                v_in = torch.zeros(n_input, dtype=tdt, device=dev)
-                v_hid = torch.zeros(n_h, dtype=tdt, device=dev)
-                v_out = torch.zeros(1, dtype=tdt, device=dev)
-                hid_counts = torch.zeros(n_h, dtype=tdt, device=dev)
-                out_diff = torch.zeros(1, dtype=tdt, device=dev)
-
-                for _s in range(cfg.window_steps):
-                    # Input neurons — hard threshold spikes.
-                    v_in = v_in * alpha + drives * r_factor
-                    in_spikes = (v_in >= 1.0).to(tdt)
-                    v_in = (v_in * (1.0 - in_spikes)).detach()
-
-                    # Hidden neurons — surrogate spike.
-                    ih_current = (in_spikes @ w_ih_eff) + b_h
-                    v_hid = v_hid * alpha + ih_current * r_factor
-                    hid_spikes = spike_fn(v_hid, v_thresh)
-                    v_hid = v_hid * (1.0 - hid_spikes.detach())
-                    hid_counts = hid_counts + hid_spikes.detach()
-
-                    # Output neuron — surrogate spike.
-                    ho_current = (
-                        (hid_spikes * w_ho_eff).sum() + b_o[0]
-                    )
-                    v_out = (
-                        v_out * alpha
-                        + ho_current.unsqueeze(0) * r_factor
-                    )
-                    out_spikes = spike_fn(v_out, v_thresh)
-                    v_out = v_out * (1.0 - out_spikes.detach())
-                    out_diff = out_diff + out_spikes
-
-                out_count = int(out_diff.detach().sum().item())
+                ro_result = readout(spike_tensor)
+                out_count = int(ro_result.count.detach().item())
                 predicted = 1 if out_count >= cfg.spike_threshold else 0
                 correct = predicted == expected
 
-                # ── Adam weight update on error ─────────────────────
+                target_count = float(expected) * cfg.spike_threshold
+                target_t = torch.tensor([target_count], dtype=tdt, device=dev)
+                loss = loss_fn(ro_result.count, target_t)
                 if not correct:
-                    target = float(expected) * cfg.spike_threshold
-                    loss = (out_diff.sum() - target) ** 2
                     loss.backward()
                     optimizer.step()
-                    with torch.no_grad():
-                        for _p in params:
-                            _p.clamp_(cfg.w_min, cfg.w_max)
 
-                # ── Convergence tracking ────────────────────────────
+                    with torch.no_grad():
+                        for p in params:
+                            p.clamp_(cfg.w_min, cfg.w_max)
+
                 recent_correct.append(correct)
                 if len(recent_correct) > cfg.convergence_streak:
                     recent_correct.pop(0)
@@ -408,7 +524,6 @@ class MultiGateTask:
                     streak = 0
                     combo_streaks[combo_key] = 0
 
-                # ── Emit events ─────────────────────────────────────
                 error_val = float(expected - predicted)
                 spike_data: dict[str, Any] = {
                     "gate": gate,
@@ -418,55 +533,95 @@ class MultiGateTask:
                     "correct": correct,
                     "error": error_val,
                     "accuracy": accuracy,
+                    "epoch": epoch,
                     "out_spike_count": out_count,
+                    "input_spikes": in_counts.detach().cpu().tolist(),
                     "hidden_spikes": hid_counts.detach().cpu().tolist(),
                     "output_spikes": [out_count],
                 }
+                self._emit("training_trial", trial, f"MULTI/{gate}", spike_data)
+
                 self._emit(
-                    "training_trial", trial, f"MULTI/{gate}", spike_data,
-                )
-                # Lightweight scalar for ArtifactWriter.
-                self._emit(
-                    "scalar", trial, "MULTI",
+                    "scalar",
+                    trial,
+                    "MULTI",
                     {
                         "trial": trial,
                         "epoch": epoch,
                         "gate": gate,
                         "accuracy": accuracy,
                         "error": error_val,
+                        "loss": float(loss.detach().item()),
                         "correct": correct,
                     },
                 )
 
                 if trial % 10 == 0:
                     self._emit(
-                        "weight", trial, "MULTI/input-hidden",
+                        "weight",
+                        trial,
+                        "MULTI/input-hidden",
                         {"weights": w_ih.detach()},
                     )
                     self._emit(
-                        "weight", trial, "MULTI/hidden-output",
+                        "weight",
+                        trial,
+                        "MULTI/hidden-output",
                         {"weights": w_ho.detach()},
+                    )
+
+                    self._emit(
+                        "spike",
+                        trial,
+                        "MULTI/input",
+                        {"spikes": (in_counts > 0)},
+                    )
+                    self._emit(
+                        "spike",
+                        trial,
+                        "MULTI/hidden",
+                        {"spikes": (hid_counts > 0)},
+                    )
+                    self._emit(
+                        "spike",
+                        trial,
+                        "MULTI/output",
+                        {"spikes": torch.tensor([out_count > 0], device=dev)},
                     )
 
                 trial += 1
 
-            # ── End-of-epoch convergence check ──────────────────────
             all_combos_reliable = all(
-                s >= cfg.per_pattern_streak
-                for s in combo_streaks.values()
+                s >= cfg.per_pattern_streak for s in combo_streaks.values()
             )
             if streak >= cfg.convergence_streak and all_combos_reliable:
                 return self._make_result(
-                    cfg, gates, combo_streaks, True, trial,
-                    epoch + 1, w_ih, w_ho, b_h, b_o, accuracy_history,
+                    cfg,
+                    gates,
+                    combo_streaks,
+                    True,
+                    trial,
+                    epoch + 1,
+                    w_ih,
+                    w_ho,
+                    b_h,
+                    b_o,
+                    accuracy_history,
                 )
 
         return self._make_result(
-            cfg, gates, combo_streaks, False, trial,
-            cfg.max_epochs, w_ih, w_ho, b_h, b_o, accuracy_history,
+            cfg,
+            gates,
+            combo_streaks,
+            False,
+            trial,
+            cfg.max_epochs,
+            w_ih,
+            w_ho,
+            b_h,
+            b_o,
+            accuracy_history,
         )
-
-    # ── Helpers ─────────────────────────────────────────────────────
 
     def _make_result(
         self,
@@ -484,15 +639,13 @@ class MultiGateTask:
         *,
         stopped: bool = False,
     ) -> MultiGateResult:
-        """Build a ``MultiGateResult`` and emit the training_end event."""
-        patterns: list[tuple[int, int]] = [
-            (0, 0), (0, 1), (1, 0), (1, 1),
-        ]
+        """Build a MultiGateResult and emit training_end."""
+        patterns: list[tuple[int, int]] = [(0, 0), (0, 1), (1, 0), (1, 1)]
+
         per_gate: dict[str, bool] = {}
         for g in gates:
             per_gate[g] = all(
-                combo_streaks[(g, p)] >= cfg.per_pattern_streak
-                for p in patterns
+                combo_streaks[(g, p)] >= cfg.per_pattern_streak for p in patterns
             )
 
         end_data: dict[str, Any] = {
@@ -519,24 +672,3 @@ class MultiGateTask:
             },
             accuracy_history=accuracy_history,
         )
-
-    @staticmethod
-    def _make_surrogate_spike(torch: Any) -> Any:
-        """Surrogate spike function (fast-sigmoid backward)."""
-        beta = 5.0
-
-        class _Fn(torch.autograd.Function):  # type: ignore[misc]
-            @staticmethod
-            def forward(ctx: Any, v: Any, threshold: Any) -> Any:  # noqa: N805
-                spikes = (v >= threshold).to(v.dtype)
-                ctx.save_for_backward(v, threshold)
-                return spikes
-
-            @staticmethod
-            def backward(ctx: Any, grad_output: Any) -> tuple[Any, None]:  # noqa: N805
-                v, threshold = ctx.saved_tensors
-                x = v - threshold
-                sg = beta / (1.0 + beta * torch.abs(x)) ** 2
-                return grad_output * sg, None
-
-        return _Fn.apply

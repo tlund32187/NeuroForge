@@ -202,7 +202,9 @@ class CoreEngine:
             target_pop = self._populations[proj.target]
 
             # Get pre-synaptic spikes (from state, not from "this step" which hasn't happened)
-            # On step 0, use zeros — allocated on the same device as the population state.
+            # On step 0, use zeros — allocated on the correct device.
+            # The dtype mirrors last_spikes when available; otherwise
+            # defaults to bool (the standard LIF model returns bools).
             if "last_spikes" in source_pop.state:
                 pre_spikes = source_pop.state["last_spikes"]
             else:

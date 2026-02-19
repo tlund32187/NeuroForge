@@ -45,6 +45,7 @@ class TrainingMonitor:
         self._truth_table: dict[str, dict[str, Any]] = {}
         self._topology: dict[str, Any] = {}
         self._window_size: int = 5
+        self._epoch: int = 0
 
     # ── IMonitor implementation ─────────────────────────────────────
 
@@ -56,6 +57,7 @@ class TrainingMonitor:
         if event.topic == EventTopic.TRAINING_START:
             self._gate = event.data.get("gate", "")
             self._converged = False
+            self._epoch = 0
             self._trials.clear()
             self._accuracy_history.clear()
             self._truth_table.clear()
@@ -82,6 +84,11 @@ class TrainingMonitor:
             acc = event.data.get("accuracy", 0.0)
             self._accuracy_history.append(float(acc))
 
+            # Track epoch (0-based from task, store 1-based).
+            raw_epoch = event.data.get("epoch")
+            if raw_epoch is not None:
+                self._epoch = int(raw_epoch) + 1
+
             # Update per-pattern confidence (rolling window).
             inp_key = str(event.data.get("input", ()))
             if inp_key not in self._truth_table:
@@ -103,6 +110,7 @@ class TrainingMonitor:
         """Clear all training data."""
         self._gate = ""
         self._converged = False
+        self._epoch = 0
         self._trials.clear()
         self._accuracy_history.clear()
         self._truth_table.clear()
@@ -125,6 +133,7 @@ class TrainingMonitor:
         return {
             "gate": self._gate,
             "converged": self._converged,
+            "epoch": self._epoch,
             "total_trials": len(self._trials),
             "accuracy_history": list(self._accuracy_history),
             "truth_table": tt_snap,

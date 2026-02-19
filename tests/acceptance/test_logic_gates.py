@@ -19,6 +19,7 @@ from neuroforge.tasks.logic_gates import GATE_TABLES, LogicGateConfig, LogicGate
 
 
 @pytest.mark.acceptance
+@pytest.mark.slow
 @pytest.mark.parametrize("gate", ["AND", "OR", "NAND", "NOR"])
 def test_simple_gate(gate: str) -> None:
     """Simple gate must converge within 5000 trials."""
@@ -42,6 +43,7 @@ def test_simple_gate(gate: str) -> None:
 
 
 @pytest.mark.acceptance
+@pytest.mark.slow
 @pytest.mark.parametrize("gate", ["XOR", "XNOR"])
 def test_complex_gate(gate: str) -> None:
     """XOR/XNOR must converge within 20000 trials."""

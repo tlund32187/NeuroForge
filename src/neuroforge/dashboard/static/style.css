@@ -197,26 +197,27 @@ input[type="number"] { width: 90px; }
 #grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto auto;
   gap: 16px;
   padding: 16px 24px;
   max-width: 1600px;
   margin: 0 auto;
 }
 
-#panel-network   { grid-column: 1; grid-row: 1; }
-#panel-accuracy   { grid-column: 2; grid-row: 1; }
-#panel-truth-table{ grid-column: 1; grid-row: 2; }
-#panel-weights    { grid-column: 2; grid-row: 2; }
-#panel-stats      { grid-column: 1; grid-row: 3; }
-#panel-log        { grid-column: 2; grid-row: 3; }
+#panel-config     { grid-column: 1 / -1; }
+#panel-config[style*="display: none"],
+#panel-config[style*="display:none"] { display: none !important; }
+
+.grid-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  min-height: 280px;
   position: relative;
 }
 
@@ -232,6 +233,44 @@ input[type="number"] { width: 90px; }
 }
 
 /* ── Canvas ───────────────────────────────────────────────────────── */
+
+/* Topology controls */
+
+.topology-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.topology-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.topology-control select {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+#topology-edge-count {
+  width: 140px;
+}
+
+#topology-edge-count-value {
+  min-width: 32px;
+  text-align: right;
+  color: var(--text-primary);
+}
+
+.topology-check input[type="checkbox"] {
+  margin: 0;
+}
 
 canvas {
   width: 100%;
@@ -311,6 +350,34 @@ canvas {
   margin-left: 6px;
 }
 
+/* ── Config grid ───────────────────────────────────────────────────── */
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.config-item {
+  display: flex;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+}
+
+.config-key {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.config-val {
+  color: var(--accent);
+  font-weight: 600;
+  word-break: break-all;
+}
+
 /* ── Stat grid ────────────────────────────────────────────────────── */
 
 .stat-grid {
@@ -368,9 +435,7 @@ canvas {
   #grid {
     grid-template-columns: 1fr;
   }
-  #panel-network, #panel-accuracy, #panel-truth-table,
-  #panel-weights, #panel-stats, #panel-log {
-    grid-column: 1;
-    grid-row: auto;
+  .grid-col {
+    display: contents;
   }
 }

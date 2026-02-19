@@ -11,7 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["PopulationSpec", "ProjectionSpec", "NetworkSpec"]
+__all__ = [
+    "GateNetworkSpec",
+    "PopulationSpec",
+    "ProjectionSpec",
+    "NetworkSpec",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,3 +93,55 @@ class NetworkSpec:
     populations: list[PopulationSpec]
     projections: list[ProjectionSpec]
     metadata: dict[str, Any] = field(default_factory=lambda: {})
+
+
+@dataclass(frozen=True, slots=True)
+class GateNetworkSpec:
+    """High-level specification for a logic-gate spiking network.
+
+    Describes the network *shape* and initialisation policy without
+    allocating any tensors.  Consumed by :func:`build_gate_network`.
+
+    Attributes
+    ----------
+    input_size:
+        Number of input neurons (e.g. 2 for binary gates).
+    hidden_size:
+        Number of hidden neurons.  Set to 0 for the no-hidden
+        (input → output) case.
+    output_size:
+        Number of output neurons (1 for single-gate tasks).
+    n_inhibitory_hidden:
+        How many of the *hidden_size* neurons are inhibitory
+        (Dale's Law).  Ignored when ``hidden_size == 0``.
+    seed:
+        Random seed for reproducible weight initialisation.
+    device:
+        Torch device string (``"cpu"`` or ``"cuda"``).
+    dtype:
+        Torch dtype string (``"float32"`` or ``"float64"``).
+    init_scale:
+        Symmetric uniform init range ``[-init_scale, +init_scale]``.
+    p_connect:
+        Connection probability per possible edge.  ``1.0`` gives
+        fully-connected (dense) wiring; values < 1 produce a
+        randomly-sampled sparse topology (seeded).
+    neuron_model:
+        Registry key for the neuron model used in all populations
+        (e.g. ``"lif_surr"``).
+    synapse_model:
+        Registry key for the synapse model used in all projections
+        (e.g. ``"static_dales"``).
+    """
+
+    input_size: int = 2
+    hidden_size: int = 6
+    output_size: int = 1
+    n_inhibitory_hidden: int = 2
+    seed: int = 42
+    device: str = "cpu"
+    dtype: str = "float64"
+    init_scale: float = 0.3
+    p_connect: float = 1.0
+    neuron_model: str = "lif_surr"
+    synapse_model: str = "static_dales"

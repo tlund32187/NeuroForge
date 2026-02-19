@@ -65,6 +65,7 @@ _ws_clients: list[web.WebSocketResponse] = []
 _training_thread: threading.Thread | None = None
 _training_lock = threading.Lock()
 _stop_event = threading.Event()
+_current_config: dict[str, Any] | None = None
 
 
 def _setup_monitors() -> None:
@@ -116,15 +117,23 @@ class _WsBroadcastMonitor:
         return {}
 
 
+def _make_json_safe(obj: Any) -> Any:
+    """Recursively convert tensors to Python lists for JSON serialisation."""
+    # Tensor-like?
+    try:
+        return obj.detach().cpu().tolist()
+    except (AttributeError, TypeError):
+        pass
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(item) for item in obj]
+    return obj
+
+
 def _event_to_json(event: MonitorEvent) -> str:
     """Serialise a MonitorEvent to JSON."""
-    safe_data: dict[str, Any] = {}
-    for k, v in event.data.items():
-        try:
-            # Try tensor → list conversion.
-            safe_data[k] = v.detach().cpu().tolist()
-        except (AttributeError, TypeError):
-            safe_data[k] = v
+    safe_data = _make_json_safe(event.data)
     return json.dumps({
         "topic": event.topic.value,
         "step": event.step,
@@ -154,7 +163,7 @@ async def _broadcast(payload: str) -> None:
 
 async def _handle_index(_request: web.Request) -> web.Response:
     raw = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    html = raw.replace("__CACHE_BUST__", _ASSET_HASH)
+    html = raw.replace("__CACHE_BUST__", _compute_asset_hash())
     return web.Response(
         text=html,
         content_type="text/html",
@@ -171,13 +180,15 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     _ws_clients.append(ws)
 
     # Send current snapshot immediately.
-    snap = json.dumps({
+    snap_data: dict[str, Any] = {
         "topic": "snapshot",
         "training": _training_monitor.snapshot(),
         "weights": _weight_monitor.snapshot(),
         "spikes": _spike_monitor.snapshot(),
-    })
-    await ws.send_str(snap)
+    }
+    if _current_config is not None:
+        snap_data["config"] = _current_config
+    await ws.send_str(json.dumps(snap_data))
 
     async for _msg in ws:
         pass  # keep alive; client doesn't send data
@@ -198,6 +209,17 @@ async def _handle_train(request: web.Request) -> web.Response:
     body = await request.json()
     gate = body.get("gate", "OR")
     max_trials = int(body.get("max_trials", 5000))
+    device: str = str(body.get("device", ""))
+
+    # Resolve device: explicit "cpu"/"cuda" is honoured.  Anything else
+    # (including "auto" and empty) becomes "auto" so the config's
+    # __post_init__ picks the fastest option for the topology.
+    if device not in ("cpu", "cuda"):
+        device = "auto"
+
+    # Weights are always initialised on CPU so the same seed gives
+    # identical starting values regardless of the target device.
+    seed = 42
 
     _setup_monitors()
     _stop_event.clear()
@@ -214,7 +236,7 @@ async def _handle_train(request: web.Request) -> web.Response:
     from neuroforge.monitors.artifact_writer import ArtifactWriter
     from neuroforge.runners.run_context import create_run_dir
 
-    ctx = create_run_dir(base_dir="artifacts", seed=42)
+    ctx = create_run_dir(base_dir="artifacts", seed=seed)
     artifact_writer = ArtifactWriter(ctx.run_dir)
     _bus.subscribe_all(artifact_writer)
 
@@ -225,18 +247,23 @@ async def _handle_train(request: web.Request) -> web.Response:
         return dict(vars(config))
 
     def _run() -> None:
+        global _current_config
+
         if gate == "MULTI":
             from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
 
             multi_cfg = MultiGateConfig(
                 max_epochs=max_trials,  # UI field doubles as max_epochs
+                device=device,
+                seed=seed,
             )
+            _current_config = _make_config_dict(multi_cfg)
             _bus.publish(MonitorEvent(
                 topic=EventTopic.RUN_START, step=0, t=0.0,
                 source="dashboard",
                 data={
                     "run_meta": ctx.to_dict(),
-                    "config": _make_config_dict(multi_cfg),
+                    "config": _current_config,
                 },
             ))
             multi_result = MultiGateTask(
@@ -254,13 +281,18 @@ async def _handle_train(request: web.Request) -> web.Response:
         else:
             from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
-            single_cfg = LogicGateConfig(gate=gate, max_trials=max_trials)
+            single_cfg = LogicGateConfig(
+                gate=gate, max_trials=max_trials,
+                device=device,
+                seed=seed,
+            )
+            _current_config = _make_config_dict(single_cfg)
             _bus.publish(MonitorEvent(
                 topic=EventTopic.RUN_START, step=0, t=0.0,
                 source="dashboard",
                 data={
                     "run_meta": ctx.to_dict(),
-                    "config": _make_config_dict(single_cfg),
+                    "config": _current_config,
                 },
             ))
             single_result = LogicGateTask(
@@ -291,11 +323,13 @@ async def _handle_stop(_request: web.Request) -> web.Response:
 
 async def _handle_status(_request: web.Request) -> web.Response:
     """Return current training snapshot."""
-    snap = {
+    snap: dict[str, Any] = {
         "training": _training_monitor.snapshot(),
         "weights": _weight_monitor.snapshot(),
         "spikes": _spike_monitor.snapshot(),
     }
+    if _current_config is not None:
+        snap["config"] = _current_config
     return web.json_response(snap)
 
 

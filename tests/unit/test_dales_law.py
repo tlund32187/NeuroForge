@@ -191,6 +191,7 @@ class TestGradientFlow:
 # ── Integration with logic gate task ────────────────────────────────
 
 
+@pytest.mark.slow
 class TestDalesLawInLogicGates:
     """Verify Dale's Law is active in the logic gate task."""
 
@@ -236,7 +237,8 @@ class TestDalesLawInLogicGates:
         assert (w_ih_eff >= 0).all()
 
         # Hidden→output: first 4 E (+), last 2 I (−).
-        mask = make_dale_mask(4, 2)
+        dev = str(w_ho.device)
+        mask = make_dale_mask(4, 2, device=dev)
         w_ho_eff = apply_dales_constraint(w_ho, mask.signs)
         assert (w_ho_eff[:4] >= 0).all(), "Excitatory hidden→output ≥ 0"
         assert (w_ho_eff[4:] <= 0).all(), "Inhibitory hidden→output ≤ 0"

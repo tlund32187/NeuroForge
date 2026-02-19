@@ -245,8 +245,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Base dir for run artifacts (default: artifacts)",
     )
     p_run.add_argument(
-        "--device", default="cpu",
-        help="Torch device: cpu or cuda (default: cpu)",
+        "--device", default="auto",
+        help="Torch device: auto, cpu, or cuda (default: auto)",
     )
 
     # ── neuroforge ui ───────────────────────────────────────────────

@@ -30,6 +30,11 @@
         </select>
         <input id="max-trials" type="number" value="5000" min="100" step="100"
                title="Max trials">
+        <select id="device-select" title="Training device">
+          <option value="auto" selected>Auto</option>
+          <option value="cuda">CUDA</option>
+          <option value="cpu">CPU</option>
+        </select>
         <button id="btn-train" class="btn-primary">▶ Train</button>
         <button id="btn-stop" class="btn-stop" disabled>⏹ Stop</button>
       </div>
@@ -55,67 +60,104 @@
 
   <!-- ── Main grid ──────────────────────────────────────────────── -->
   <main id="grid">
-    <!-- Network topology panel -->
-    <section class="panel" id="panel-network">
-      <h2>Network Topology</h2>
-      <canvas id="canvas-network"></canvas>
-      <div id="tooltip" class="tooltip hidden"></div>
+    <!-- Run configuration (shown during live training / replay) -->
+    <section class="panel" id="panel-config" style="display:none">
+      <h2>Run Configuration</h2>
+      <div id="config-grid" class="config-grid"></div>
     </section>
 
-    <!-- Accuracy chart -->
-    <section class="panel" id="panel-accuracy">
-      <h2>Training Accuracy</h2>
-      <canvas id="canvas-accuracy"></canvas>
-    </section>
-
-    <!-- Truth table / confidence -->
-    <section class="panel" id="panel-truth-table">
-      <h2>Truth Table &amp; Confidence</h2>
-      <table id="truth-table">
-        <thead>
-          <tr>
-            <th>Input</th><th>Expected</th><th>Predicted</th>
-            <th>Confidence</th><th>Trials</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- Weight evolution -->
-    <section class="panel" id="panel-weights">
-      <h2>Weight Evolution</h2>
-      <canvas id="canvas-weights"></canvas>
-    </section>
-
-    <!-- Training log -->
-    <section class="panel" id="panel-log">
-      <h2>Training Log</h2>
-      <div id="log-container"></div>
-    </section>
-
-    <!-- Stats -->
-    <section class="panel" id="panel-stats">
-      <h2>Statistics</h2>
-      <div class="stat-grid">
-        <div class="stat-card">
-          <div class="stat-label">Trial</div>
-          <div class="stat-value" id="stat-trial">0</div>
+    <!-- Left column -->
+    <div class="grid-col">
+      <section class="panel" id="panel-network">
+        <h2>Network Topology</h2>
+        <div class="topology-controls">
+          <label class="topology-control">
+            <span>Edges</span>
+            <select id="topology-edge-mode" title="Edge rendering mode">
+              <option value="off">Off</option>
+              <option value="sampled" selected>Sampled</option>
+              <option value="full">Full</option>
+            </select>
+          </label>
+          <label class="topology-control" id="topology-edge-count-wrap">
+            <span>Max edges/proj</span>
+            <input id="topology-edge-count" type="range" min="20" max="2000" step="10" value="200">
+            <span id="topology-edge-count-value">200</span>
+          </label>
+          <label class="topology-control topology-check">
+            <input id="topology-strongest" type="checkbox" checked>
+            <span>Show only strongest edges</span>
+          </label>
+          <label class="topology-control topology-check">
+            <input id="topology-detailed-nodes" type="checkbox">
+            <span>Detailed nodes</span>
+          </label>
         </div>
-        <div class="stat-card">
-          <div class="stat-label">Accuracy</div>
-          <div class="stat-value" id="stat-accuracy">0%</div>
+        <canvas id="canvas-network"></canvas>
+        <div id="tooltip" class="tooltip hidden"></div>
+      </section>
+
+      <section class="panel" id="panel-truth-table">
+        <h2>Truth Table &amp; Confidence</h2>
+        <table id="truth-table">
+          <thead>
+            <tr>
+              <th>Input</th><th>Expected</th><th>Predicted</th>
+              <th>Confidence</th><th>Trials</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="panel-stats">
+        <h2>Statistics</h2>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">Trial</div>
+            <div class="stat-value" id="stat-trial">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Accuracy</div>
+            <div class="stat-value" id="stat-accuracy">0%</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Converged</div>
+            <div class="stat-value" id="stat-converged">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Epoch</div>
+            <div class="stat-value" id="stat-epoch">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Gate</div>
+            <div class="stat-value" id="stat-gate">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Elapsed</div>
+            <div class="stat-value" id="stat-elapsed">—</div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-label">Converged</div>
-          <div class="stat-value" id="stat-converged">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Gate</div>
-          <div class="stat-value" id="stat-gate">—</div>
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
+
+    <!-- Right column -->
+    <div class="grid-col">
+      <section class="panel" id="panel-accuracy">
+        <h2>Training Accuracy</h2>
+        <canvas id="canvas-accuracy"></canvas>
+      </section>
+
+      <section class="panel" id="panel-weights">
+        <h2>Weight Evolution</h2>
+        <canvas id="canvas-weights"></canvas>
+      </section>
+
+      <section class="panel" id="panel-log">
+        <h2>Training Log</h2>
+        <div id="log-container"></div>
+      </section>
+    </div>
   </main>
 
   <script src="/static/dashboard.js?v=__CACHE_BUST__"></script>
