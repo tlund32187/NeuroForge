@@ -23,6 +23,7 @@ classifiers = [
 [project.optional-dependencies]
 torch = ["torch>=2.3", "numpy>=1.26"]
 dashboard = ["aiohttp>=3.9"]
+monitoring = ["psutil>=5.9", "nvidia-ml-py>=11.0"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.7",

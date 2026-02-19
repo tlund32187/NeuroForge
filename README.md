@@ -1,4 +1,4 @@
-# NeuroForge
+﻿# NeuroForge
 
 A biologically inspired spiking **liquid brain** simulation toolkit.
 
@@ -26,6 +26,9 @@ pip install -e ".[torch]"
 
 # Development
 pip install -e ".[dev,torch]"
+
+# Optional resource monitoring (CPU/RAM/GPU)
+pip install -e ".[monitoring]"
 ```
 
 ## Quick Start
@@ -37,4 +40,34 @@ print(neuroforge.__version__)
 
 ## Status
 
-Phase 0 — Project skeleton. See CHANGELOG.md for progress.
+Phase 0 - Project skeleton. See CHANGELOG.md for progress.
+
+## Resource Monitoring (Opt-in)
+
+Resource monitoring is disabled by default. Enable it through training config:
+
+```json
+{
+  "gate": "MULTI",
+  "max_trials": 1500,
+  "device": "auto",
+  "monitoring": {
+    "resource": {
+      "enabled": true,
+      "every_n_steps": 10,
+      "include_system": true,
+      "include_process": true,
+      "include_gpu": true,
+      "gpu_index": 0
+    }
+  }
+}
+```
+
+When enabled, the dashboard Resources panel shows CPU, RAM, GPU, VRAM, and torch CUDA allocator series in live mode and replay mode.
+
+Optional packages:
+- `pip install psutil` for CPU/RAM metrics
+- `pip install nvidia-ml-py` for NVIDIA utilization/temperature/power
+
+If optional dependencies are unavailable, metrics are skipped and training continues.

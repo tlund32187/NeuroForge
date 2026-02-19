@@ -34,6 +34,8 @@ from aiohttp import web
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 from neuroforge.monitors.bus import EventBus
+from neuroforge.monitors.event_recorder import EventRecorderMonitor
+from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
@@ -79,6 +81,65 @@ def _setup_monitors() -> None:
         _bus.subscribe(topic, _training_monitor)
     _bus.subscribe(EventTopic.SPIKE, _spike_monitor)
     _bus.subscribe(EventTopic.WEIGHT, _weight_monitor)
+
+
+def _parse_resource_monitor_cfg(body: dict[str, Any]) -> dict[str, Any]:
+    """Parse opt-in resource monitor config from request JSON."""
+    default = {
+        "enabled": False,
+        "every_n_steps": 10,
+        "include_process": True,
+        "include_system": True,
+        "include_gpu": True,
+        "gpu_index": 0,
+    }
+
+    raw_monitoring = body.get("monitoring")
+    if not isinstance(raw_monitoring, dict):
+        return default
+    raw_resource = raw_monitoring.get("resource")
+    if not isinstance(raw_resource, dict):
+        return default
+
+    def _as_bool(value: Any, fallback: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        return fallback
+
+    def _as_int(value: Any, fallback: int, *, minimum: int = 0) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(minimum, parsed)
+
+    return {
+        "enabled": _as_bool(raw_resource.get("enabled"), default["enabled"]),
+        "every_n_steps": _as_int(
+            raw_resource.get("every_n_steps"),
+            default["every_n_steps"],
+            minimum=1,
+        ),
+        "include_process": _as_bool(
+            raw_resource.get("include_process"),
+            default["include_process"],
+        ),
+        "include_system": _as_bool(
+            raw_resource.get("include_system"),
+            default["include_system"],
+        ),
+        "include_gpu": _as_bool(raw_resource.get("include_gpu"), default["include_gpu"]),
+        "gpu_index": _as_int(raw_resource.get("gpu_index"), default["gpu_index"], minimum=0),
+    }
+
+
+def _attach_monitoring_cfg(
+    config_dict: dict[str, Any],
+    resource_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    out = dict(config_dict)
+    out["monitoring"] = {"resource": dict(resource_cfg)}
+    return out
 
 
 # ── WebSocket broadcaster ──────────────────────────────────────────
@@ -210,6 +271,7 @@ async def _handle_train(request: web.Request) -> web.Response:
     gate = body.get("gate", "OR")
     max_trials = int(body.get("max_trials", 5000))
     device: str = str(body.get("device", ""))
+    resource_cfg = _parse_resource_monitor_cfg(body)
 
     # Resolve device: explicit "cpu"/"cuda" is honoured.  Anything else
     # (including "auto" and empty) becomes "auto" so the config's
@@ -223,6 +285,19 @@ async def _handle_train(request: web.Request) -> web.Response:
 
     _setup_monitors()
     _stop_event.clear()
+
+    # Optional resource monitor: enriches SCALAR payloads.
+    resource_monitor: ResourceMonitor | None = None
+    if resource_cfg["enabled"]:
+        resource_monitor = ResourceMonitor(
+            enabled=True,
+            every_n_steps=resource_cfg["every_n_steps"],
+            include_process=resource_cfg["include_process"],
+            include_system=resource_cfg["include_system"],
+            include_gpu=resource_cfg["include_gpu"],
+            gpu_index=resource_cfg["gpu_index"],
+        )
+        _bus.subscribe_all(resource_monitor)
 
     # Subscribe the WS broadcaster.
     loop = asyncio.get_running_loop()
@@ -238,7 +313,9 @@ async def _handle_train(request: web.Request) -> web.Response:
 
     ctx = create_run_dir(base_dir="artifacts", seed=seed)
     artifact_writer = ArtifactWriter(ctx.run_dir)
+    event_recorder = EventRecorderMonitor(ctx.run_dir)
     _bus.subscribe_all(artifact_writer)
+    _bus.subscribe_all(event_recorder)
 
     # Emit RUN_START so ArtifactWriter writes run_meta + config.
     def _make_config_dict(config: Any) -> dict[str, Any]:
@@ -249,63 +326,74 @@ async def _handle_train(request: web.Request) -> web.Response:
     def _run() -> None:
         global _current_config
 
-        if gate == "MULTI":
-            from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+        try:
+            if gate == "MULTI":
+                from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
 
-            multi_cfg = MultiGateConfig(
-                max_epochs=max_trials,  # UI field doubles as max_epochs
-                device=device,
-                seed=seed,
-            )
-            _current_config = _make_config_dict(multi_cfg)
-            _bus.publish(MonitorEvent(
-                topic=EventTopic.RUN_START, step=0, t=0.0,
-                source="dashboard",
-                data={
-                    "run_meta": ctx.to_dict(),
-                    "config": _current_config,
-                },
-            ))
-            multi_result = MultiGateTask(
-                multi_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
-            ).run()
-            _bus.publish(MonitorEvent(
-                topic=EventTopic.RUN_END, step=0, t=0.0,
-                source="dashboard",
-                data={
-                    "converged": multi_result.converged,
-                    "trials": multi_result.trials,
-                    "epochs": multi_result.epochs,
-                },
-            ))
-        else:
-            from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+                multi_cfg = MultiGateConfig(
+                    max_epochs=max_trials,  # UI field doubles as max_epochs
+                    device=device,
+                    seed=seed,
+                )
+                _current_config = _attach_monitoring_cfg(
+                    _make_config_dict(multi_cfg),
+                    resource_cfg,
+                )
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_START, step=0, t=0.0,
+                    source="dashboard",
+                    data={
+                        "run_meta": ctx.to_dict(),
+                        "config": _current_config,
+                    },
+                ))
+                multi_result = MultiGateTask(
+                    multi_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
+                ).run()
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_END, step=0, t=0.0,
+                    source="dashboard",
+                    data={
+                        "converged": multi_result.converged,
+                        "trials": multi_result.trials,
+                        "epochs": multi_result.epochs,
+                    },
+                ))
+            else:
+                from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
-            single_cfg = LogicGateConfig(
-                gate=gate, max_trials=max_trials,
-                device=device,
-                seed=seed,
-            )
-            _current_config = _make_config_dict(single_cfg)
-            _bus.publish(MonitorEvent(
-                topic=EventTopic.RUN_START, step=0, t=0.0,
-                source="dashboard",
-                data={
-                    "run_meta": ctx.to_dict(),
-                    "config": _current_config,
-                },
-            ))
-            single_result = LogicGateTask(
-                single_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
-            ).run()
-            _bus.publish(MonitorEvent(
-                topic=EventTopic.RUN_END, step=0, t=0.0,
-                source="dashboard",
-                data={
-                    "converged": single_result.converged,
-                    "trials": single_result.trials,
-                },
-            ))
+                single_cfg = LogicGateConfig(
+                    gate=gate, max_trials=max_trials,
+                    device=device,
+                    seed=seed,
+                )
+                _current_config = _attach_monitoring_cfg(
+                    _make_config_dict(single_cfg),
+                    resource_cfg,
+                )
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_START, step=0, t=0.0,
+                    source="dashboard",
+                    data={
+                        "run_meta": ctx.to_dict(),
+                        "config": _current_config,
+                    },
+                ))
+                single_result = LogicGateTask(
+                    single_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
+                ).run()
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_END, step=0, t=0.0,
+                    source="dashboard",
+                    data={
+                        "converged": single_result.converged,
+                        "trials": single_result.trials,
+                    },
+                ))
+        finally:
+            event_recorder.close()
+            if resource_monitor is not None:
+                resource_monitor.reset()
 
     _training_thread = threading.Thread(target=_run, daemon=True)
     _training_thread.start()
@@ -453,16 +541,103 @@ async def _handle_run_scalars(request: web.Request) -> web.Response:
                     parsed[k] = None
                 else:
                     try:
-                        parsed[k] = float(v) if "." in v else int(v)
+                        parsed[k] = int(v)
                     except (ValueError, TypeError):
-                        if v == "True":
-                            parsed[k] = True
-                        elif v == "False":
-                            parsed[k] = False
-                        else:
-                            parsed[k] = v
+                        try:
+                            parsed[k] = float(v)
+                        except (ValueError, TypeError):
+                            if v == "True":
+                                parsed[k] = True
+                            elif v == "False":
+                                parsed[k] = False
+                            else:
+                                parsed[k] = v
             rows.append(parsed)
     return web.json_response(rows)
+
+
+def _events_path(run_dir: Path) -> Path:
+    return run_dir / "events" / "events.ndjson"
+
+
+def _iter_ndjson(path: Path) -> list[tuple[int, int, dict[str, Any]]]:
+    """Return ``(index, byte_offset, event)`` tuples from an NDJSON file."""
+    rows: list[tuple[int, int, dict[str, Any]]] = []
+    offset = 0
+    idx = 0
+    with path.open("rb") as fh:
+        for raw in fh:
+            line_offset = offset
+            offset += len(raw)
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            rows.append((idx, line_offset, event))
+            idx += 1
+    return rows
+
+
+async def _handle_run_events(request: web.Request) -> web.Response:
+    """Serve paginated recorded monitor events from events.ndjson."""
+    run_id = request.match_info["run_id"]
+    run_dir = _safe_run_dir(run_id)
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    path = _events_path(run_dir)
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+
+    q = request.rel_url.query
+    try:
+        start = max(0, int(q.get("start", "0")))
+        limit = max(1, min(5000, int(q.get("limit", "500"))))
+    except ValueError:
+        return web.json_response({"error": "invalid pagination"}, status=400)
+
+    rows = _iter_ndjson(path)
+    total = len(rows)
+    sliced = rows[start:start + limit]
+    events = [event for _idx, _offset, event in sliced]
+    return web.json_response({
+        "run_id": run_id,
+        "start": start,
+        "limit": limit,
+        "total": total,
+        "events": events,
+    })
+
+
+async def _handle_run_events_index(request: web.Request) -> web.Response:
+    """Serve offsets + timestamps for replay scrubber timelines."""
+    run_id = request.match_info["run_id"]
+    run_dir = _safe_run_dir(run_id)
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    path = _events_path(run_dir)
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+
+    rows = _iter_ndjson(path)
+    items = []
+    for idx, offset, event in rows:
+        items.append({
+            "idx": idx,
+            "offset": offset,
+            "ts_wall": event.get("ts_wall"),
+            "t_step": event.get("t_step", event.get("step")),
+            "topic": event.get("topic"),
+        })
+    return web.json_response({
+        "run_id": run_id,
+        "count": len(items),
+        "items": items,
+    })
 
 
 # ── Server bootstrap ───────────────────────────────────────────────
@@ -495,6 +670,8 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     app.router.add_get("/api/run/{run_id}/config", _handle_run_config)
     app.router.add_get("/api/run/{run_id}/topology", _handle_run_topology)
     app.router.add_get("/api/run/{run_id}/scalars", _handle_run_scalars)
+    app.router.add_get("/api/run/{run_id}/events", _handle_run_events)
+    app.router.add_get("/api/run/{run_id}/events/index", _handle_run_events_index)
 
     app.router.add_static("/static", STATIC_DIR, show_index=False)
 

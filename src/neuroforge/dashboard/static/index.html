@@ -7,17 +7,14 @@
   <link rel="stylesheet" href="/static/style.css?v=__CACHE_BUST__">
 </head>
 <body>
-  <!-- ── Header ─────────────────────────────────────────────────── -->
   <header id="header">
-    <div class="logo">⚡ NeuroForge</div>
+    <div class="logo">NeuroForge</div>
     <div class="controls">
-      <!-- Mode toggle -->
       <div class="mode-toggle">
         <button id="btn-mode-live" class="mode-btn mode-active" data-mode="live">Live</button>
         <button id="btn-mode-replay" class="mode-btn" data-mode="replay">Replay</button>
       </div>
 
-      <!-- Live controls -->
       <div id="live-controls" class="control-group">
         <select id="gate-select">
           <option value="AND">AND</option>
@@ -28,45 +25,50 @@
           <option value="XNOR">XNOR</option>
           <option value="MULTI">MULTI (All 6)</option>
         </select>
-        <input id="max-trials" type="number" value="5000" min="100" step="100"
-               title="Max trials">
+        <input id="max-trials" type="number" value="5000" min="100" step="100" title="Max trials">
         <select id="device-select" title="Training device">
           <option value="auto" selected>Auto</option>
           <option value="cuda">CUDA</option>
           <option value="cpu">CPU</option>
         </select>
-        <button id="btn-train" class="btn-primary">▶ Train</button>
-        <button id="btn-stop" class="btn-stop" disabled>⏹ Stop</button>
+        <label class="header-check" title="Enable resource utilization monitoring">
+          <input id="resource-monitor-enabled" type="checkbox">
+          <span>Resources</span>
+        </label>
+        <input id="resource-monitor-every" type="number" min="1" step="1" value="10"
+               title="Resource sample cadence (every N steps)">
+        <button id="btn-train" class="btn-primary">Train</button>
+        <button id="btn-stop" class="btn-stop" disabled>Stop</button>
       </div>
 
-      <!-- Replay controls -->
       <div id="replay-controls" class="control-group" style="display:none">
         <select id="run-select">
-          <option value="">— select run —</option>
+          <option value="">- select run -</option>
         </select>
-        <button id="btn-load-run" class="btn-primary">📂 Load Run</button>
-        <button id="btn-refresh-runs" class="btn-secondary" title="Refresh run list">↻</button>
+        <button id="btn-load-run" class="btn-primary">Load Run</button>
+        <button id="btn-refresh-runs" class="btn-secondary" title="Refresh run list">Refresh</button>
+        <div id="replay-events-controls" class="replay-events-controls" style="display:none">
+          <button id="btn-replay-play" class="btn-secondary" title="Play/Pause replay">Play</button>
+          <input id="replay-scrubber" type="range" min="0" max="0" value="0">
+          <span id="replay-scrubber-label">0 / 0</span>
+        </div>
       </div>
 
       <span id="status-badge" class="badge badge-idle">idle</span>
     </div>
   </header>
 
-  <!-- ── Run info banner (shown during live training) ───────────── -->
   <div id="run-info-banner" class="run-info-banner" style="display:none">
     <span id="run-info-text"></span>
-    <a id="run-info-replay-link" href="#" target="_blank" class="replay-link">▶ Replay this run</a>
+    <a id="run-info-replay-link" href="#" target="_blank" class="replay-link">Replay this run</a>
   </div>
 
-  <!-- ── Main grid ──────────────────────────────────────────────── -->
   <main id="grid">
-    <!-- Run configuration (shown during live training / replay) -->
     <section class="panel" id="panel-config" style="display:none">
       <h2>Run Configuration</h2>
       <div id="config-grid" class="config-grid"></div>
     </section>
 
-    <!-- Left column -->
     <div class="grid-col">
       <section class="panel" id="panel-network">
         <h2>Network Topology</h2>
@@ -123,25 +125,24 @@
           </div>
           <div class="stat-card">
             <div class="stat-label">Converged</div>
-            <div class="stat-value" id="stat-converged">—</div>
+            <div class="stat-value" id="stat-converged">-</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Epoch</div>
-            <div class="stat-value" id="stat-epoch">—</div>
+            <div class="stat-value" id="stat-epoch">-</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Gate</div>
-            <div class="stat-value" id="stat-gate">—</div>
+            <div class="stat-value" id="stat-gate">-</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Elapsed</div>
-            <div class="stat-value" id="stat-elapsed">—</div>
+            <div class="stat-value" id="stat-elapsed">-</div>
           </div>
         </div>
       </section>
     </div>
 
-    <!-- Right column -->
     <div class="grid-col">
       <section class="panel" id="panel-accuracy">
         <h2>Training Accuracy</h2>
@@ -151,6 +152,41 @@
       <section class="panel" id="panel-weights">
         <h2>Weight Evolution</h2>
         <canvas id="canvas-weights"></canvas>
+      </section>
+
+      <section class="panel" id="panel-resources">
+        <h2>Resources</h2>
+        <div id="resource-note" class="resource-note">No resource data yet.</div>
+        <div class="resource-grid">
+          <div class="resource-chart">
+            <div class="resource-chart-head">
+              <h3>CPU %</h3>
+              <div id="resource-stats-cpu" class="resource-stats">sys -- | proc --</div>
+            </div>
+            <canvas id="canvas-resource-cpu"></canvas>
+          </div>
+          <div class="resource-chart">
+            <div class="resource-chart-head">
+              <h3>RAM (MB)</h3>
+              <div id="resource-stats-ram" class="resource-stats">sys -- | proc --</div>
+            </div>
+            <canvas id="canvas-resource-ram"></canvas>
+          </div>
+          <div class="resource-chart">
+            <div class="resource-chart-head">
+              <h3>GPU / VRAM</h3>
+              <div id="resource-stats-gpu" class="resource-stats">gpu -- | vram --</div>
+            </div>
+            <canvas id="canvas-resource-gpu"></canvas>
+          </div>
+          <div class="resource-chart">
+            <div class="resource-chart-head">
+              <h3>Torch CUDA (MB)</h3>
+              <div id="resource-stats-cuda" class="resource-stats">alloc -- | res -- | max --</div>
+            </div>
+            <canvas id="canvas-resource-cuda"></canvas>
+          </div>
+        </div>
       </section>
 
       <section class="panel" id="panel-log">

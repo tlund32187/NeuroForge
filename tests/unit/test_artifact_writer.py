@@ -154,6 +154,43 @@ class TestScalar:
         assert len(reader) == 1
         assert reader[0]["gate"] == "AND"
 
+    def test_dynamic_resource_columns_are_added(self, tmp_path: Path) -> None:
+        run_dir = _make_run_dir(tmp_path)
+        writer = ArtifactWriter(run_dir, flush_every_n=1)
+
+        writer.on_event(_event("scalar", {
+            "trial": 0,
+            "gate": "XOR",
+            "accuracy": 0.5,
+            "error": 0.5,
+            "resource.cpu.system_percent": 12.5,
+            "resource.ram.process_rss_mb": 256.0,
+            "torch_cuda_allocated_mb": 0.0,
+        }, step=0))
+        writer.on_event(_event("scalar", {
+            "trial": 1,
+            "gate": "XOR",
+            "accuracy": 0.75,
+            "error": 0.25,
+            "resource.gpu.util_percent": 88.0,
+        }, step=1))
+        writer.flush()
+
+        csv_path = run_dir / "metrics" / "scalars.csv"
+        with csv_path.open(encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            rows = list(reader)
+            assert reader.fieldnames is not None
+            assert "resource.cpu.system_percent" in reader.fieldnames
+            assert "resource.ram.process_rss_mb" in reader.fieldnames
+            assert "resource.gpu.util_percent" in reader.fieldnames
+            assert "torch_cuda_allocated_mb" in reader.fieldnames
+
+        assert len(rows) == 2
+        assert rows[0]["resource.cpu.system_percent"] == "12.5"
+        assert rows[0]["resource.gpu.util_percent"] == ""
+        assert rows[1]["resource.gpu.util_percent"] == "88.0"
+
 
 # ── RUN_END flushes and writes summary ──────────────────────────────
 

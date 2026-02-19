@@ -19,6 +19,21 @@ const state = {
   trainStartTime: null, // Date.now() when training began
   _elapsedTimer: null,  // setInterval id for elapsed clock
   windowSteps: 50,      // sim steps per trial (for computing spike rates)
+  resourceSeries: {
+    cpuSystem: [],
+    cpuProcess: [],
+    ramSystemUsed: [],
+    ramSystemTotal: [],
+    ramProcessRss: [],
+    gpuUtil: [],
+    gpuMemUsed: [],
+    gpuMemTotal: [],
+    torchCudaAllocated: [],
+    torchCudaReserved: [],
+    torchCudaMax: [],
+  },
+  resourceLastStep: -1,
+  resourceSamples: 0,
 
   // Network visualisation
   neurons: [],          // { id, layer, idx, x, y, r, color, label, totalSpikes, trialCount }
@@ -31,6 +46,12 @@ const state = {
   mode: "live",
   activeRunId: null,    // run_id of the currently loaded replay (or live run)
   runConfig: null,      // resolved config dict from run_start or replay API
+  replayEvents: [],     // full event stream loaded from events.ndjson
+  replayIndex: [],      // scrubber index metadata
+  replayCursor: -1,     // last applied replay event index
+  replayPlaying: false,
+  replayTimer: null,
+  replayIntervalMs: 80,
 
   // Topology view controls
   edgeMode: "sampled",  // off | sampled | full
@@ -47,11 +68,22 @@ const btnStop     = $("#btn-stop");
 const gateSelect  = $("#gate-select");
 const deviceSelect= $("#device-select");
 const maxTrials   = $("#max-trials");
+const resourceMonitorEnabled = $("#resource-monitor-enabled");
+const resourceMonitorEvery = $("#resource-monitor-every");
 const statusBadge = $("#status-badge");
 
 const canvasNet   = $("#canvas-network");
 const canvasAcc   = $("#canvas-accuracy");
 const canvasWgt   = $("#canvas-weights");
+const canvasResCpu = $("#canvas-resource-cpu");
+const canvasResRam = $("#canvas-resource-ram");
+const canvasResGpu = $("#canvas-resource-gpu");
+const canvasResCuda = $("#canvas-resource-cuda");
+const resourceNote = $("#resource-note");
+const resourceStatsCpu = $("#resource-stats-cpu");
+const resourceStatsRam = $("#resource-stats-ram");
+const resourceStatsGpu = $("#resource-stats-gpu");
+const resourceStatsCuda = $("#resource-stats-cuda");
 const tooltip     = $("#tooltip");
 const edgeModeSel = $("#topology-edge-mode");
 const edgeCountWrap = $("#topology-edge-count-wrap");
@@ -79,6 +111,10 @@ const btnLoadRun     = $("#btn-load-run");
 const btnRefreshRuns = $("#btn-refresh-runs");
 const btnModeLive    = $("#btn-mode-live");
 const btnModeReplay  = $("#btn-mode-replay");
+const replayEventsControls = $("#replay-events-controls");
+const btnReplayPlay = $("#btn-replay-play");
+const replayScrubber = $("#replay-scrubber");
+const replayScrubberLabel = $("#replay-scrubber-label");
 
 // Run info banner (live → replay handoff)
 const runInfoBanner    = $("#run-info-banner");
@@ -145,12 +181,23 @@ function handleMessage(msg) {
       state.totalTrials = 0;
       state.converged = null;
       state.epoch = 0;
-      state.trainStartTime = Date.now();
-      if (state._elapsedTimer) clearInterval(state._elapsedTimer);
-      state._elapsedTimer = setInterval(() => {
-        if (statElapsed) statElapsed.textContent = formatElapsed(Date.now() - state.trainStartTime);
-      }, 1000);
+      if (state.mode === "live") {
+        state.trainStartTime = Date.now();
+        if (state._elapsedTimer) clearInterval(state._elapsedTimer);
+        state._elapsedTimer = setInterval(() => {
+          if (statElapsed) statElapsed.textContent = formatElapsed(Date.now() - state.trainStartTime);
+        }, 1000);
+      } else {
+        state.trainStartTime = null;
+        if (state._elapsedTimer) {
+          clearInterval(state._elapsedTimer);
+          state._elapsedTimer = null;
+        }
+      }
       state.weightHistory = {};
+      resetResourceSeries();
+      updateResourceNote();
+      drawResourceCharts();
       // Reset per-neuron spike stats.
       for (const n of state.neurons) {
         n.totalSpikes = 0;
@@ -160,8 +207,10 @@ function handleMessage(msg) {
       logContainer.innerHTML = "";
       setStatus("training");
       statGate.textContent = state.gate;
-      btnTrain.disabled = true;
-      btnStop.disabled = false;
+      if (state.mode === "live") {
+        btnTrain.disabled = true;
+        btnStop.disabled = false;
+      }
       break;
 
     case "topology":
@@ -175,6 +224,7 @@ function handleMessage(msg) {
       state.lastAccuracy = msg.data.accuracy || 0;
       if (msg.data.epoch !== undefined) state.epoch = msg.data.epoch + 1;
       state.accuracyHistory.push(state.lastAccuracy);
+      ingestResourceMetrics(msg.data, msg.step);
 
       updateTruthTableEntry(msg.data);
       updateNeuronSpikes(msg.data);
@@ -189,6 +239,10 @@ function handleMessage(msg) {
         renderTruthTable();
         drawNetwork();
       }
+      break;
+
+    case "scalar":
+      ingestResourceMetrics(msg.data, msg.step);
       break;
 
     case "weight":
@@ -217,8 +271,10 @@ function handleMessage(msg) {
         logContainer.appendChild(line);
       }
       if (state._elapsedTimer) { clearInterval(state._elapsedTimer); state._elapsedTimer = null; }
-      btnTrain.disabled = false;
-      btnStop.disabled = true;
+      if (state.mode === "live") {
+        btnTrain.disabled = false;
+        btnStop.disabled = true;
+      }
       updateStats();
       drawAccuracyChart();
       drawWeightChart();
@@ -263,6 +319,286 @@ function applyWeightSnapshot(snap) {
   }
 }
 
+function resetResourceSeries() {
+  state.resourceSeries = {
+    cpuSystem: [],
+    cpuProcess: [],
+    ramSystemUsed: [],
+    ramSystemTotal: [],
+    ramProcessRss: [],
+    gpuUtil: [],
+    gpuMemUsed: [],
+    gpuMemTotal: [],
+    torchCudaAllocated: [],
+    torchCudaReserved: [],
+    torchCudaMax: [],
+  };
+  state.resourceLastStep = -1;
+  state.resourceSamples = 0;
+}
+
+function parseMetricNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function latestSeriesValue(seriesName) {
+  const series = state.resourceSeries[seriesName];
+  if (!series || series.length === 0) return null;
+  const point = series[series.length - 1];
+  if (!Array.isArray(point) || point.length < 2) return null;
+  return parseMetricNumber(point[1]);
+}
+
+function formatPct(value) {
+  return value === null ? "--" : `${value.toFixed(1)}%`;
+}
+
+function formatMb(value) {
+  if (value === null) return "--";
+  if (value >= 1024) return `${(value / 1024).toFixed(2)} GB`;
+  return `${value.toFixed(0)} MB`;
+}
+
+function ratioPct(num, den) {
+  if (num === null || den === null || den <= 0) return null;
+  return (num / den) * 100;
+}
+
+function setText(el, text) {
+  if (el) el.textContent = text;
+}
+
+function updateResourceStats() {
+  const cpuSystem = latestSeriesValue("cpuSystem");
+  const cpuProcess = latestSeriesValue("cpuProcess");
+  setText(resourceStatsCpu, `sys ${formatPct(cpuSystem)} | proc ${formatPct(cpuProcess)}`);
+
+  const ramUsed = latestSeriesValue("ramSystemUsed");
+  const ramTotal = latestSeriesValue("ramSystemTotal");
+  const ramProc = latestSeriesValue("ramProcessRss");
+  const ramPct = ratioPct(ramUsed, ramTotal);
+  let ramText = `sys ${formatMb(ramUsed)}`;
+  if (ramTotal !== null) {
+    ramText += ` / ${formatMb(ramTotal)}`;
+    if (ramPct !== null) ramText += ` (${formatPct(ramPct)})`;
+  }
+  ramText += ` | proc ${formatMb(ramProc)}`;
+  setText(resourceStatsRam, ramText);
+
+  const gpuUtil = latestSeriesValue("gpuUtil");
+  const gpuMemUsed = latestSeriesValue("gpuMemUsed");
+  const gpuMemTotal = latestSeriesValue("gpuMemTotal");
+  const gpuMemPct = ratioPct(gpuMemUsed, gpuMemTotal);
+  let gpuText = `gpu ${formatPct(gpuUtil)} | vram ${formatMb(gpuMemUsed)}`;
+  if (gpuMemTotal !== null) {
+    gpuText += ` / ${formatMb(gpuMemTotal)}`;
+    if (gpuMemPct !== null) gpuText += ` (${formatPct(gpuMemPct)})`;
+  }
+  setText(resourceStatsGpu, gpuText);
+
+  const cudaAlloc = latestSeriesValue("torchCudaAllocated");
+  const cudaRes = latestSeriesValue("torchCudaReserved");
+  const cudaMax = latestSeriesValue("torchCudaMax");
+  setText(
+    resourceStatsCuda,
+    `alloc ${formatMb(cudaAlloc)} | res ${formatMb(cudaRes)} | max ${formatMb(cudaMax)}`,
+  );
+}
+
+function pushMetricPoint(seriesName, step, value) {
+  const series = state.resourceSeries[seriesName];
+  if (!series) return;
+  series.push([step, value]);
+  if (series.length > 1500) series.shift();
+}
+
+function hasResourceData() {
+  return Object.values(state.resourceSeries).some((series) => series.length > 0);
+}
+
+function updateResourceNote() {
+  if (!resourceNote) return;
+  const hasData = hasResourceData();
+  const hasCpu =
+    state.resourceSeries.cpuSystem.length > 0 ||
+    state.resourceSeries.cpuProcess.length > 0 ||
+    state.resourceSeries.ramSystemUsed.length > 0 ||
+    state.resourceSeries.ramProcessRss.length > 0;
+  const hasGpu =
+    state.resourceSeries.gpuUtil.length > 0 ||
+    state.resourceSeries.gpuMemUsed.length > 0 ||
+    state.resourceSeries.gpuMemTotal.length > 0;
+  const hasCuda =
+    state.resourceSeries.torchCudaAllocated.length > 0 ||
+    state.resourceSeries.torchCudaReserved.length > 0 ||
+    state.resourceSeries.torchCudaMax.length > 0;
+
+  if (!hasData) {
+    const monitorEnabled = !!(resourceMonitorEnabled && resourceMonitorEnabled.checked);
+    resourceNote.textContent = monitorEnabled
+      ? "No resource data yet. CPU/RAM metrics require psutil (`pip install psutil`)."
+      : "No resource data yet.";
+    return;
+  }
+
+  if (!hasCpu) {
+    resourceNote.textContent = "CPU/RAM metrics unavailable (monitor disabled or psutil missing).";
+    return;
+  }
+  if (!hasGpu && !hasCuda) {
+    resourceNote.textContent = "GPU metrics unavailable (monitor disabled, NVML missing, or non-NVIDIA runtime).";
+    return;
+  }
+  resourceNote.textContent = "";
+}
+
+function ingestResourceMetrics(data, stepRaw, opts = {}) {
+  const dataObj = data || {};
+  const step = Number.isFinite(stepRaw) ? stepRaw : state.resourceLastStep + 1;
+  const deferDraw = !!opts.deferDraw;
+  let added = false;
+
+  const mapping = [
+    ["resource.cpu.system_percent", "cpuSystem", 1],
+    ["resource.cpu.process_percent", "cpuProcess", 1],
+    ["resource.ram.system_used_mb", "ramSystemUsed", 1],
+    ["resource.ram.system_total_mb", "ramSystemTotal", 1],
+    ["resource.ram.process_rss_mb", "ramProcessRss", 1],
+    ["resource.gpu.util_percent", "gpuUtil", 1],
+    ["resource.gpu.mem_used_mb", "gpuMemUsed", 1],
+    ["resource.gpu.mem_total_mb", "gpuMemTotal", 1],
+    ["resource.torch.cuda_allocated_mb", "torchCudaAllocated", 1],
+    ["resource.torch.cuda_reserved_mb", "torchCudaReserved", 1],
+    ["resource.torch.cuda_max_allocated_mb", "torchCudaMax", 1],
+    ["torch_cuda_allocated_mb", "torchCudaAllocated", 1],
+    ["torch_cuda_reserved_mb", "torchCudaReserved", 1],
+    ["torch_cuda_max_allocated_mb", "torchCudaMax", 1],
+    ["cuda_mem_allocated", "torchCudaAllocated", 1 / (1024 * 1024)],
+    ["cuda_mem_reserved", "torchCudaReserved", 1 / (1024 * 1024)],
+    ["cuda_mem_peak", "torchCudaMax", 1 / (1024 * 1024)],
+  ];
+
+  for (const [key, seriesName, scale] of mapping) {
+    if (!(key in dataObj)) continue;
+    const parsed = parseMetricNumber(dataObj[key]);
+    if (parsed === null) continue;
+    pushMetricPoint(seriesName, step, parsed * scale);
+    added = true;
+  }
+
+  if (!added) return false;
+  state.resourceLastStep = step;
+  state.resourceSamples += 1;
+  if (!deferDraw) {
+    updateResourceNote();
+    drawResourceCharts();
+  }
+  return true;
+}
+
+function collectPoints(seriesName) {
+  return state.resourceSeries[seriesName] || [];
+}
+
+function drawResourceChart(canvas, lines, opts = {}) {
+  if (!canvas) return;
+  const { ctx, w, h } = setupCanvas(canvas);
+  ctx.clearRect(0, 0, w, h);
+
+  const padL = 34, padR = 8, padT = 8, padB = 18;
+  const cw = w - padL - padR;
+  const ch = h - padT - padB;
+
+  const allPoints = [];
+  for (const line of lines) {
+    for (const p of line.points) allPoints.push(p);
+  }
+  if (allPoints.length === 0) {
+    ctx.fillStyle = "#8b949e";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("No data", w / 2, h / 2);
+    return;
+  }
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of allPoints) {
+    minX = Math.min(minX, Number(x));
+    maxX = Math.max(maxX, Number(x));
+    minY = Math.min(minY, Number(y));
+    maxY = Math.max(maxY, Number(y));
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return;
+  if (opts.fixedMin !== undefined) minY = opts.fixedMin;
+  if (opts.fixedMax !== undefined) maxY = opts.fixedMax;
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  if (minX === maxX) maxX = minX + 1;
+
+  ctx.strokeStyle = "#30363d";
+  ctx.lineWidth = 0.5;
+  for (let t = 0; t <= 1; t += 0.25) {
+    const py = padT + ch * t;
+    ctx.beginPath();
+    ctx.moveTo(padL, py);
+    ctx.lineTo(w - padR, py);
+    ctx.stroke();
+  }
+
+  for (const line of lines) {
+    if (!line.points || line.points.length < 2) continue;
+    ctx.beginPath();
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 1.3;
+    line.points.forEach((p, idx) => {
+      const x = padL + ((Number(p[0]) - minX) / (maxX - minX)) * cw;
+      const y = padT + ch * (1 - (Number(p[1]) - minY) / (maxY - minY));
+      if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  ctx.font = "10px monospace";
+  ctx.textAlign = "left";
+  let lx = padL;
+  for (const line of lines) {
+    if (!line.points || line.points.length === 0) continue;
+    ctx.fillStyle = line.color;
+    const label = line.label || "";
+    ctx.fillText(label, lx, h - 5);
+    lx += (label.length * 6) + 10;
+  }
+}
+
+function drawResourceCharts() {
+  drawResourceChart(canvasResCpu, [
+    { points: collectPoints("cpuSystem"), color: "#58a6ff", label: "system" },
+    { points: collectPoints("cpuProcess"), color: "#3fb950", label: "process" },
+  ], { fixedMin: 0, fixedMax: 100 });
+
+  drawResourceChart(canvasResRam, [
+    { points: collectPoints("ramSystemUsed"), color: "#d29922", label: "system used" },
+    { points: collectPoints("ramProcessRss"), color: "#79c0ff", label: "process rss" },
+  ]);
+
+  drawResourceChart(canvasResGpu, [
+    { points: collectPoints("gpuUtil"), color: "#f85149", label: "gpu %" },
+    { points: collectPoints("gpuMemUsed"), color: "#bc8cff", label: "vram used" },
+    { points: collectPoints("gpuMemTotal"), color: "#8b949e", label: "vram total" },
+  ]);
+
+  drawResourceChart(canvasResCuda, [
+    { points: collectPoints("torchCudaAllocated"), color: "#56d364", label: "alloc" },
+    { points: collectPoints("torchCudaReserved"), color: "#ff7b72", label: "reserved" },
+    { points: collectPoints("torchCudaMax"), color: "#d2a8ff", label: "max" },
+  ]);
+  updateResourceStats();
+}
+
 // ── Training control ─────────────────────────────────────────────────
 
 // Adjust max-trials placeholder when MULTI is selected.
@@ -289,11 +625,32 @@ btnTrain.addEventListener("click", async () => {
   const gate = gateSelect.value;
   const trials = parseInt(maxTrials.value, 10) || 5000;
   const device = deviceSelect ? deviceSelect.value : "cuda";
+  const resourceEnabled = !!(resourceMonitorEnabled && resourceMonitorEnabled.checked);
+  const resourceEvery = Math.max(
+    1,
+    parseInt(resourceMonitorEvery ? resourceMonitorEvery.value : "10", 10) || 10,
+  );
+
+  const reqBody = {
+    gate,
+    max_trials: trials,
+    device,
+    monitoring: {
+      resource: {
+        enabled: resourceEnabled,
+        every_n_steps: resourceEvery,
+        include_system: true,
+        include_process: true,
+        include_gpu: true,
+        gpu_index: 0,
+      },
+    },
+  };
 
   const resp = await fetch("/api/train", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ gate, max_trials: trials, device }),
+    body: JSON.stringify(reqBody),
   });
 
   if (!resp.ok) {
@@ -317,6 +674,115 @@ btnStop.addEventListener("click", async () => {
 function setStatus(s) {
   statusBadge.className = `badge badge-${s}`;
   statusBadge.textContent = s;
+}
+
+function setReplayControlsVisible(visible) {
+  if (!replayEventsControls) return;
+  replayEventsControls.style.display = visible ? "" : "none";
+}
+
+function clearReplayTimer() {
+  if (state.replayTimer) {
+    clearInterval(state.replayTimer);
+    state.replayTimer = null;
+  }
+}
+
+function setReplayPlaying(playing) {
+  const canPlay = state.mode === "replay" && state.replayEvents.length > 0;
+  if (!canPlay) {
+    clearReplayTimer();
+    state.replayPlaying = false;
+    if (btnReplayPlay) btnReplayPlay.textContent = "Play";
+    return;
+  }
+
+  if (!playing) {
+    clearReplayTimer();
+    state.replayPlaying = false;
+    if (btnReplayPlay) btnReplayPlay.textContent = "Play";
+    return;
+  }
+
+  if (state.replayCursor >= state.replayEvents.length - 1) {
+    state.replayCursor = -1;
+    replaySeek(0);
+  }
+  clearReplayTimer();
+  state.replayPlaying = true;
+  if (btnReplayPlay) btnReplayPlay.textContent = "Pause";
+  state.replayTimer = setInterval(() => {
+    if (state.replayCursor >= state.replayEvents.length - 1) {
+      setReplayPlaying(false);
+      return;
+    }
+    replaySeek(state.replayCursor + 1);
+  }, state.replayIntervalMs);
+}
+
+function updateReplayScrubberUi() {
+  const count = state.replayEvents.length;
+  const idx = Math.max(0, state.replayCursor);
+  if (replayScrubber) {
+    replayScrubber.min = "0";
+    replayScrubber.max = String(Math.max(0, count - 1));
+    replayScrubber.value = count > 0 ? String(Math.min(idx, count - 1)) : "0";
+    replayScrubber.disabled = count === 0;
+  }
+  if (replayScrubberLabel) {
+    if (count === 0) {
+      replayScrubberLabel.textContent = "0 / 0";
+    } else {
+      const rec = state.replayIndex[Math.min(idx, state.replayIndex.length - 1)] || {};
+      const topic = rec.topic ? ` ${rec.topic}` : "";
+      replayScrubberLabel.textContent = `${idx + 1} / ${count}${topic}`;
+    }
+  }
+  if (btnReplayPlay) {
+    btnReplayPlay.disabled = count === 0;
+    btnReplayPlay.textContent = state.replayPlaying ? "Pause" : "Play";
+  }
+}
+
+function normalizeReplayEvent(rec) {
+  return {
+    topic: String(rec.topic || "").toLowerCase(),
+    step: Number.isFinite(rec.step) ? rec.step : (Number(rec.t_step) || 0),
+    t: Number.isFinite(rec.t) ? rec.t : Number(rec.t || 0),
+    source: rec.source || "replay",
+    data: rec.data || {},
+  };
+}
+
+function replaySeek(targetIdx) {
+  if (state.replayEvents.length === 0) {
+    state.replayCursor = -1;
+    updateReplayScrubberUi();
+    return;
+  }
+
+  const clamped = Math.max(0, Math.min(targetIdx, state.replayEvents.length - 1));
+  const current = state.replayCursor;
+
+  if (clamped < current) {
+    const runId = state.activeRunId;
+    const replayEvents = state.replayEvents;
+    const replayIndex = state.replayIndex;
+    resetDashboardState({ preserveReplay: true });
+    state.activeRunId = runId;
+    state.replayEvents = replayEvents;
+    state.replayIndex = replayIndex;
+    state.replayCursor = -1;
+  }
+
+  for (let i = state.replayCursor + 1; i <= clamped; i++) {
+    const msg = normalizeReplayEvent(state.replayEvents[i]);
+    if (!msg.topic) continue;
+    handleMessage(msg);
+    state.replayCursor = i;
+  }
+
+  updateReplayScrubberUi();
 }
 
 function syncTopologyControlUi() {
@@ -1177,12 +1643,16 @@ window.addEventListener("resize", () => {
     }
     drawAccuracyChart();
     drawWeightChart();
+    drawResourceCharts();
   }, 150);
 });
 
 // ── Mode switching ───────────────────────────────────────────────────
 
 function setMode(mode) {
+  if (state.mode !== mode) {
+    setReplayPlaying(false);
+  }
   state.mode = mode;
 
   // Update button visuals.
@@ -1202,7 +1672,15 @@ function setMode(mode) {
   window.history.replaceState(null, "", url);
 
   if (mode === "replay") {
+    if (state.ws) {
+      state.ws.close();
+      state.ws = null;
+    }
+    setReplayControlsVisible(state.replayEvents.length > 0);
     fetchRunList();
+  } else {
+    setReplayControlsVisible(false);
+    if (!state.ws) connectWS();
   }
 }
 
@@ -1239,10 +1717,49 @@ async function fetchRunList() {
 
 btnRefreshRuns.addEventListener("click", fetchRunList);
 
+async function fetchReplayEventPage(runId, start, limit) {
+  const resp = await fetch(`/api/run/${runId}/events?start=${start}&limit=${limit}`);
+  if (!resp.ok) return null;
+  return await resp.json();
+}
+
+async function loadReplayEvents(runId) {
+  try {
+    const idxResp = await fetch(`/api/run/${runId}/events/index`);
+    if (!idxResp.ok) return false;
+    const idxPayload = await idxResp.json();
+    const indexRows = Array.isArray(idxPayload.items) ? idxPayload.items : [];
+    if (indexRows.length === 0) return false;
+
+    const events = [];
+    const pageSize = 500;
+    let cursor = 0;
+    while (cursor < indexRows.length) {
+      const page = await fetchReplayEventPage(runId, cursor, pageSize);
+      if (!page || !Array.isArray(page.events) || page.events.length === 0) break;
+      events.push(...page.events);
+      cursor += page.events.length;
+      if (typeof page.total === "number" && cursor >= page.total) break;
+    }
+    if (events.length === 0) return false;
+
+    state.replayEvents = events;
+    state.replayIndex = indexRows;
+    state.replayCursor = -1;
+    setReplayControlsVisible(true);
+    replaySeek(0);
+    return true;
+  } catch (e) {
+    console.warn("[replay] failed to load replay events:", e);
+    return false;
+  }
+}
+
 // ── Replay: load a run ───────────────────────────────────────────────
 
 async function loadRun(runId) {
   if (!runId) return;
+  setReplayPlaying(false);
   setStatus("loading");
 
   try {
@@ -1260,7 +1777,7 @@ async function loadRun(runId) {
     }
 
     // Reset dashboard state for fresh replay.
-    resetDashboardState();
+    resetDashboardState({ preserveReplay: false });
 
     state.activeRunId = runId;
 
@@ -1292,22 +1809,35 @@ async function loadRun(runId) {
       drawNetwork();
     }
 
-    // Process scalars into accuracy history + truth table.
-    renderReplayScalars(scalars);
+    // Primary replay path: recorded events. Fallback: scalars only.
+    const loadedEvents = await loadReplayEvents(runId);
+    if (!loadedEvents) {
+      setReplayControlsVisible(false);
+      renderReplayScalars(scalars);
+      setStatus("replay");
+    } else {
+      setStatus("replay");
+    }
 
     // Update URL.
     const url = new URL(window.location);
     url.searchParams.set("run", runId);
     window.history.replaceState(null, "", url);
 
-    setStatus("replay");
   } catch (e) {
     console.error("[replay] error loading run:", e);
     setStatus("failed");
   }
 }
 
-function resetDashboardState() {
+function resetDashboardState(opts = {}) {
+  const preserveReplay = !!opts.preserveReplay;
+  if (state._elapsedTimer) {
+    clearInterval(state._elapsedTimer);
+    state._elapsedTimer = null;
+  }
+  state.training = false;
+  state.trainStartTime = null;
   state.accuracyHistory = [];
   state.truthTable = {};
   state.weightHistory = {};
@@ -1322,9 +1852,26 @@ function resetDashboardState() {
   state.topologyVersion = 0;
   state.activeRunId = null;
   state.runConfig = null;
+  state.replayCursor = -1;
+  resetResourceSeries();
+  if (!preserveReplay) {
+    state.replayEvents = [];
+    state.replayIndex = [];
+    setReplayPlaying(false);
+    setReplayControlsVisible(false);
+  } else {
+    setReplayPlaying(false);
+  }
   logContainer.innerHTML = "";
   truthTbody.innerHTML = "";
   if (panelConfig) panelConfig.style.display = "none";
+  updateStats();
+  drawAccuracyChart();
+  drawWeightChart();
+  updateResourceNote();
+  drawResourceCharts();
+  drawNetwork();
+  updateReplayScrubberUi();
 }
 
 function renderReplayScalars(scalars) {
@@ -1337,6 +1884,8 @@ function renderReplayScalars(scalars) {
   statGate.textContent = state.gate;
 
   for (const row of scalars) {
+    ingestResourceMetrics(row, row.trial != null ? Number(row.trial) : state.totalTrials, { deferDraw: true });
+
     const acc = row.accuracy != null ? row.accuracy : 0;
     state.accuracyHistory.push(acc);
     state.totalTrials++;
@@ -1380,6 +1929,8 @@ function renderReplayScalars(scalars) {
   updateStats();
   drawAccuracyChart();
   renderReplayTruthTable();
+  updateResourceNote();
+  drawResourceCharts();
 }
 
 function renderReplayTruthTable() {
@@ -1422,6 +1973,20 @@ btnLoadRun.addEventListener("click", () => {
   if (runId) loadRun(runId);
 });
 
+if (btnReplayPlay) {
+  btnReplayPlay.addEventListener("click", () => {
+    setReplayPlaying(!state.replayPlaying);
+  });
+}
+
+if (replayScrubber) {
+  replayScrubber.addEventListener("input", () => {
+    setReplayPlaying(false);
+    const idx = parseInt(replayScrubber.value, 10);
+    replaySeek(Number.isFinite(idx) ? idx : 0);
+  });
+}
+
 // ── Live → Replay handoff ────────────────────────────────────────────
 
 function showRunInfoBanner(runId) {
@@ -1444,6 +2009,10 @@ function hideRunInfoBanner() {
   const mode = params.get("mode");
   const runId = params.get("run");
   initTopologyControls();
+  updateResourceNote();
+  drawResourceCharts();
+  setReplayControlsVisible(false);
+  updateReplayScrubberUi();
 
   if (mode === "replay") {
     setMode("replay");
@@ -1457,7 +2026,6 @@ function hideRunInfoBanner() {
   } else {
     // Default: live mode.
     setMode("live");
-    connectWS();
   }
 
   // In live mode, always connect WS.

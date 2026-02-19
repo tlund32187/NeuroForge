@@ -73,6 +73,19 @@ select, input[type="number"] {
 
 input[type="number"] { width: 90px; }
 
+#resource-monitor-every {
+  width: 74px;
+}
+
+.header-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
 /* ── Mode toggle ──────────────────────────────────────────────────── */
 
 .mode-toggle {
@@ -103,6 +116,25 @@ input[type="number"] { width: 90px; }
 }
 
 .control-group { display: flex; align-items: center; gap: 12px; }
+
+.replay-events-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+}
+
+#replay-scrubber {
+  width: 240px;
+}
+
+#replay-scrubber-label {
+  min-width: 88px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
 
 .btn-secondary {
   background: var(--bg-secondary);
@@ -277,6 +309,48 @@ canvas {
   height: 240px;
   display: block;
   border-radius: 4px;
+}
+
+.resource-note {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.resource-chart h3 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.resource-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.resource-stats {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resource-chart canvas {
+  height: 130px;
 }
 
 /* ── Tooltip ──────────────────────────────────────────────────────── */
