@@ -44,6 +44,7 @@ class TrainingMonitor:
         self._accuracy_history: deque[float] = deque(maxlen=max_trials)
         self._truth_table: dict[str, dict[str, Any]] = {}
         self._topology: dict[str, Any] = {}
+        self._topology_stats: dict[str, Any] = {}
         self._window_size: int = 5
         self._epoch: int = 0
 
@@ -68,6 +69,9 @@ class TrainingMonitor:
 
         elif event.topic == EventTopic.TOPOLOGY:
             self._topology = dict(event.data)
+
+        elif event.topic == EventTopic.TOPOLOGY_STATS:
+            self._topology_stats = dict(event.data)
 
         elif event.topic == EventTopic.TRAINING_TRIAL:
             trial_data: dict[str, Any] = {
@@ -115,6 +119,7 @@ class TrainingMonitor:
         self._accuracy_history.clear()
         self._truth_table.clear()
         self._topology.clear()
+        self._topology_stats.clear()
 
     def snapshot(self) -> dict[str, Any]:
         """Return JSON-serialisable training snapshot."""
@@ -138,5 +143,6 @@ class TrainingMonitor:
             "accuracy_history": list(self._accuracy_history),
             "truth_table": tt_snap,
             "topology": self._topology,
+            "topology_stats": self._topology_stats,
             "last_trials": list(self._trials)[-50:],  # last 50 for UI
         }

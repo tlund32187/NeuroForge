@@ -19,6 +19,8 @@ const state = {
   training: false,
   gate: "OR",
   topology: null,       // { layers: [...], edges: [...] }
+  topologyStats: null,  // { edges_total, bytes_total_est, projection_count, ... }
+  topologyProjections: [], // [{name, src, dst, n_edges, bytes_total_est, ...}]
   accuracyHistory: [],
   truthTable: {},
   weightHistory: {},    // { projName: { steps:[], weights:[] } }
@@ -56,6 +58,12 @@ const state = {
   stabilityFlags: makeDefaultStabilityFlags(),
   stabilityLastStep: -1,
   stabilitySamples: 0,
+  performanceSeries: {
+    msPerStep: [],
+    stepsPerSec: [],
+  },
+  performanceLastStep: -1,
+  performanceSamples: 0,
 
   // Network visualisation
   neurons: [],          // { id, layer, idx, x, y, r, color, label, totalSpikes, trialCount }
@@ -74,6 +82,7 @@ const state = {
   replayPlaying: false,
   replayTimer: null,
   replayIntervalMs: 80,
+  replayStaticTopologyStats: null, // { totals, projections } from topology-stats API
 
   // Topology view controls
   edgeMode: "sampled",  // off | sampled | full
@@ -101,15 +110,21 @@ const canvasResCpu = $("#canvas-resource-cpu");
 const canvasResRam = $("#canvas-resource-ram");
 const canvasResGpu = $("#canvas-resource-gpu");
 const canvasResCuda = $("#canvas-resource-cuda");
+const canvasPerfMs = $("#canvas-performance-ms");
+const canvasPerfSps = $("#canvas-performance-sps");
 const canvasStabilityRate = $("#canvas-stability-rate");
 const canvasStabilityWMax = $("#canvas-stability-wmax");
 const canvasStabilityGNorm = $("#canvas-stability-gnorm");
 const canvasStabilityAcc = $("#canvas-stability-acc");
 const resourceNote = $("#resource-note");
+const performanceNote = $("#performance-note");
 const resourceStatsCpu = $("#resource-stats-cpu");
 const resourceStatsRam = $("#resource-stats-ram");
 const resourceStatsGpu = $("#resource-stats-gpu");
 const resourceStatsCuda = $("#resource-stats-cuda");
+const performanceStatsMs = $("#performance-stats-ms");
+const performanceStatsSps = $("#performance-stats-sps");
+const performanceStatsContext = $("#performance-stats-context");
 const stabilityStatsRate = $("#stability-stats-rate");
 const stabilityStatsWMax = $("#stability-stats-wmax");
 const stabilityStatsGNorm = $("#stability-stats-gnorm");
@@ -120,6 +135,12 @@ const stabBadgeSaturation = $("#stab-badge-saturation");
 const stabBadgeOscillation = $("#stab-badge-oscillation");
 const stabBadgeStagnation = $("#stab-badge-stagnation");
 const tooltip     = $("#tooltip");
+const topologyStatsSummary = $("#topology-stats-summary");
+const topologyTotalEdges = $("#topology-total-edges");
+const topologyTotalBytes = $("#topology-total-bytes");
+const topologyTotalProjections = $("#topology-total-projections");
+const topologyTableEmpty = $("#topology-table-empty");
+const topologyProjTableBody = $("#topology-proj-table-body");
 const edgeModeSel = $("#topology-edge-mode");
 const edgeCountWrap = $("#topology-edge-count-wrap");
 const edgeCountSlider = $("#topology-edge-count");
@@ -233,9 +254,18 @@ function handleMessage(msg) {
       state.weightHistory = {};
       resetResourceSeries();
       resetStabilitySeries();
+      resetPerformanceSeries();
+      if (state.mode === "live") {
+        state.topologyStats = null;
+        state.topologyProjections = [];
+        state.replayStaticTopologyStats = null;
+      }
+      updateTopologyStatsSummary();
+      renderTopologyStatsPanel();
       updateResourceNote();
       drawResourceCharts();
       drawStabilityCharts();
+      drawPerformanceCharts();
       // Reset per-neuron spike stats.
       for (const n of state.neurons) {
         n.totalSpikes = 0;
@@ -253,6 +283,11 @@ function handleMessage(msg) {
 
     case "topology":
       state.topology = msg.data;
+      applyTopologyStats(
+        msg.data ? msg.data.topology_stats : null,
+        msg.data ? msg.data.projection_meta : null,
+        msg.step,
+      );
       buildNetworkLayout();
       drawNetwork();
       break;
@@ -264,6 +299,7 @@ function handleMessage(msg) {
       state.accuracyHistory.push(state.lastAccuracy);
       ingestResourceMetrics(msg.data, msg.step);
       ingestStabilityMetrics(msg.data, msg.step, { deferDraw: true });
+      ingestPerformanceMetrics(msg.data, msg.step, { deferDraw: true });
 
       updateTruthTableEntry(msg.data);
       updateNeuronSpikes(msg.data);
@@ -278,12 +314,23 @@ function handleMessage(msg) {
         renderTruthTable();
         drawNetwork();
         drawStabilityCharts();
+        drawPerformanceCharts();
       }
       break;
 
     case "scalar":
+      ingestTopologyStatsFromScalar(msg.data, msg.step);
       ingestResourceMetrics(msg.data, msg.step);
       ingestStabilityMetrics(msg.data, msg.step);
+      ingestPerformanceMetrics(msg.data, msg.step);
+      break;
+
+    case "topology_stats":
+      applyTopologyStats(
+        msg.data ? msg.data.totals : null,
+        msg.data ? msg.data.projections : null,
+        msg.step,
+      );
       break;
 
     case "weight":
@@ -322,6 +369,7 @@ function handleMessage(msg) {
       renderTruthTable();
       drawNetwork();
       drawStabilityCharts();
+      drawPerformanceCharts();
       break;
   }
 }
@@ -341,8 +389,17 @@ function applyTrainingSnapshot(snap) {
   }
   if (snap.topology) {
     state.topology = snap.topology;
+    applyTopologyStats(
+      snap.topology.topology_stats || snap.topology_stats || null,
+      snap.topology.projection_meta || null,
+      state.totalTrials,
+    );
     buildNetworkLayout();
   }
+  if (snap.topology_stats) {
+    applyTopologyStats(snap.topology_stats.totals || snap.topology_stats, snap.topology_stats.projections, state.totalTrials);
+  }
+  resetPerformanceSeries();
   resetStabilitySeries();
   state.accuracyHistory.forEach((value, idx) => {
     const parsed = parseMetricNumber(value);
@@ -358,6 +415,7 @@ function applyTrainingSnapshot(snap) {
   renderTruthTable();
   drawAccuracyChart();
   drawStabilityCharts();
+  drawPerformanceCharts();
   drawNetwork();
 }
 
@@ -400,6 +458,15 @@ function resetStabilitySeries() {
   state.stabilityFlags = makeDefaultStabilityFlags();
   state.stabilityLastStep = -1;
   state.stabilitySamples = 0;
+}
+
+function resetPerformanceSeries() {
+  state.performanceSeries = {
+    msPerStep: [],
+    stepsPerSec: [],
+  };
+  state.performanceLastStep = -1;
+  state.performanceSamples = 0;
 }
 
 function parseMetricNumber(value) {
@@ -447,6 +514,171 @@ function ratioPct(num, den) {
 
 function setText(el, text) {
   if (el) el.textContent = text;
+}
+
+function formatBytesCompact(bytes) {
+  if (bytes === null || bytes === undefined) return "--";
+  const n = Number(bytes);
+  if (!Number.isFinite(n)) return "--";
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n.toFixed(0)} B`;
+}
+
+function formatCount(value) {
+  if (value === null || value === undefined) return "--";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "--";
+  return n.toLocaleString();
+}
+
+function updateTopologyStatsSummary() {
+  if (!topologyStatsSummary) return;
+  const s = state.topologyStats;
+  if (!s) {
+    topologyStatsSummary.textContent = "No topology stats yet.";
+    return;
+  }
+  const edges = Number.isFinite(s.edges_total) ? Number(s.edges_total) : null;
+  const bytes = Number.isFinite(s.bytes_total_est) ? Number(s.bytes_total_est) : null;
+  const proj = Number.isFinite(s.projection_count) ? Number(s.projection_count) : null;
+  const edgesText = formatCount(edges);
+  const projText = formatCount(proj);
+  topologyStatsSummary.textContent =
+    `Edges: ${edgesText} | Est mem: ${formatBytesCompact(bytes)} | Projections: ${projText}`;
+}
+
+function parseProjectionStatsRows(projectionsRaw) {
+  if (!Array.isArray(projectionsRaw)) return [];
+  const rows = [];
+  for (const raw of projectionsRaw) {
+    if (!raw || typeof raw !== "object") continue;
+    const src = String(raw.src || "");
+    const dst = String(raw.dst || "");
+    const nEdges = parseMetricNumber(raw.n_edges);
+    const bytesTotal = parseMetricNumber(raw.bytes_total_est);
+    const fallbackBytes =
+      Number(parseMetricNumber(raw.bytes_idx_est) || 0)
+      + Number(parseMetricNumber(raw.bytes_delays_est) || 0)
+      + Number(parseMetricNumber(raw.bytes_weights_est) || 0)
+      + Number(parseMetricNumber(raw.bytes_dense_matrix_est) || 0);
+    rows.push({
+      name: String(raw.name || `${src}->${dst}` || "projection"),
+      src,
+      dst,
+      route: src && dst ? `${src}->${dst}` : "--",
+      topology_type: String(raw.topology_type || (raw.dense ? "dense" : "sparse")),
+      n_edges: nEdges,
+      bytes_total_est: bytesTotal !== null ? bytesTotal : fallbackBytes,
+    });
+  }
+  return rows;
+}
+
+function renderTopologyStatsPanel() {
+  const totals = state.topologyStats;
+  setText(topologyTotalEdges, formatCount(totals ? totals.edges_total : null));
+  setText(topologyTotalBytes, formatBytesCompact(totals ? totals.bytes_total_est : null));
+  setText(topologyTotalProjections, formatCount(totals ? totals.projection_count : null));
+
+  if (!topologyProjTableBody || !topologyTableEmpty) return;
+  topologyProjTableBody.innerHTML = "";
+
+  const rows = Array.isArray(state.topologyProjections) ? state.topologyProjections : [];
+  if (rows.length === 0) {
+    topologyTableEmpty.style.display = "";
+    return;
+  }
+
+  topologyTableEmpty.style.display = "none";
+  const frag = document.createDocumentFragment();
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+
+    const nameTd = document.createElement("td");
+    nameTd.textContent = row.name || "projection";
+    tr.appendChild(nameTd);
+
+    const routeTd = document.createElement("td");
+    routeTd.className = "topology-cell-dim";
+    routeTd.textContent = row.route || "--";
+    tr.appendChild(routeTd);
+
+    const typeTd = document.createElement("td");
+    typeTd.className = "topology-cell-dim";
+    typeTd.textContent = row.topology_type || "--";
+    tr.appendChild(typeTd);
+
+    const edgesTd = document.createElement("td");
+    edgesTd.textContent = formatCount(row.n_edges);
+    tr.appendChild(edgesTd);
+
+    const bytesTd = document.createElement("td");
+    bytesTd.textContent = formatBytesCompact(row.bytes_total_est);
+    tr.appendChild(bytesTd);
+
+    frag.appendChild(tr);
+  });
+  topologyProjTableBody.appendChild(frag);
+}
+
+function applyTopologyStats(totalsRaw, projectionsRaw, stepRaw) {
+  const totals = totalsRaw || {};
+  const projections = parseProjectionStatsRows(projectionsRaw);
+  let edgesTotal = parseMetricNumber(totals.edges_total);
+  let bytesTotal = parseMetricNumber(totals.bytes_total_est);
+  let projCount = parseMetricNumber(totals.projection_count);
+  let bytesDenseTotal = parseMetricNumber(totals.bytes_dense_total_est);
+
+  if (Array.isArray(projectionsRaw)) {
+    state.topologyProjections = projections;
+  }
+
+  const rows = state.topologyProjections || [];
+  if ((edgesTotal === null || bytesTotal === null || projCount === null) && rows.length > 0) {
+    let edges = 0;
+    let bytes = 0;
+    for (const p of rows) {
+      edges += Number(parseMetricNumber(p.n_edges) || 0);
+      bytes += Number(parseMetricNumber(p.bytes_total_est) || 0);
+    }
+    if (edgesTotal === null) edgesTotal = edges;
+    if (bytesTotal === null) bytesTotal = bytes;
+    if (projCount === null) projCount = rows.length;
+  }
+
+  if (edgesTotal === null && bytesTotal === null && projCount === null && bytesDenseTotal === null) {
+    return false;
+  }
+
+  state.topologyStats = {
+    step: Number.isFinite(stepRaw) ? Number(stepRaw) : state.totalTrials,
+    edges_total: edgesTotal === null ? NaN : Number(edgesTotal),
+    bytes_total_est: bytesTotal === null ? NaN : Number(bytesTotal),
+    projection_count: projCount === null ? NaN : Number(projCount),
+    bytes_dense_total_est: bytesDenseTotal === null ? NaN : Number(bytesDenseTotal),
+  };
+  updateTopologyStatsSummary();
+  renderTopologyStatsPanel();
+  return true;
+}
+
+function ingestTopologyStatsFromScalar(data, stepRaw) {
+  const dataObj = data || {};
+  if (!("topology.edges_total" in dataObj) && !("topology.bytes_total_est" in dataObj)) {
+    return false;
+  }
+  return applyTopologyStats(
+    {
+      edges_total: dataObj["topology.edges_total"],
+      bytes_total_est: dataObj["topology.bytes_total_est"],
+      projection_count: dataObj["topology.projections"],
+      bytes_dense_total_est: dataObj["topology.bytes_dense_total_est"],
+    },
+    null,
+    stepRaw,
+  );
 }
 
 function updateResourceStats() {
@@ -554,6 +786,21 @@ function pushStabilityPoint(seriesName, step, value) {
   if (series.length > 1500) series.shift();
 }
 
+function pushPerformancePoint(seriesName, step, value) {
+  const series = state.performanceSeries[seriesName];
+  if (!series) return;
+  series.push([step, value]);
+  if (series.length > 1500) series.shift();
+}
+
+function latestPerformanceValue(seriesName) {
+  const series = state.performanceSeries[seriesName];
+  if (!series || series.length === 0) return null;
+  const point = series[series.length - 1];
+  if (!Array.isArray(point) || point.length < 2) return null;
+  return parseMetricNumber(point[1]);
+}
+
 function hasResourceData() {
   return Object.values(state.resourceSeries).some((series) => series.length > 0);
 }
@@ -592,6 +839,38 @@ function updateResourceNote() {
     return;
   }
   resourceNote.textContent = "";
+}
+
+function hasPerformanceData() {
+  return Object.values(state.performanceSeries).some((series) => series.length > 0);
+}
+
+function updatePerformanceNote() {
+  if (!performanceNote) return;
+  if (!hasPerformanceData()) {
+    performanceNote.textContent = "No performance data yet (waiting for perf.* scalar events).";
+    return;
+  }
+  if (state.performanceSeries.msPerStep.length === 0 || state.performanceSeries.stepsPerSec.length === 0) {
+    performanceNote.textContent = "Partial performance data (one metric missing).";
+    return;
+  }
+  performanceNote.textContent = "";
+}
+
+function updatePerformanceStats() {
+  const ms = latestPerformanceValue("msPerStep");
+  const sps = latestPerformanceValue("stepsPerSec");
+  setText(performanceStatsMs, ms === null ? "latest -- ms" : `latest ${ms.toFixed(3)} ms`);
+  setText(performanceStatsSps, sps === null ? "latest --" : `latest ${sps.toFixed(1)}`);
+
+  const cudaAlloc = latestSeriesValue("torchCudaAllocated");
+  const cudaRes = latestSeriesValue("torchCudaReserved");
+  const gpuUtil = latestSeriesValue("gpuUtil");
+  setText(
+    performanceStatsContext,
+    `cuda alloc ${formatMb(cudaAlloc)} | cuda res ${formatMb(cudaRes)} | gpu ${formatPct(gpuUtil)}`,
+  );
 }
 
 function ingestResourceMetrics(data, stepRaw, opts = {}) {
@@ -634,6 +913,35 @@ function ingestResourceMetrics(data, stepRaw, opts = {}) {
   if (!deferDraw) {
     updateResourceNote();
     drawResourceCharts();
+  }
+  return true;
+}
+
+function ingestPerformanceMetrics(data, stepRaw, opts = {}) {
+  const dataObj = data || {};
+  const step = Number.isFinite(stepRaw) ? stepRaw : state.performanceLastStep + 1;
+  const deferDraw = !!opts.deferDraw;
+  let added = false;
+
+  const mapping = [
+    ["perf.ms_per_step", "msPerStep"],
+    ["perf.steps_per_sec", "stepsPerSec"],
+    ["ms_per_step", "msPerStep"],
+    ["steps_per_sec", "stepsPerSec"],
+  ];
+  for (const [key, seriesName] of mapping) {
+    if (!(key in dataObj)) continue;
+    const parsed = parseMetricNumber(dataObj[key]);
+    if (parsed === null) continue;
+    pushPerformancePoint(seriesName, step, parsed);
+    added = true;
+  }
+
+  if (!added) return false;
+  state.performanceLastStep = step;
+  state.performanceSamples += 1;
+  if (!deferDraw) {
+    drawPerformanceCharts();
   }
   return true;
 }
@@ -737,6 +1045,24 @@ function drawResourceCharts() {
     { points: collectPoints("torchCudaMax"), color: "#d2a8ff", label: "max" },
   ]);
   updateResourceStats();
+  updatePerformanceStats();
+}
+
+function collectPerformancePoints(seriesName) {
+  return state.performanceSeries[seriesName] || [];
+}
+
+function drawPerformanceCharts() {
+  drawResourceChart(canvasPerfMs, [
+    { points: collectPerformancePoints("msPerStep"), color: "#58a6ff", label: "ms/step" },
+  ], { fixedMin: 0 });
+
+  drawResourceChart(canvasPerfSps, [
+    { points: collectPerformancePoints("stepsPerSec"), color: "#3fb950", label: "steps/sec" },
+  ], { fixedMin: 0 });
+
+  updatePerformanceNote();
+  updatePerformanceStats();
 }
 
 function collectStabilityPoints(seriesName) {
@@ -1061,10 +1387,15 @@ function replaySeek(targetIdx) {
     const runId = state.activeRunId;
     const replayEvents = state.replayEvents;
     const replayIndex = state.replayIndex;
+    const replayStaticTopo = state.replayStaticTopologyStats;
     resetDashboardState({ preserveReplay: true });
     state.activeRunId = runId;
     state.replayEvents = replayEvents;
     state.replayIndex = replayIndex;
+    state.replayStaticTopologyStats = replayStaticTopo;
+    if (replayStaticTopo) {
+      applyTopologyStats(replayStaticTopo.totals, replayStaticTopo.projections, 0);
+    }
     state.replayCursor = -1;
   }
 
@@ -2057,10 +2388,11 @@ async function loadRun(runId) {
   setStatus("loading");
 
   try {
-    const [metaResp, cfgResp, topoResp, scalarsResp] = await Promise.all([
+    const [metaResp, cfgResp, topoResp, topoStatsResp, scalarsResp] = await Promise.all([
       fetch(`/api/run/${runId}/meta`),
       fetch(`/api/run/${runId}/config`),
       fetch(`/api/run/${runId}/topology`),
+      fetch(`/api/run/${runId}/topology-stats`),
       fetch(`/api/run/${runId}/scalars`),
     ]);
 
@@ -2079,7 +2411,17 @@ async function loadRun(runId) {
     const meta    = metaResp.ok   ? await metaResp.json()    : null;
     const config  = cfgResp.ok    ? await cfgResp.json()     : null;
     const topo    = topoResp.ok   ? await topoResp.json()    : null;
+    const topoStats = topoStatsResp.ok ? await topoStatsResp.json() : null;
     const scalars = await scalarsResp.json();
+
+    if (topoStats && typeof topoStats === "object") {
+      state.replayStaticTopologyStats = {
+        totals: topoStats.totals || topoStats,
+        projections: Array.isArray(topoStats.projections) ? topoStats.projections : [],
+      };
+    } else {
+      state.replayStaticTopologyStats = null;
+    }
 
     // Render run info in log panel (compact summary).
     if (meta) {
@@ -2099,8 +2441,20 @@ async function loadRun(runId) {
     // Topology.
     if (topo) {
       state.topology = topo;
+      applyTopologyStats(
+        topo.topology_stats || null,
+        topo.projection_meta || null,
+        0,
+      );
       buildNetworkLayout();
       drawNetwork();
+    }
+    if (state.replayStaticTopologyStats) {
+      applyTopologyStats(
+        state.replayStaticTopologyStats.totals,
+        state.replayStaticTopologyStats.projections,
+        0,
+      );
     }
 
     // Primary replay path: recorded events. Fallback: scalars only.
@@ -2110,6 +2464,13 @@ async function loadRun(runId) {
       renderReplayScalars(scalars);
       setStatus("replay");
     } else {
+      if (state.replayStaticTopologyStats) {
+        applyTopologyStats(
+          state.replayStaticTopologyStats.totals,
+          state.replayStaticTopologyStats.projections,
+          0,
+        );
+      }
       setStatus("replay");
     }
 
@@ -2139,6 +2500,8 @@ function resetDashboardState(opts = {}) {
   state.converged = null;
   state.lastAccuracy = 0;
   state.topology = null;
+  state.topologyStats = null;
+  state.topologyProjections = [];
   state.neurons = [];
   state.connections = [];
   state.allConnections = [];
@@ -2149,9 +2512,11 @@ function resetDashboardState(opts = {}) {
   state.replayCursor = -1;
   resetResourceSeries();
   resetStabilitySeries();
+  resetPerformanceSeries();
   if (!preserveReplay) {
     state.replayEvents = [];
     state.replayIndex = [];
+    state.replayStaticTopologyStats = null;
     setReplayPlaying(false);
     setReplayControlsVisible(false);
   } else {
@@ -2166,7 +2531,10 @@ function resetDashboardState(opts = {}) {
   updateResourceNote();
   drawResourceCharts();
   drawStabilityCharts();
+  drawPerformanceCharts();
   drawNetwork();
+  updateTopologyStatsSummary();
+  renderTopologyStatsPanel();
   updateReplayScrubberUi();
 }
 
@@ -2181,8 +2549,10 @@ function renderReplayScalars(scalars) {
 
   for (const row of scalars) {
     const scalarStep = row.trial != null ? Number(row.trial) : state.totalTrials;
+    ingestTopologyStatsFromScalar(row, scalarStep);
     ingestResourceMetrics(row, scalarStep, { deferDraw: true });
     ingestStabilityMetrics(row, scalarStep, { deferDraw: true });
+    ingestPerformanceMetrics(row, scalarStep, { deferDraw: true });
 
     const parsedAcc = parseMetricNumber(row.accuracy);
     const acc = parsedAcc !== null ? parsedAcc : 0;
@@ -2231,6 +2601,7 @@ function renderReplayScalars(scalars) {
   updateResourceNote();
   drawResourceCharts();
   drawStabilityCharts();
+  drawPerformanceCharts();
 }
 
 function renderReplayTruthTable() {
@@ -2309,8 +2680,11 @@ function hideRunInfoBanner() {
   const mode = params.get("mode");
   const runId = params.get("run");
   initTopologyControls();
+  updateTopologyStatsSummary();
+  renderTopologyStatsPanel();
   updateResourceNote();
   drawResourceCharts();
+  drawPerformanceCharts();
   updateStabilityBadges();
   drawStabilityCharts();
   setReplayControlsVisible(false);

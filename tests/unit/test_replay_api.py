@@ -27,6 +27,7 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (run_dir / "metrics").mkdir()
     (run_dir / "logs").mkdir()
     (run_dir / "events").mkdir()
+    (run_dir / "topology").mkdir()
 
     (run_dir / "run_meta.json").write_text(
         json.dumps({
@@ -46,6 +47,34 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "layers": ["input(2)", "hidden(6)", "output(1)"],
             "edges": [
                 {"src": "input", "dst": "hidden", "weights": [[0.1, 0.2]]},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (run_dir / "topology" / "topology_stats.json").write_text(
+        json.dumps({
+            "totals": {
+                "projection_count": 2,
+                "edges_total": 1234,
+                "bytes_total_est": 987654,
+            },
+            "projections": [
+                {
+                    "name": "input->hidden",
+                    "src": "input",
+                    "dst": "hidden",
+                    "topology_type": "sparse_random",
+                    "n_edges": 900,
+                    "bytes_total_est": 700000,
+                },
+                {
+                    "name": "hidden->output",
+                    "src": "hidden",
+                    "dst": "output",
+                    "topology_type": "dense",
+                    "n_edges": 334,
+                    "bytes_total_est": 287654,
+                },
             ],
         }),
         encoding="utf-8",
@@ -136,6 +165,7 @@ def _make_app() -> Any:
     app.router.add_get("/api/run/{run_id}/meta", srv._handle_run_meta)
     app.router.add_get("/api/run/{run_id}/config", srv._handle_run_config)
     app.router.add_get("/api/run/{run_id}/topology", srv._handle_run_topology)
+    app.router.add_get("/api/run/{run_id}/topology-stats", srv._handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", srv._handle_run_scalars)
     app.router.add_get("/api/run/{run_id}/events", srv._handle_run_events)
     app.router.add_get("/api/run/{run_id}/events/index", srv._handle_run_events_index)
@@ -217,6 +247,13 @@ class TestReplayEndpoints:
         assert status == 200
         assert "layers" in data
         assert data["layers"] == ["input(2)", "hidden(6)", "output(1)"]
+
+    def test_run_topology_stats(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/topology-stats"))
+        assert status == 200
+        assert data["totals"]["edges_total"] == 1234
+        assert len(data["projections"]) == 2
+        assert data["projections"][0]["topology_type"] == "sparse_random"
 
     def test_run_scalars(self, _artifacts: Path) -> None:  # noqa: ARG002
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/scalars"))

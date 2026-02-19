@@ -31,8 +31,26 @@ class StaticSynapseModel:
     all edges whose pre-synaptic neuron fired.
     """
 
-    def __init__(self, **_kwargs: object) -> None:  # noqa: B027
-        """Accept and discard extra keyword arguments for registry compatibility."""
+    def __init__(
+        self,
+        *,
+        use_active_edge_filter: bool = False,
+        active_edge_max_fraction: float = 0.2,
+        **_kwargs: object,
+    ) -> None:  # noqa: B027
+        """Create static synapse model.
+
+        Parameters
+        ----------
+        use_active_edge_filter:
+            When ``True``, bool-spike propagation can process only active
+            edges when the active-edge ratio is low.
+        active_edge_max_fraction:
+            Maximum active-edge ratio allowed for the active-edge fast path.
+            If the ratio is higher, the model falls back to dense masking.
+        """
+        self._use_active_edge_filter = bool(use_active_edge_filter)
+        self._active_edge_max_fraction = float(active_edge_max_fraction)
 
     # ── ISynapseModel implementation ────────────────────────────────
 
@@ -85,6 +103,31 @@ class StaticSynapseModel:
         # Float spikes  → multiply weight by spike value (0..1).
         spike_vals = pre_spikes[pre_idx]  # [E]
         if spike_vals.dtype == torch.bool:
+            if self._use_active_edge_filter:
+                active_e = spike_vals.nonzero(as_tuple=False).squeeze(1)
+                n_active = int(active_e.numel())
+                if n_active == 0:
+                    post_current = torch.zeros(
+                        n_post,
+                        device=weights.device,
+                        dtype=weights.dtype,
+                    )
+                    return SynapseStepResult(
+                        post_current={Compartment.SOMA: post_current},
+                    )
+                n_edges = int(spike_vals.numel())
+                if n_edges > 0 and (n_active / n_edges) <= self._active_edge_max_fraction:
+                    contrib = weights[active_e]
+                    active_post = post_idx[active_e]
+                    post_current = torch.zeros(
+                        n_post,
+                        device=weights.device,
+                        dtype=weights.dtype,
+                    )
+                    post_current.scatter_add_(0, active_post, contrib)
+                    return SynapseStepResult(
+                        post_current={Compartment.SOMA: post_current},
+                    )
             contrib = torch.where(spike_vals, weights, torch.zeros_like(weights))
         else:
             contrib = weights * spike_vals.to(weights.dtype)

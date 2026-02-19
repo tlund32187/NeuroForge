@@ -1,9 +1,9 @@
 """Network specification DTOs for declarative network construction.
 
-These frozen dataclasses describe the *structure* of a spiking neural
+These frozen dataclasses describe the structure of a spiking neural
 network (populations, projections, topology) without performing any
-allocation or I/O.  They are consumed by :class:`NetworkFactory` to
-produce a fully initialised :class:`CoreEngine`.
+tensor allocation or I/O. They are consumed by :class:`NetworkFactory`
+to produce a fully initialised :class:`CoreEngine`.
 """
 
 from __future__ import annotations
@@ -58,14 +58,27 @@ class ProjectionSpec:
     synapse_params:
         Keyword arguments forwarded to the synapse model constructor.
     topology:
-        Wiring / initialisation configuration.  MVP keys:
+        Wiring and initialisation configuration.
 
-        - ``type`` — ``"dense"`` (all-to-all) or ``"mask"`` (future).
-        - ``init`` — weight initialisation: ``"uniform"`` (default),
-          ``"zeros"``.
-        - ``low`` / ``high`` — bounds for uniform init (default ±0.3).
-        - ``bias`` — ``True`` to allocate a bias vector on the target
-          side of the projection.
+        ``type`` can be:
+
+        - ``"dense"``: full all-to-all matrix (existing behavior)
+        - ``"sparse_random"``: Bernoulli sampling with ``p_connect``
+        - ``"sparse_fanout"``: fixed ``fanout`` edges per pre-neuron
+        - ``"sparse_fanin"``: fixed ``fanin`` edges per post-neuron
+        - ``"block_sparse"``: sampled dense blocks with
+          ``block_pre``, ``block_post``, ``p_block``
+
+        Common keys for sparse topologies:
+
+        - ``init``: ``"uniform"`` (default) or ``"zeros"``
+        - ``low`` / ``high``: bounds for uniform init (default +/-0.3)
+        - ``bias``: ``True`` to allocate per-target bias
+        - ``delays``: optional dict
+          ``{"mode": "zeros" | "uniform_int", "max_delay": int}``
+        - ``sort``: reorder sparse edges for locality (default ``True``)
+        - ``seed``: optional per-projection seed override
+          (defaults to engine seed)
     """
 
     name: str
@@ -87,7 +100,7 @@ class NetworkSpec:
     projections:
         Ordered list of projection specifications.
     metadata:
-        Arbitrary extra data (task name, version, notes, …).
+        Arbitrary extra data (task name, version, notes, etc.).
     """
 
     populations: list[PopulationSpec]
@@ -99,21 +112,21 @@ class NetworkSpec:
 class GateNetworkSpec:
     """High-level specification for a logic-gate spiking network.
 
-    Describes the network *shape* and initialisation policy without
-    allocating any tensors.  Consumed by :func:`build_gate_network`.
+    Describes the network shape and initialisation policy without
+    allocating any tensors. Consumed by :func:`build_gate_network`.
 
     Attributes
     ----------
     input_size:
         Number of input neurons (e.g. 2 for binary gates).
     hidden_size:
-        Number of hidden neurons.  Set to 0 for the no-hidden
-        (input → output) case.
+        Number of hidden neurons. Set to 0 for the no-hidden
+        (input -> output) case.
     output_size:
         Number of output neurons (1 for single-gate tasks).
     n_inhibitory_hidden:
-        How many of the *hidden_size* neurons are inhibitory
-        (Dale's Law).  Ignored when ``hidden_size == 0``.
+        How many of the hidden neurons are inhibitory
+        (Dale's Law). Ignored when ``hidden_size == 0``.
     seed:
         Random seed for reproducible weight initialisation.
     device:
@@ -123,7 +136,7 @@ class GateNetworkSpec:
     init_scale:
         Symmetric uniform init range ``[-init_scale, +init_scale]``.
     p_connect:
-        Connection probability per possible edge.  ``1.0`` gives
+        Connection probability per possible edge. ``1.0`` gives
         fully-connected (dense) wiring; values < 1 produce a
         randomly-sampled sparse topology (seeded).
     neuron_model:

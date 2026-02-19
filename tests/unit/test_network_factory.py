@@ -143,8 +143,10 @@ class TestTopologyJson:
 
         assert "layers" in topo
         assert "edges" in topo
+        assert "projection_meta" in topo
         assert len(topo["layers"]) == 3
         assert len(topo["edges"]) == 2
+        assert len(topo["projection_meta"]) == 2
 
     def test_edge_structure(self) -> None:
         factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
@@ -157,6 +159,11 @@ class TestTopologyJson:
 
         for edge in topo["edges"]:
             assert "weights" in edge
+
+        for proj_meta in topo["projection_meta"]:
+            assert isinstance(proj_meta["n_pre"], int)
+            assert isinstance(proj_meta["n_post"], int)
+            assert isinstance(proj_meta["n_edges"], int)
 
 
 # ── Error handling ──────────────────────────────────────────────────

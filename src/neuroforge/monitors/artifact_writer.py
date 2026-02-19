@@ -4,6 +4,7 @@ Subscribes to monitor events and writes:
 - run_meta.json (RUN_START)
 - config_resolved.json (RUN_START)
 - topology.json (TOPOLOGY, once)
+- topology/topology_stats.json (TOPOLOGY_STATS)
 - metrics/scalars.csv (SCALAR / TRAINING_TRIAL)
 - training_end.json (RUN_END / TRAINING_END)
 - logs/run.log (RUN_END)
@@ -84,6 +85,7 @@ class ArtifactWriter:
         self._csv_rows = 0
 
         self._topology_written = False
+        self._topology_stats_written = False
         self._log_lines: list[str] = []
 
     # IMonitor interface
@@ -98,6 +100,8 @@ class ArtifactWriter:
             self._on_run_start(event)
         elif topic == EventTopic.TOPOLOGY:
             self._on_topology(event)
+        elif topic == EventTopic.TOPOLOGY_STATS:
+            self._on_topology_stats(event)
         elif topic in (EventTopic.SCALAR, EventTopic.TRAINING_TRIAL):
             self._on_scalar(event)
         elif topic in (EventTopic.RUN_END, EventTopic.TRAINING_END):
@@ -112,6 +116,7 @@ class ArtifactWriter:
         self._csv_header_dirty = False
         self._csv_rows = 0
         self._topology_written = False
+        self._topology_stats_written = False
         self._log_lines.clear()
 
     def snapshot(self) -> dict[str, Any]:
@@ -121,6 +126,7 @@ class ArtifactWriter:
             "csv_rows": self._csv_rows,
             "csv_fields": list(self._csv_fields),
             "topology_written": self._topology_written,
+            "topology_stats_written": self._topology_stats_written,
         }
 
     # Event handlers
@@ -150,6 +156,15 @@ class ArtifactWriter:
             encoding="utf-8",
         )
         self._topology_written = True
+
+    def _on_topology_stats(self, event: MonitorEvent) -> None:
+        topo_dir = self._run_dir / "topology"
+        topo_dir.mkdir(parents=True, exist_ok=True)
+        (topo_dir / "topology_stats.json").write_text(
+            json.dumps(event.data, indent=2, default=_json_default) + "\n",
+            encoding="utf-8",
+        )
+        self._topology_stats_written = True
 
     def _on_scalar(self, event: MonitorEvent) -> None:
         row = self._build_scalar_row(event)

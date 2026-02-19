@@ -36,8 +36,17 @@ class DalesStaticSynapseModel:
         neuron.  If ``None``, defaults to all-excitatory on first use.
     """
 
-    def __init__(self, sign_pre: Any = None) -> None:
+    def __init__(
+        self,
+        sign_pre: Any = None,
+        *,
+        use_active_edge_filter: bool = False,
+        active_edge_max_fraction: float = 0.2,
+        **_kwargs: object,
+    ) -> None:
         self._sign_pre = sign_pre
+        self._use_active_edge_filter = bool(use_active_edge_filter)
+        self._active_edge_max_fraction = float(active_edge_max_fraction)
 
     # ── ISynapseModel implementation ────────────────────────────────
 
@@ -83,6 +92,31 @@ class DalesStaticSynapseModel:
         # Spike contribution — float or bool.
         spike_vals = pre_spikes[pre_idx]  # [E]
         if spike_vals.dtype == torch.bool:
+            if self._use_active_edge_filter:
+                active_e = spike_vals.nonzero(as_tuple=False).squeeze(1)
+                n_active = int(active_e.numel())
+                if n_active == 0:
+                    post_current = torch.zeros(
+                        n_post,
+                        device=weights.device,
+                        dtype=weights.dtype,
+                    )
+                    return SynapseStepResult(
+                        post_current={Compartment.SOMA: post_current},
+                    )
+                n_edges = int(spike_vals.numel())
+                if n_edges > 0 and (n_active / n_edges) <= self._active_edge_max_fraction:
+                    contrib = w_eff[active_e]
+                    active_post = post_idx[active_e]
+                    post_current = torch.zeros(
+                        n_post,
+                        device=weights.device,
+                        dtype=weights.dtype,
+                    )
+                    post_current.scatter_add_(0, active_post, contrib)
+                    return SynapseStepResult(
+                        post_current={Compartment.SOMA: post_current},
+                    )
             contrib = torch.where(spike_vals, w_eff, torch.zeros_like(w_eff))
         else:
             contrib = w_eff * spike_vals.to(w_eff.dtype)

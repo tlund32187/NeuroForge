@@ -108,6 +108,22 @@ class TestTopology:
         topo = json.loads((run_dir / "topology.json").read_text(encoding="utf-8"))
         assert topo["edges"][0]["weights"] == [1.0, 2.0, 3.0]
 
+    def test_writes_topology_stats_json(self, tmp_path: Path) -> None:
+        run_dir = _make_run_dir(tmp_path)
+        writer = ArtifactWriter(run_dir)
+
+        writer.on_event(_event("topology_stats", {
+            "projections": [
+                {"name": "p", "n_edges": 10, "bytes_total_est": 320},
+            ],
+            "totals": {"edges_total": 10, "bytes_total_est": 320},
+        }))
+
+        path = run_dir / "topology" / "topology_stats.json"
+        assert path.exists()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["totals"]["edges_total"] == 10
+
 
 # ── SCALAR writes CSV rows ──────────────────────────────────────────
 

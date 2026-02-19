@@ -95,6 +95,7 @@
             <span>Detailed nodes</span>
           </label>
         </div>
+        <div id="topology-stats-summary" class="topology-stats-summary">No topology stats yet.</div>
         <canvas id="canvas-network"></canvas>
         <div id="tooltip" class="tooltip hidden"></div>
       </section>
@@ -152,6 +153,67 @@
       <section class="panel" id="panel-weights">
         <h2>Weight Evolution</h2>
         <canvas id="canvas-weights"></canvas>
+      </section>
+
+      <section class="panel" id="panel-performance">
+        <h2>Performance</h2>
+        <div id="performance-note" class="performance-note">
+          No performance data yet.
+        </div>
+        <div class="performance-grid">
+          <div class="performance-chart">
+            <div class="performance-chart-head">
+              <h3>ms / step</h3>
+              <div id="performance-stats-ms" class="performance-stats">latest -- ms</div>
+            </div>
+            <canvas id="canvas-performance-ms"></canvas>
+          </div>
+          <div class="performance-chart">
+            <div class="performance-chart-head">
+              <h3>steps / sec</h3>
+              <div id="performance-stats-sps" class="performance-stats">latest --</div>
+            </div>
+            <canvas id="canvas-performance-sps"></canvas>
+          </div>
+        </div>
+        <div id="performance-stats-context" class="performance-stats performance-context">
+          cuda alloc -- | cuda res -- | gpu --
+        </div>
+      </section>
+
+      <section class="panel" id="panel-topology-stats">
+        <h2>Topology</h2>
+        <div class="topology-metrics">
+          <div class="topology-metric">
+            <span class="topology-metric-label">Total edges</span>
+            <span id="topology-total-edges" class="topology-metric-value">n/a</span>
+          </div>
+          <div class="topology-metric">
+            <span class="topology-metric-label">Est bytes</span>
+            <span id="topology-total-bytes" class="topology-metric-value">n/a</span>
+          </div>
+          <div class="topology-metric">
+            <span class="topology-metric-label">Projections</span>
+            <span id="topology-total-projections" class="topology-metric-value">n/a</span>
+          </div>
+        </div>
+        <div id="topology-table-empty" class="topology-table-empty">
+          No per-projection topology stats yet.
+        </div>
+        <div class="topology-table-wrap">
+          <table id="topology-proj-table">
+            <thead>
+              <tr>
+                <th>Projection</th>
+                <th>Route</th>
+                <th>Type</th>
+                <th>Edges</th>
+                <th>Est bytes</th>
+              </tr>
+            </thead>
+            <tbody id="topology-proj-table-body"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="panel" id="panel-resources">

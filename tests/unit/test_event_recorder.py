@@ -39,6 +39,7 @@ def test_event_recorder_writes_ndjson(tmp_path: Path) -> None:
     recorder.on_event(_event(EventTopic.RUN_START, data={"ok": True}))
     recorder.on_event(_event(EventTopic.TOPOLOGY, data={"layers": ["input(2)", "output(1)"]}))
     recorder.on_event(_event(EventTopic.TOPOLOGY, data={"layers": ["ignored"]}))
+    recorder.on_event(_event(EventTopic.TOPOLOGY_STATS, data={"totals": {"edges_total": 2}}))
     recorder.on_event(_event(EventTopic.SCALAR, step=1, data={"accuracy": 0.75}))
     recorder.on_event(_event(EventTopic.WEIGHT, step=1, data={"weights": [1, 2, 3, 4]}))
     recorder.on_event(_event(EventTopic.WEIGHT, step=2, data={"weights": [1, 2, 3, 4]}))
@@ -55,6 +56,7 @@ def test_event_recorder_writes_ndjson(tmp_path: Path) -> None:
     ]
     topics = [row["topic"] for row in rows]
     assert topics.count("topology") == 1
+    assert "topology_stats" in topics
     assert "scalar" in topics
     assert "weight" in topics
 

@@ -452,14 +452,45 @@ class LogicGateTask:
         )
 
         n_in = cfg.image_h * cfg.image_w
+        dtype_name = str(gn.trainables["raw_w_in_to_hidden"].dtype).replace("torch.", "")
         topo_data: dict[str, Any] = {
             "layers": [f"input({n_in})", f"hidden({cfg.n_hidden})",
                        "output(1)"],
             "edges": [
-                {"src": "input", "dst": "hidden",
+                {"name": "input_hidden", "src": "input", "dst": "hidden",
+                 "n_pre": int(n_in), "n_post": int(cfg.n_hidden),
+                 "n_edges": int(n_in * cfg.n_hidden),
+                 "dense": True, "dtype": dtype_name, "topology_type": "dense",
                  "weights": gn.trainables["raw_w_in_to_hidden"].detach()},
-                {"src": "hidden", "dst": "output",
+                {"name": "hidden_output", "src": "hidden", "dst": "output",
+                 "n_pre": int(cfg.n_hidden), "n_post": 1,
+                 "n_edges": int(cfg.n_hidden),
+                 "dense": True, "dtype": dtype_name, "topology_type": "dense",
                  "weights": gn.trainables["raw_w_hidden_to_out"].detach()},
+            ],
+            "projection_meta": [
+                {
+                    "name": "input_hidden",
+                    "src": "input",
+                    "dst": "hidden",
+                    "n_pre": int(n_in),
+                    "n_post": int(cfg.n_hidden),
+                    "n_edges": int(n_in * cfg.n_hidden),
+                    "dense": True,
+                    "dtype": dtype_name,
+                    "topology_type": "dense",
+                },
+                {
+                    "name": "hidden_output",
+                    "src": "hidden",
+                    "dst": "output",
+                    "n_pre": int(cfg.n_hidden),
+                    "n_post": 1,
+                    "n_edges": int(cfg.n_hidden),
+                    "dense": True,
+                    "dtype": dtype_name,
+                    "topology_type": "dense",
+                },
             ],
         }
         self._emit("topology", 0, cfg.gate, topo_data)

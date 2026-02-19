@@ -65,10 +65,12 @@ def _register_neurons(hub: FactoryHub) -> None:
 
 def _register_synapses(hub: FactoryHub) -> None:
     from neuroforge.synapses.dales_static import DalesStaticSynapseModel
+    from neuroforge.synapses.delayed_static import DelayedStaticSynapseModel
     from neuroforge.synapses.static import StaticSynapseModel
 
     hub.synapses.register("static", StaticSynapseModel)
     hub.synapses.register("static_dales", DalesStaticSynapseModel)
+    hub.synapses.register("static_delayed", DelayedStaticSynapseModel)
 
 
 def _register_encoders(hub: FactoryHub) -> None:

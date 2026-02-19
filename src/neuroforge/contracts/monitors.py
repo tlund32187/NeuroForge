@@ -36,6 +36,7 @@ class EventTopic(StrEnum):
     TRAINING_START = auto()
     TRAINING_END = auto()
     TOPOLOGY = auto()
+    TOPOLOGY_STATS = auto()
     RUN_START = auto()
     RUN_END = auto()
     SCALAR = auto()

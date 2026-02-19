@@ -14,7 +14,7 @@ The engine is the ``ISimulationEngine`` implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.contracts.neurons import NeuronInputs, StepContext
 from neuroforge.contracts.simulation import SimulationConfig, StepResult
@@ -90,6 +90,8 @@ class CoreEngine:
         self._clock = SimulationClock(dt=self.config.dt)
         self._populations: dict[str, Population] = {}
         self._projections: dict[str, Projection] = {}
+        self._pop_list: list[tuple[str, Population]] = []
+        self._proj_list: list[Projection] = []
         self._built = False
 
     # ── builder API ─────────────────────────────────────────────────
@@ -100,6 +102,7 @@ class CoreEngine:
             msg = f"Duplicate population name: {pop.name!r}"
             raise ValueError(msg)
         self._populations[pop.name] = pop
+        self._pop_list.append((pop.name, pop))
         return self
 
     def add_projection(self, proj: Projection) -> CoreEngine:
@@ -108,6 +111,7 @@ class CoreEngine:
             msg = f"Duplicate projection name: {proj.name!r}"
             raise ValueError(msg)
         self._projections[proj.name] = proj
+        self._proj_list.append(proj)
         return self
 
     @property
@@ -140,12 +144,15 @@ class CoreEngine:
                 msg = f"Projection {proj.name!r}: target {proj.target!r} not found"
                 raise ValueError(msg)
 
+        self._pop_list = list(self._populations.items())
+        self._proj_list = list(self._projections.values())
+
         # Init population states
-        for pop in self._populations.values():
+        for _name, pop in self._pop_list:
             pop.state = pop.model.init_state(pop.n, device, dtype)
 
         # Init projection states
-        for proj in self._projections.values():
+        for proj in self._proj_list:
             proj.state = proj.model.init_state(proj.topology, device, dtype)
 
         self._clock.reset()
@@ -154,7 +161,7 @@ class CoreEngine:
 
     def reset(self) -> None:
         """Reset all states and the clock."""
-        for pop in self._populations.values():
+        for _name, pop in self._pop_list:
             pop.model.reset_state(pop.state)
         self._clock.reset()
 
@@ -173,6 +180,25 @@ class CoreEngine:
         -------
         StepResult:
             Step index, time, and spike tensors for each population.
+        """
+        step_result = self._step_impl(external_drive=external_drive, collect=True)
+        return cast("StepResult", step_result)
+
+    def _step_impl(
+        self,
+        external_drive: dict[str, dict[Compartment, Any]] | None = None,
+        *,
+        collect: bool,
+    ) -> StepResult | None:
+        """Advance the simulation by one time step.
+
+        Parameters
+        ----------
+        external_drive:
+            Optional external drive per population per compartment.
+            ``{pop_name: {Compartment.SOMA: tensor}}``.
+
+        Returns ``StepResult`` when ``collect=True``, otherwise ``None``.
         """
         if not self._built:
             msg = "Engine not built. Call build() first."
@@ -197,7 +223,7 @@ class CoreEngine:
 
         # 2) Compute synaptic currents from projections
         # We need pre-spikes from the previous step. On step 0, all are zero.
-        for proj in self._projections.values():
+        for proj in self._proj_list:
             source_pop = self._populations[proj.source]
             target_pop = self._populations[proj.target]
 
@@ -233,12 +259,13 @@ class CoreEngine:
                     drive[proj.target][compartment] = current
 
         # 3) Step each population
-        spikes: dict[str, Any] = {}
-        for pop_name, pop in self._populations.items():
+        spikes: dict[str, Any] | None = {} if collect else None
+        for pop_name, pop in self._pop_list:
             pop_drive = drive.get(pop_name, {})
             neuron_inputs = NeuronInputs(drive=pop_drive)
             result = pop.model.step(pop.state, neuron_inputs, ctx)
-            spikes[pop_name] = result.spikes
+            if spikes is not None:
+                spikes[pop_name] = result.spikes
 
             # Save spikes for next step's synapse computation
             pop.state["last_spikes"] = result.spikes
@@ -246,11 +273,39 @@ class CoreEngine:
         # 4) Advance clock
         self._clock.advance()
 
-        return StepResult(
-            step=step_idx,
-            t=t,
-            spikes=spikes,
-        )
+        if spikes is None:
+            return None
+        return StepResult(step=step_idx, t=t, spikes=spikes)
+
+    def run_steps(
+        self,
+        steps: int,
+        external_drive_fn: Any | None = None,
+        *,
+        collect: bool = True,
+    ) -> list[StepResult] | None:
+        """Run multiple steps with optional result collection.
+
+        Parameters
+        ----------
+        steps:
+            Number of time steps to run.
+        external_drive_fn:
+            Optional callable ``(step: int) -> dict[str, dict[Compartment, Tensor]]``
+            that provides external drive for each step.
+        collect:
+            When ``True`` (default), collect and return ``StepResult`` objects.
+            When ``False``, skip result collection and return ``None``.
+        """
+        results: list[StepResult] = []
+        for i in range(steps):
+            ext = external_drive_fn(i) if external_drive_fn else None
+            res = self._step_impl(external_drive=ext, collect=collect)
+            if collect and res is not None:
+                results.append(res)
+        if collect:
+            return results
+        return None
 
     def run(
         self,
@@ -272,8 +327,5 @@ class CoreEngine:
         list[StepResult]:
             Results for each step.
         """
-        results: list[StepResult] = []
-        for i in range(steps):
-            ext = external_drive_fn(i) if external_drive_fn else None
-            results.append(self.step(external_drive=ext))
-        return results
+        results = self.run_steps(steps, external_drive_fn, collect=True)
+        return cast("list[StepResult]", results)

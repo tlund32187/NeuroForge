@@ -35,6 +35,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from neuroforge.monitors.bus import EventBus
     from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
     from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
+    from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
     from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
     from neuroforge.runners.run_context import create_run_dir
 
@@ -55,7 +56,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ctx = create_run_dir(base_dir=args.artifacts, seed=seed, device=device)
     bus = EventBus()
     writer = ArtifactWriter(ctx.run_dir)
-    pre_write_monitors: list[Any] = []
+    pre_write_monitors: list[Any] = [
+        TopologyStatsMonitor(event_bus=bus, enabled=True),
+    ]
 
     # Trial-level enrichment (rates/sparsity/convergence) is opt-in.
     if bool(args.trial_stats):
@@ -275,6 +278,270 @@ def _cmd_stability(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: bench
+# ---------------------------------------------------------------------------
+
+
+def _cmd_bench(args: argparse.Namespace) -> int:
+    """Run a synthetic benchmark and optionally write artifacts."""
+    from neuroforge.contracts.monitors import EventTopic, MonitorEvent
+    from neuroforge.core.determinism.mode import DeterminismConfig, apply_determinism
+    from neuroforge.monitors.artifact_writer import ArtifactWriter
+    from neuroforge.monitors.bus import EventBus
+    from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
+    from neuroforge.monitors.resource_monitor import ResourceMonitor
+    from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
+    from neuroforge.runners.bench import BenchRunConfig, run_bench
+    from neuroforge.runners.run_context import create_run_dir
+
+    task_name = "bench"
+    apply_determinism(
+        DeterminismConfig(
+            seed=int(args.seed),
+            deterministic=False,
+            benchmark=True,
+            warn_only=True,
+        )
+    )
+
+    sync_cuda_timing = (
+        bool(args.sync_cuda_timing)
+        if args.sync_cuda_timing is not None
+        else str(args.device).startswith("cuda")
+    )
+    cfg = BenchRunConfig(
+        device=str(args.device),
+        dtype=str(args.dtype),
+        seed=int(args.seed),
+        n_input=int(args.n_input),
+        n_hidden=int(args.n_hidden),
+        n_output=int(args.n_output),
+        topology=str(args.topology),
+        synapse_model=str(args.synapse_model),
+        p_connect=float(args.p_connect),
+        fanout=int(args.fanout),
+        fanin=int(args.fanin),
+        block_pre=int(args.block_pre),
+        block_post=int(args.block_post),
+        p_block=float(args.p_block),
+        max_delay=int(args.max_delay),
+        steps=int(args.steps),
+        warmup=int(args.warmup),
+        amplitude=float(args.amplitude),
+        sync_cuda_timing=bool(sync_cuda_timing),
+    )
+
+    bus = EventBus()
+    ctx = None
+    writer: ArtifactWriter | None = None
+
+    pre_write_monitors: list[Any] = [
+        TopologyStatsMonitor(event_bus=bus, enabled=True),
+    ]
+    if bool(args.resources):
+        pre_write_monitors.append(
+            ResourceMonitor(
+                enabled=True,
+                every_n_steps=1,
+                include_gpu=str(cfg.device).startswith("cuda"),
+            ),
+        )
+    if str(cfg.device).startswith("cuda"):
+        pre_write_monitors.append(CudaMetricsMonitor(enabled=True))
+
+    for monitor in pre_write_monitors:
+        bus.subscribe_all(monitor)
+
+    if bool(args.write_artifacts):
+        ctx = create_run_dir(
+            base_dir=args.artifacts,
+            seed=cfg.seed,
+            device=cfg.device,
+        )
+        writer = ArtifactWriter(
+            ctx.run_dir,
+            include_resource_fields=bool(args.resources),
+        )
+        bus.subscribe_all(writer)
+
+    def _log(msg: str) -> None:
+        ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
+        line = f"[{ts}] {msg}"
+        if writer is not None:
+            writer.add_log_line(line)
+        print(line, flush=True)  # noqa: T201
+
+    def _publish(
+        topic: str,
+        *,
+        step: int,
+        data: dict[str, Any],
+        source: str = "BENCH",
+    ) -> MonitorEvent:
+        event = MonitorEvent(
+            topic=EventTopic(topic),
+            step=step,
+            t=0.0,
+            source=source,
+            data=data,
+        )
+        bus.publish(event)
+        return event
+
+    if ctx is not None:
+        _publish(
+            "run_start",
+            step=0,
+            source=task_name,
+            data={
+                "run_meta": ctx.to_dict(),
+                "config": asdict(cfg),
+            },
+        )
+
+    _publish(
+        "training_start",
+        step=0,
+        source=task_name,
+        data={
+            "task": "bench",
+            "device": cfg.device,
+            "dtype": cfg.dtype,
+            "seed": cfg.seed,
+            "steps": cfg.steps,
+            "warmup": cfg.warmup,
+            "topology": cfg.topology,
+            "synapse_model": cfg.synapse_model,
+        },
+    )
+
+    _publish(
+        "scalar",
+        step=0,
+        source=task_name,
+        data={
+            "trial": 0,
+            "gate": "BENCH",
+            "perf.phase": "start",
+            "perf.warmup_steps": cfg.warmup,
+            "perf.steps_target": cfg.steps,
+        },
+    )
+
+    _log(f"device   : {cfg.device}")
+    _log(f"dtype    : {cfg.dtype}")
+    _log(f"topology : {cfg.topology}")
+    _log(f"synapse  : {cfg.synapse_model}")
+    _log(f"shape    : in={cfg.n_input} hidden={cfg.n_hidden} out={cfg.n_output}")
+    _log(f"steps    : warmup={cfg.warmup} timed={cfg.steps}")
+
+    bench_t0 = time.perf_counter()
+    try:
+        summary = run_bench(cfg)
+    except Exception as exc:
+        wall_ms = (time.perf_counter() - bench_t0) * 1_000.0
+        _publish(
+            "run_end",
+            step=0,
+            source=task_name,
+            data={
+                "converged": False,
+                "failed": True,
+                "error": str(exc),
+                "wall_ms": round(wall_ms, 1),
+            },
+        )
+        if writer is not None:
+            writer.flush()
+        print(f"Benchmark failed: {exc}", file=sys.stderr)  # noqa: T201
+        return 2
+
+    wall_ms = (time.perf_counter() - bench_t0) * 1_000.0
+    topology_json = summary.pop("topology_json", None)
+    if topology_json is not None:
+        _publish(
+            "topology",
+            step=0,
+            source=task_name,
+            data=topology_json,
+        )
+
+    final_scalar = _publish(
+        "scalar",
+        step=cfg.steps,
+        source=task_name,
+        data={
+            "trial": cfg.steps,
+            "epoch": 0,
+            "gate": "BENCH",
+            "wall_ms": round(float(summary["wall_elapsed_s"]) * 1000.0, 3),
+            "perf.steps_per_sec": float(summary["steps_per_sec"]),
+            "perf.ms_per_step": float(summary["ms_per_step"]),
+            "perf.edge_count_total": int(summary["edge_count_total"]),
+            "perf.topology": cfg.topology,
+            "perf.synapse_model": cfg.synapse_model,
+            "perf.n_input": cfg.n_input,
+            "perf.n_hidden": cfg.n_hidden,
+            "perf.n_output": cfg.n_output,
+        },
+    )
+    for key, value in final_scalar.data.items():
+        if (
+            key.startswith("resource.")
+            or key.startswith("torch_cuda_")
+            or key.startswith("cuda_mem_")
+        ):
+            summary[key] = value
+
+    summary["wall_ms_cli"] = round(wall_ms, 1)
+
+    if ctx is not None:
+        summary["run_id"] = ctx.run_id
+        summary["run_dir"] = str(ctx.run_dir)
+        bench_dir = ctx.run_dir / "bench"
+        bench_dir.mkdir(parents=True, exist_ok=True)
+        (bench_dir / "bench_summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    _publish(
+        "training_end",
+        step=cfg.steps,
+        source=task_name,
+        data={
+            "converged": True,
+            "bench": True,
+            "steps": cfg.steps,
+            "wall_ms": round(wall_ms, 1),
+            "steps_per_sec": float(summary["steps_per_sec"]),
+            "ms_per_step": float(summary["ms_per_step"]),
+        },
+    )
+    _publish(
+        "run_end",
+        step=cfg.steps,
+        source=task_name,
+        data={
+            "converged": True,
+            "bench": True,
+            "steps": cfg.steps,
+            "wall_ms": round(wall_ms, 1),
+        },
+    )
+
+    if writer is not None:
+        writer.flush()
+
+    _log(f"steps/s  : {summary['steps_per_sec']:.2f}")
+    _log(f"ms/step  : {summary['ms_per_step']:.4f}")
+    if "run_dir" in summary:
+        _log(f"artifacts: {summary['run_dir']}")
+    print(json.dumps(summary, indent=2), flush=True)  # noqa: T201
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: ui
 # ---------------------------------------------------------------------------
 
@@ -333,6 +600,11 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from neuroforge.runners.bench import (
+        SUPPORTED_BENCH_SYNAPSES,
+        SUPPORTED_BENCH_TOPOLOGIES,
+    )
+
     parser = argparse.ArgumentParser(
         prog="neuroforge",
         description="NeuroForge — spiking neural network toolkit",
@@ -507,6 +779,131 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Torch device: auto, cpu, or cuda (default: auto)",
     )
 
+    p_bench = sub.add_parser("bench", help="Run synthetic performance benchmark")
+    p_bench.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device (e.g. cpu, cuda, cuda:0). Default: cpu",
+    )
+    p_bench.add_argument(
+        "--dtype",
+        default="float32",
+        help="Torch dtype string (default: float32)",
+    )
+    p_bench.add_argument("--seed", type=int, default=1234, help="Random seed (default: 1234)")
+    p_bench.add_argument("--n-input", type=int, default=64, help="Input population size")
+    p_bench.add_argument("--n-hidden", type=int, default=256, help="Hidden population size")
+    p_bench.add_argument("--n-output", type=int, default=1, help="Output population size")
+    p_bench.add_argument(
+        "--topology",
+        choices=list(SUPPORTED_BENCH_TOPOLOGIES),
+        default="sparse_random",
+        help="Projection topology type",
+    )
+    p_bench.add_argument(
+        "--synapse-model",
+        choices=list(SUPPORTED_BENCH_SYNAPSES),
+        default="static",
+        help="Synapse model key",
+    )
+    p_bench.add_argument(
+        "--p-connect",
+        type=float,
+        default=0.1,
+        help="Connection probability for sparse_random",
+    )
+    p_bench.add_argument(
+        "--fanout",
+        type=int,
+        default=16,
+        help="Fanout per pre-neuron for sparse_fanout",
+    )
+    p_bench.add_argument(
+        "--fanin",
+        type=int,
+        default=16,
+        help="Fanin per post-neuron for sparse_fanin",
+    )
+    p_bench.add_argument(
+        "--block-pre",
+        type=int,
+        default=16,
+        help="Block pre size for block_sparse",
+    )
+    p_bench.add_argument(
+        "--block-post",
+        type=int,
+        default=16,
+        help="Block post size for block_sparse",
+    )
+    p_bench.add_argument(
+        "--p-block",
+        type=float,
+        default=0.25,
+        help="Block keep probability for block_sparse",
+    )
+    p_bench.add_argument(
+        "--max-delay",
+        type=int,
+        default=3,
+        help="Max random edge delay for static_delayed",
+    )
+    p_bench.add_argument("--steps", type=int, default=2000, help="Timed steps")
+    p_bench.add_argument("--warmup", type=int, default=200, help="Warmup steps")
+    p_bench.add_argument(
+        "--amplitude",
+        type=float,
+        default=20.0,
+        help="Input drive amplitude",
+    )
+    sync_group = p_bench.add_mutually_exclusive_group()
+    sync_group.add_argument(
+        "--sync-cuda-timing",
+        dest="sync_cuda_timing",
+        action="store_true",
+        help="Use CUDA event timing (default on for CUDA devices)",
+    )
+    sync_group.add_argument(
+        "--no-sync-cuda-timing",
+        dest="sync_cuda_timing",
+        action="store_false",
+        help="Disable CUDA event timing",
+    )
+    p_bench.set_defaults(sync_cuda_timing=None)
+    write_group = p_bench.add_mutually_exclusive_group()
+    write_group.add_argument(
+        "--write-artifacts",
+        dest="write_artifacts",
+        action="store_true",
+        help="Write bench artifacts (default: on)",
+    )
+    write_group.add_argument(
+        "--no-write-artifacts",
+        dest="write_artifacts",
+        action="store_false",
+        help="Do not write run artifacts",
+    )
+    p_bench.set_defaults(write_artifacts=True)
+    resources_group = p_bench.add_mutually_exclusive_group()
+    resources_group.add_argument(
+        "--resources",
+        dest="resources",
+        action="store_true",
+        help="Enable resource monitor during bench (default: on)",
+    )
+    resources_group.add_argument(
+        "--no-resources",
+        dest="resources",
+        action="store_false",
+        help="Disable resource monitor during bench",
+    )
+    p_bench.set_defaults(resources=True)
+    p_bench.add_argument(
+        "--artifacts",
+        default="artifacts",
+        help="Base dir for run artifacts (default: artifacts)",
+    )
+
     p_ui = sub.add_parser("ui", help="Launch the dashboard web server")
     p_ui.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     p_ui.add_argument("--port", type=int, default=8050, help="Bind port (default: 8050)")
@@ -539,6 +936,7 @@ def main(argv: list[str] | None = None) -> None:
     dispatch = {
         "run": _cmd_run,
         "stability": _cmd_stability,
+        "bench": _cmd_bench,
         "ui": _cmd_ui,
         "list-runs": _cmd_list_runs,
     }

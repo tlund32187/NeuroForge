@@ -13,6 +13,7 @@ Serves static files (HTML/CSS/JS) and provides:
 - ``GET /api/run/<run_id>/meta``    — run_meta.json
 - ``GET /api/run/<run_id>/config``  — config_resolved.json
 - ``GET /api/run/<run_id>/topology``— topology.json
+- ``GET /api/run/<run_id>/topology-stats`` — topology/topology_stats.json
 - ``GET /api/run/<run_id>/scalars`` — metrics/scalars.csv as JSON
 
 The training task runs in a background thread so the event loop stays
@@ -38,6 +39,7 @@ from neuroforge.monitors.event_recorder import EventRecorderMonitor
 from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
 from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
+from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
@@ -293,8 +295,10 @@ async def _handle_train(request: web.Request) -> web.Response:
     stability_monitor = StabilityMonitor(
         StabilityConfig(enabled=True, check_every_n_trials=5, fail_fast=False),
     )
+    topology_stats_monitor = TopologyStatsMonitor(event_bus=_bus, enabled=True)
     _bus.subscribe_all(trial_stats_monitor)
     _bus.subscribe_all(stability_monitor)
+    _bus.subscribe_all(topology_stats_monitor)
 
     # Optional resource monitor: enriches SCALAR payloads.
     resource_monitor: ResourceMonitor | None = None
@@ -532,6 +536,20 @@ async def _handle_run_topology(request: web.Request) -> web.Response:
     )
 
 
+async def _handle_run_topology_stats(request: web.Request) -> web.Response:
+    """Serve topology/topology_stats.json for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = run_dir / "topology" / "topology_stats.json"
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        text=path.read_text(encoding="utf-8"),
+        content_type="application/json",
+    )
+
+
 async def _handle_run_scalars(request: web.Request) -> web.Response:
     """Serve metrics/scalars.csv as a JSON array of objects."""
     run_dir = _safe_run_dir(request.match_info["run_id"])
@@ -679,6 +697,7 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     app.router.add_get("/api/run/{run_id}/meta", _handle_run_meta)
     app.router.add_get("/api/run/{run_id}/config", _handle_run_config)
     app.router.add_get("/api/run/{run_id}/topology", _handle_run_topology)
+    app.router.add_get("/api/run/{run_id}/topology-stats", _handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", _handle_run_scalars)
     app.router.add_get("/api/run/{run_id}/events", _handle_run_events)
     app.router.add_get("/api/run/{run_id}/events/index", _handle_run_events_index)

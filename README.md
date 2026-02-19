@@ -119,6 +119,63 @@ The report includes per-seed outcomes plus aggregates such as:
 - Stability flags are numeric (`0` = clear, `1` = detected) for easy filtering/alerting.
 - Blank cells mean a metric was not emitted for that step/cadence (not necessarily an error).
 
+## Phase 7: Sparse & Performance
+
+Phase 7 adds sparse projection construction, delayed/static performance plumbing,
+and benchmark-focused tooling for larger networks.
+
+### Sparse Projection Topologies
+
+`ProjectionSpec.topology` supports:
+
+- `type: "dense"` (existing all-to-all)
+- `type: "sparse_random"` with `p_connect`
+- `type: "sparse_fanout"` with `fanout`
+- `type: "sparse_fanin"` with `fanin`
+- `type: "block_sparse"` with `block_pre`, `block_post`, `p_block`
+
+Common sparse keys:
+
+- `init: "uniform" | "zeros"`
+- `low`, `high` (for uniform init)
+- `bias: true|false`
+- `delays: {"mode": "zeros" | "uniform_int", "max_delay": int}`
+- `sort: true|false` (default `true`)
+- `seed` (optional per-projection override)
+
+Example:
+
+```python
+ProjectionSpec(
+    "input_hidden",
+    "input",
+    "hidden",
+    "static",
+    topology={
+        "type": "sparse_fanout",
+        "fanout": 64,
+        "init": "uniform",
+        "low": -0.2,
+        "high": 0.2,
+        "delays": {"mode": "uniform_int", "max_delay": 2},
+        "sort": True,
+    },
+)
+```
+
+### Benchmark Runner
+
+Use the bench command to collect Phase 7 throughput/memory baselines:
+
+```bash
+neuroforge bench --device cuda:0 --topology sparse_fanout --fanout 64 --n-hidden 8192 --steps 5000
+```
+
+### Notes
+
+- `static_delayed` synapse is currently intended for benchmark/inference workflows; training-gradient support is planned later.
+- Active-edge filtering in static synapses is opt-in (`use_active_edge_filter=True`) and disabled by default.
+
 ## Resource Monitoring (Opt-in)
 
 Resource monitoring is disabled by default. Enable it through training config:
