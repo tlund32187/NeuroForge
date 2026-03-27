@@ -598,8 +598,10 @@ def _main(argv: list[str] | None = None) -> int:
     print(  # noqa: T201
         "Poker-DVS (non-gating): "
         f"status={poker.get('status', 'WARN')} "
-        f"succeeded={poker_summary.get('succeeded_runs', 0)}/{poker_summary.get('total_runs', 0)} "
-        f"confusion={poker_summary.get('runs_with_confusion', 0)}/{poker_summary.get('total_runs', 0)}"
+        f"succeeded={poker_summary.get('succeeded_runs', 0)}"
+        f"/{poker_summary.get('total_runs', 0)} "
+        f"confusion={poker_summary.get('runs_with_confusion', 0)}"
+        f"/{poker_summary.get('total_runs', 0)}"
     )
     print(f"Gate summary: B1={summary.get('b1_pass')} B2={summary.get('b2_pass')}")  # noqa: T201
     print(f"Report: {report_path}")  # noqa: T201

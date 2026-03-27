@@ -1,4 +1,4 @@
-# pyright: basic
+# pyright: basic, reportMissingImports=false
 """Unit tests for TrialStatsMonitor."""
 
 from __future__ import annotations

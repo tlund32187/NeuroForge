@@ -6,7 +6,7 @@ import csv
 import json
 import math
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 from neuroforge.core.torch_utils import require_torch
@@ -53,8 +53,9 @@ def _as_int_list(value: Any) -> list[int]:
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
+        _val = cast("Any", value)
         out: list[int] = []
-        for item in value:
+        for item in _val:
             try:
                 out.append(int(item))
             except (TypeError, ValueError):
@@ -98,7 +99,7 @@ class VisionLayerStatsMonitor:
 
         layer_rows: dict[str, dict[str, Any]] = {}
         for key, raw_value in event.data.items():
-            if not isinstance(key, str) or not key.startswith(_LAYER_PREFIX):
+            if not isinstance(key, str) or not key.startswith(_LAYER_PREFIX):  # pyright: ignore[reportUnnecessaryIsInstance]
                 continue
             tail = key[len(_LAYER_PREFIX):]
             if "." not in tail:
@@ -211,13 +212,16 @@ class ConfusionMatrixMonitor:
             dataset_meta = event.data.get("dataset_meta")
             class_names: list[str] = []
             if isinstance(dataset_meta, dict):
-                raw_class_names = dataset_meta.get("class_names")
+                _meta = cast("Any", dataset_meta)
+                raw_class_names = _meta.get("class_names")
                 if isinstance(raw_class_names, list):
-                    class_names = [str(name) for name in raw_class_names if str(name).strip()]
+                    _names = cast("Any", raw_class_names)
+                    class_names = [str(name) for name in _names if str(name).strip()]
             if not class_names:
                 raw_class_names = event.data.get("class_names")
                 if isinstance(raw_class_names, list):
-                    class_names = [str(name) for name in raw_class_names if str(name).strip()]
+                    _names = cast("Any", raw_class_names)
+                    class_names = [str(name) for name in _names if str(name).strip()]
             self._class_names = class_names
             return
         if event.topic != EventTopic.TRAINING_TRIAL:
@@ -344,9 +348,8 @@ class VisionSampleGridMonitor:
             return
         if event.topic != EventTopic.TRAINING_TRIAL:
             return
-        if len(self._samples) >= self.max_samples:
-            if self._event_sample is not None:
-                return
+        if len(self._samples) >= self.max_samples and self._event_sample is not None:
+            return
 
         images = event.data.get("images")
         if images is None or not hasattr(images, "detach"):
@@ -572,18 +575,22 @@ class VisionSampleGridExporter:
         )
 
     @staticmethod
-    def _extract_event_duration(dataset_meta: dict[str, Any] | None) -> tuple[int | None, str | None]:
+    def _extract_event_duration(
+        dataset_meta: dict[str, Any] | None,
+    ) -> tuple[int | None, str | None]:
         if not isinstance(dataset_meta, dict):
             return None, None
         transforms_summary = dataset_meta.get("transforms_summary")
         if not isinstance(transforms_summary, dict):
             return None, None
-        train_rows = transforms_summary.get("train")
+        _tsdict = cast("Any", transforms_summary)
+        train_rows = _tsdict.get("train")
         if not isinstance(train_rows, list):
             return None, None
+        _rows = cast("Any", train_rows)
         duration_us: int | None = None
         slice_mode: str | None = None
-        for row in train_rows:
+        for row in _rows:
             text = str(row)
             if "EventSlice(" not in text:
                 continue

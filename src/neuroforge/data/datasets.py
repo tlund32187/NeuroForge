@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.core.torch_utils import require_torch
 from neuroforge.data.event_dataset_adapter import (
@@ -296,18 +296,23 @@ def _event_defaults(name: str) -> tuple[int, tuple[int, int, int]]:
 def _infer_event_n_classes(dataset: Any, *, dataset_name: str) -> int:
     classes = getattr(dataset, "classes", None)
     if isinstance(classes, (tuple, list, set)):
-        count = int(len(classes))
+        _cls = cast("Any", classes)
+        count = int(len(_cls))
         if count > 1:
             return count
 
     targets = getattr(dataset, "targets", None)
-    if isinstance(targets, torch.Tensor) and targets.numel() > 0:
-        return int(targets.max().item()) + 1
-    if isinstance(targets, tuple | list) and len(targets) > 0:
-        try:
-            return int(max(int(v) for v in targets)) + 1
-        except (TypeError, ValueError):
-            pass
+    if isinstance(targets, torch.Tensor):
+        _t = cast("Any", targets)
+        if _t.numel() > 0:
+            return int(_t.max().item()) + 1
+    if isinstance(targets, tuple | list):
+        _tgt = cast("Any", targets)
+        if len(_tgt) > 0:
+            try:
+                return int(max(int(v) for v in _tgt)) + 1
+            except (TypeError, ValueError):
+                pass
 
     fallback, _ = _event_defaults(dataset_name)
     return fallback
@@ -318,8 +323,9 @@ def _resolve_sensor_size(dataset: Any, *, dataset_name: str) -> tuple[int, int, 
     raw = getattr(dataset, "sensor_size", None)
     if not isinstance(raw, tuple | list):
         return default_sensor
+    _raw = cast("Any", raw)
     values: list[int] = []
-    for value in raw:
+    for value in _raw:
         try:
             values.append(int(value))
         except (TypeError, ValueError):
@@ -626,7 +632,10 @@ class DatasetFactory:
             height=int(tensor_cfg.height),
             width=int(tensor_cfg.width),
             sensor_size=(int(sensor_w), int(sensor_h), int(sensor_c)),
-            class_names=tuple(str(idx) for idx in range(_infer_event_n_classes(train_raw, dataset_name=cfg.name))),
+            class_names=tuple(
+                str(idx)
+                for idx in range(_infer_event_n_classes(train_raw, dataset_name=cfg.name))
+            ),
         )
         return DatasetLoaders(
             train=train_loader,

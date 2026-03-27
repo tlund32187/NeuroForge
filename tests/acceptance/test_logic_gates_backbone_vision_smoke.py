@@ -37,7 +37,11 @@ def test_logic_gates_backbone_tiny_preset_writes_vision_artifacts(tmp_path: Path
     run_dir = Path(str(runs[0]["run_dir"]))
     metrics_dir = run_dir / "vision" / "metrics"
     samples_dir = run_dir / "vision" / "samples"
-    assert (metrics_dir / "confusion_matrix.npy").exists() or (metrics_dir / "confusion_matrix.json").exists()
+    has_confusion = (
+        (metrics_dir / "confusion_matrix.npy").exists()
+        or (metrics_dir / "confusion_matrix.json").exists()
+    )
+    assert has_confusion
     assert (metrics_dir / "vision_layer_stats.csv").exists()
     assert (samples_dir / "input_grid.png").exists()
 

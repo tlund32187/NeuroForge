@@ -21,8 +21,14 @@
             "reportUnknownMemberType": false,
             "reportUnknownVariableType": false,
             "reportUnknownArgumentType": false,
+            "reportUnknownParameterType": false,
             "reportPrivateUsage": false,
-            "reportMissingTypeStubs": false
+            "reportAttributeAccessIssue": false,
+            "reportMissingTypeStubs": false,
+            "reportMissingImports": false,
+            "reportMissingModuleSource": false,
+            "reportUntypedFunctionDecorator": false,
+            "reportUntypedClassDecorator": false
         }
     ]
 }

@@ -39,10 +39,11 @@ def _validate_kernel_size(value: object, *, field_name: str) -> None:
     if _is_positive_int(value):
         return
     if isinstance(value, tuple | list):
-        if len(value) != 2:
+        val = cast("Any", value)
+        if len(val) != 2:
             msg = f"{field_name} must be an int or a 2-tuple; got {value!r}"
             raise ValueError(msg)
-        if all(_is_positive_int(v) for v in value):
+        if all(_is_positive_int(v) for v in val):
             return
     msg = f"{field_name} must be an int or a 2-tuple of positive integers; got {value!r}"
     raise ValueError(msg)
@@ -77,7 +78,7 @@ class VisionBlockSpec:
                 f"{sorted(_VISION_BLOCK_TYPES)}; got {self.type!r}"
             )
             raise ValueError(msg)
-        if not isinstance(self.params, dict):
+        if not isinstance(self.params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             msg = "VisionBlockSpec.params must be a dict[str, Any]"
             raise ValueError(msg)
         object.__setattr__(self, "type", block_type)
@@ -162,8 +163,8 @@ class VisionBackboneSpec:
             raise ValueError(msg)
         object.__setattr__(self, "type", backbone_type)
 
-        if not isinstance(self.input, VisionInputSpec):
-            if isinstance(self.input, dict):
+        if not isinstance(self.input, VisionInputSpec):  # pyright: ignore[reportUnnecessaryIsInstance]
+            if isinstance(self.input, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raw = cast("dict[object, Any]", self.input)
                 try:
                     parsed_input = VisionInputSpec(
@@ -194,7 +195,7 @@ class VisionBackboneSpec:
             raise ValueError(msg)
         object.__setattr__(self, "encoding_mode", encoding_mode)
 
-        if not isinstance(self.blocks, list):
+        if not isinstance(self.blocks, list):  # pyright: ignore[reportUnnecessaryIsInstance]
             msg = "VisionBackboneSpec.blocks must be a list[VisionBlockSpec]"
             raise ValueError(msg)
         if not self.blocks:
@@ -203,10 +204,10 @@ class VisionBackboneSpec:
 
         parsed_blocks: list[VisionBlockSpec] = []
         for idx, block in enumerate(self.blocks):
-            if isinstance(block, VisionBlockSpec):
+            if isinstance(block, VisionBlockSpec):  # pyright: ignore[reportUnnecessaryIsInstance]
                 parsed_blocks.append(block)
                 continue
-            if isinstance(block, dict):
+            if isinstance(block, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raw_block = cast("dict[object, Any]", block)
                 block_type = raw_block.get("type")
                 if block_type is None:

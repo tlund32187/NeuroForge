@@ -13,7 +13,7 @@ from __future__ import annotations
 import importlib
 import inspect
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from neuroforge.core.torch_utils import require_torch
 
@@ -222,7 +222,7 @@ def _extract_event_fields(events: Any) -> tuple[Any, Any, Any, Any]:
         )
 
     # Generic sequence case: (t, x, y, polarity).
-    if isinstance(events, tuple | list) and len(events) >= 4:
+    if isinstance(events, tuple | list) and len(events) >= 4:  # pyright: ignore[reportUnknownArgumentType]
         return (
             _as_1d_tensor(events[0], dtype=torch.int64),
             _as_1d_tensor(events[1], dtype=torch.int64),
@@ -273,10 +273,10 @@ class EventDatasetAdapter:
 
     def __getitem__(self, index: int) -> tuple[Any, Any]:
         sample = self._dataset[index]
-        if not isinstance(sample, tuple | list) or len(sample) < 2:
+        if not isinstance(sample, tuple | list) or len(sample) < 2:  # pyright: ignore[reportUnknownArgumentType]
             msg = "Dataset samples must be (events, label)"
             raise ValueError(msg)
-        events_raw = sample[0]
+        events_raw = cast("Any", sample[0])
         label = _coerce_label(sample[1])
 
         t, x, y, p = _extract_event_fields(events_raw)

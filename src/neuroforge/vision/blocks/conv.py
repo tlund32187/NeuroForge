@@ -59,7 +59,7 @@ class SpikingConvBlock(nn.Module):
         spike_threshold: float = 0.0,
         spike_beta: float = 5.0,
     ) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
         if padding is None:
             k_h, k_w = _to_pair(kernel_size)
             padding = (k_h // 2, k_w // 2)

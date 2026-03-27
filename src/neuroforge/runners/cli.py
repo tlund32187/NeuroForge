@@ -604,7 +604,9 @@ def _cmd_vision(args: argparse.Namespace) -> int:
         dataset_event_count=int(args.dataset_event_count),
         dataset_event_polarity_channels=int(args.dataset_event_polarity_channels),
         dataset_logic_image_size=int(args.dataset_logic_image_size),
-        dataset_logic_gates=tuple(str(v) for v in str(args.dataset_logic_gates).split(",") if str(v).strip()),
+        dataset_logic_gates=tuple(
+            str(v) for v in str(args.dataset_logic_gates).split(",") if str(v).strip()
+        ),
         dataset_logic_mode=str(args.dataset_logic_mode),
         dataset_logic_single_gate=str(args.dataset_logic_single_gate),
         dataset_logic_samples_per_gate=int(args.dataset_logic_samples_per_gate),
@@ -1161,7 +1163,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_vision.add_argument("--n-classes", type=int, default=4, help="Class count")
     p_vision.add_argument(
         "--dataset",
-        choices=["synthetic", "mnist", "fashion_mnist", "nmnist", "pokerdvs", "logic_gates_pixels"],
+        choices=[
+            "synthetic", "mnist", "fashion_mnist",
+            "nmnist", "pokerdvs", "logic_gates_pixels",
+        ],
         default="synthetic",
         help="Dataset source (default: synthetic)",
     )

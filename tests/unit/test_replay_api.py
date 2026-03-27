@@ -1,4 +1,4 @@
-# pyright: basic
+# pyright: basic, reportMissingImports=false
 """Unit tests for the dashboard replay API endpoints."""
 
 from __future__ import annotations
@@ -182,8 +182,10 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     tiny_png = (
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XfOQAAAAASUVORK5CYII="
     )
-    (run_dir / "vision" / "samples" / "input_grid.png").write_bytes(base64.b64decode(tiny_png))
-    (run_dir / "vision" / "samples" / "event_bins_grid.png").write_bytes(base64.b64decode(tiny_png))
+    samples = run_dir / "vision" / "samples"
+    samples_png = base64.b64decode(tiny_png)
+    (samples / "input_grid.png").write_bytes(samples_png)
+    (samples / "event_bins_grid.png").write_bytes(samples_png)
     (run_dir / "vision" / "samples" / "event_sum.png").write_bytes(base64.b64decode(tiny_png))
     (run_dir / "vision" / "metrics" / "event_sample_stats.json").write_text(
         json.dumps({
@@ -252,8 +254,12 @@ def _make_app() -> Any:
     app.router.add_get("/api/run/{run_id}/topology", srv._handle_run_topology)
     app.router.add_get("/api/run/{run_id}/topology-stats", srv._handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", srv._handle_run_scalars)
-    app.router.add_get("/api/run/{run_id}/vision/sample-grid", srv._handle_run_vision_sample_grid)
-    app.router.add_get("/api/run/{run_id}/vision/event-sample", srv._handle_run_vision_event_sample)
+    app.router.add_get(  # noqa: E501
+        "/api/run/{run_id}/vision/sample-grid", srv._handle_run_vision_sample_grid,
+    )
+    app.router.add_get(  # noqa: E501
+        "/api/run/{run_id}/vision/event-sample", srv._handle_run_vision_event_sample,
+    )
     app.router.add_get("/api/run/{run_id}/vision/event-image", srv._handle_run_vision_event_image)
     app.router.add_get("/api/run/{run_id}/vision/confusion", srv._handle_run_vision_confusion)
     app.router.add_get("/api/run/{run_id}/vision/layer-stats", srv._handle_run_vision_layer_stats)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.core.torch_utils import require_torch
 from neuroforge.vision.backbones.state import VisionState
@@ -23,10 +23,11 @@ def _to_pair(value: object, *, default: int) -> int | tuple[int, int]:
     if isinstance(value, int):
         return int(value)
     if isinstance(value, tuple | list):
-        if len(value) != 2:
+        val = cast("Any", value)
+        if len(val) != 2:
             msg = f"Expected int or 2-tuple/list, got {value!r}"
             raise ValueError(msg)
-        return (int(value[0]), int(value[1]))
+        return (int(val[0]), int(val[1]))
     msg = f"Expected int or 2-tuple/list, got {value!r}"
     raise ValueError(msg)
 
@@ -35,7 +36,7 @@ class LifConvNetV1(nn.Module):
     """Minimal spiking ConvNet backbone with temporal encoding support."""
 
     def __init__(self, spec: VisionBackboneSpec) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
         if spec.type != "lif_convnet_v1":
             msg = f"LifConvNetV1 requires spec.type='lif_convnet_v1', got {spec.type!r}"
             raise ValueError(msg)

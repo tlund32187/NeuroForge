@@ -1,4 +1,4 @@
-# pyright: basic
+# pyright: basic, reportMissingImports=false
 """CUDA smoke tests — skipped automatically on CPU-only systems.
 
 Run explicitly with::

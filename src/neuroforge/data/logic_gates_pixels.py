@@ -229,10 +229,7 @@ def build_logic_gates_pixels_splits(cfg: LogicGatesPixelsConfig) -> LogicGatesPi
                 image_size=int(cfg.image_size),
                 include_gate_context=include_gate_context,
             )
-            if cfg.mode == "single_gate":
-                label = int(table[bits])
-            else:
-                label = int(gate_idx)
+            label = int(table[bits]) if cfg.mode == "single_gate" else int(gate_idx)
             images.append(image)
             labels.append(label)
 

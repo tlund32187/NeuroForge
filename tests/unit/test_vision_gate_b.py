@@ -112,7 +112,8 @@ def _fake_result(
         )
 
     aggregate_path = (
-        tmp_path / "artifacts" / f"run_fake_{dataset_tag}_0" / "reports" / "multi_seed_aggregate.json"
+        tmp_path / "artifacts" / f"run_fake_{dataset_tag}_0"
+        / "reports" / "multi_seed_aggregate.json"
     )
     aggregate_path.write_text(
         json.dumps({"metrics": {"best_val_accuracy": {"mean": val_acc, "std": 0.0}}}) + "\n",

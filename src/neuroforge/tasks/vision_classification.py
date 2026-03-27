@@ -415,10 +415,11 @@ class VisionClassificationTask:
         device: Any,
         dtype: Any,
     ) -> SyntheticVisionBatch:
-        if not isinstance(batch, (tuple, list)) or len(batch) < 2:
+        if not isinstance(batch, (tuple, list)) or len(batch) < 2:  # pyright: ignore[reportUnknownArgumentType]
             msg = "Dataset loader must yield (images, labels) pairs"
             raise ValueError(msg)
-        images, labels = batch[0], batch[1]
+        images = cast("Any", batch[0])
+        labels = cast("Any", batch[1])
         if not hasattr(images, "to") or not hasattr(labels, "to"):
             msg = "Dataset batch tensors must support .to(device=..., dtype=...)"
             raise TypeError(msg)
@@ -577,14 +578,16 @@ class VisionClassificationTask:
                 height=input_h,
                 width=input_w,
             )
-            factory_obj = DEFAULT_HUB.vision_backbones.create(backbone_spec.type, spec=backbone_spec)
+            factory_obj = DEFAULT_HUB.vision_backbones.create(
+                backbone_spec.type, spec=backbone_spec,
+            )
             if not isinstance(factory_obj, VisionBackboneFactory):
                 msg = (
                     "DEFAULT_HUB.vision_backbones must resolve VisionBackboneFactory; "
                     f"got {type(factory_obj).__name__}"
                 )
                 raise TypeError(msg)
-            backbone = factory_obj.build()
+            backbone = cast("Any", factory_obj.build())
             if not isinstance(backbone, torch.nn.Module):
                 msg = "Resolved vision backbone must be torch.nn.Module"
                 raise TypeError(msg)
@@ -730,19 +733,20 @@ class VisionClassificationTask:
                     step_out.features.abs().max().item()
                 ),
             }
-            for name, counts in state.per_layer_spike_counts.items():
-                scalar_data[f"spikes.{name}.mean"] = float(counts.mean().item())
-                neurons = int(state.per_layer_neuron_count.get(name, 0))
-                denom = float(max(1, neurons * max(1, state.time_steps)))
-                scalar_data[f"vision.layer.{name}.spike_rate"] = float(
-                    counts.mean().item() / denom
-                )
-                scalar_data[f"vision.layer.{name}.mean_activation"] = float(
-                    counts.mean().item() / float(max(1, state.time_steps))
-                )
-                scalar_data[f"vision.layer.{name}.max_activation"] = float(
-                    counts.max().item() / float(max(1, state.time_steps))
-                )
+            if state is not None:
+                for name, counts in state.per_layer_spike_counts.items():
+                    scalar_data[f"spikes.{name}.mean"] = float(counts.mean().item())
+                    neurons = int(state.per_layer_neuron_count.get(name, 0))
+                    denom = float(max(1, neurons * max(1, state.time_steps)))
+                    scalar_data[f"vision.layer.{name}.spike_rate"] = float(
+                        counts.mean().item() / denom
+                    )
+                    scalar_data[f"vision.layer.{name}.mean_activation"] = float(
+                        counts.mean().item() / float(max(1, state.time_steps))
+                    )
+                    scalar_data[f"vision.layer.{name}.max_activation"] = float(
+                        counts.max().item() / float(max(1, state.time_steps))
+                    )
             self._emit("scalar", step_idx, "VISION", scalar_data)
 
         self._sync_cuda_if_needed(dev)

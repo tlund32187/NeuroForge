@@ -32,7 +32,7 @@ class SpikingResBlock(nn.Module):
         spike_beta: float = 5.0,
         downsample: Any | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
 
         self.block1 = SpikingConvBlock(
             in_channels=in_channels,

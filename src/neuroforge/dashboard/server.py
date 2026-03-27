@@ -37,7 +37,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import web  # pyright: ignore[reportMissingImports]
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 from neuroforge.monitors.bus import EventBus
@@ -367,8 +367,12 @@ async def _handle_train(request: web.Request) -> web.Response:
                 _bus.subscribe_all(layer_stats)
                 _bus.subscribe_all(confusion)
                 _bus.subscribe_all(samples)
-                _bus.subscribe_all(VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True))
-                _bus.subscribe_all(ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True))
+                _bus.subscribe_all(
+                    VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True)
+                )
+                _bus.subscribe_all(
+                    ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True)
+                )
                 _bus.subscribe_all(VisionSampleGridExporter(ctx.run_dir, samples, enabled=True))
 
                 vision_cfg = VisionRunnerConfig(

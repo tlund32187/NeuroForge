@@ -17,7 +17,7 @@ class NoBackbone(nn.Module):
     """Bypass backbone that maps image tensors directly to flat features."""
 
     def __init__(self, *, channels: int, height: int, width: int) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
         if channels <= 0 or height <= 0 or width <= 0:
             msg = "NoBackbone requires positive channels/height/width"
             raise ValueError(msg)

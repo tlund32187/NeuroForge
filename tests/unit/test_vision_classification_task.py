@@ -256,7 +256,7 @@ def test_vision_classification_task_logic_dataset_without_backbone_emits_layer_s
     layer_keys = {
         str(key)
         for evt in scalar_events
-        for key in evt.data.keys()
+        for key in evt.data
         if str(key).startswith("vision.layer.")
     }
     assert "vision.layer.head.spike_rate" in layer_keys

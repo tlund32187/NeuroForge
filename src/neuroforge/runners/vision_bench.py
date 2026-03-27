@@ -70,8 +70,9 @@ def _coerce_seed_values(raw: object) -> tuple[int, ...]:
     if isinstance(raw, str):
         return _parse_seed_list(raw)
     if isinstance(raw, list):
+        _raw = cast("Any", raw)
         out: list[int] = []
-        for item in raw:
+        for item in _raw:
             if isinstance(item, bool):
                 msg = "Boolean values are not valid seeds"
                 raise ValueError(msg)
@@ -110,7 +111,8 @@ def _extract_runner_config(raw: dict[str, Any]) -> dict[str, Any]:
                 f"unknown keys: {unknown_runner_root}"
             )
             raise ValueError(msg)
-        return {str(k): v for k, v in runner_obj.items()}
+        _robj = cast("Any", runner_obj)
+        return {str(k): v for k, v in _robj.items()}
 
     if "vision" in raw:
         vision_obj = raw["vision"]
@@ -124,7 +126,8 @@ def _extract_runner_config(raw: dict[str, Any]) -> dict[str, Any]:
                 f"unknown keys: {unknown_vision_root}"
             )
             raise ValueError(msg)
-        return {str(k): v for k, v in vision_obj.items()}
+        _vobj = cast("Any", vision_obj)
+        return {str(k): v for k, v in _vobj.items()}
 
     runner_fields = {f.name for f in fields(VisionRunnerConfig)}
     out: dict[str, Any] = {}
