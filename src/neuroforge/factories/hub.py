@@ -1,7 +1,8 @@
 """FactoryHub — injectable registry bundle for NeuroForge components.
 
 Provides a single object that owns :class:`Registry` instances for every
-component kind (neurons, synapses, encoders, readouts, losses).  The
+component kind (neurons, synapses, encoders, readouts, vision_backbones,
+losses).  The
 module-level :data:`DEFAULT_HUB` is the global singleton that existing
 registries delegate to.
 
@@ -40,6 +41,8 @@ class FactoryHub:
         Input encoder constructors (e.g. ``"rate"``).
     readouts:
         Output readout constructors (e.g. ``"rate_decoder"``).
+    vision_backbones:
+        Vision backbone factory constructors (e.g. ``"lif_convnet_v1"``).
     losses:
         Loss function constructors (e.g. ``"bce_logits"``).
     """
@@ -48,6 +51,9 @@ class FactoryHub:
     synapses: Registry = field(default_factory=lambda: Registry("synapses"))
     encoders: Registry = field(default_factory=lambda: Registry("encoders"))
     readouts: Registry = field(default_factory=lambda: Registry("readouts"))
+    vision_backbones: Registry = field(
+        default_factory=lambda: Registry("vision_backbones")
+    )
     losses: Registry = field(default_factory=lambda: Registry("losses"))
 
 
@@ -87,6 +93,12 @@ def _register_readouts(hub: FactoryHub) -> None:
     hub.readouts.register("spike_count", SpikeCountReadout)
 
 
+def _register_vision_backbones(hub: FactoryHub) -> None:
+    from neuroforge.vision.factory import LIFConvNetV1BackboneFactory
+
+    hub.vision_backbones.register("lif_convnet_v1", LIFConvNetV1BackboneFactory)
+
+
 def _register_losses(hub: FactoryHub) -> None:
     from neuroforge.encoding.losses import BceLogitsLoss, MseCountLoss
 
@@ -101,6 +113,7 @@ def build_default_hub() -> FactoryHub:
     _register_synapses(hub)
     _register_encoders(hub)
     _register_readouts(hub)
+    _register_vision_backbones(hub)
     _register_losses(hub)
     return hub
 

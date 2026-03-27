@@ -28,7 +28,14 @@ class TestFactoryHubConstruction:
     def test_default_hub_has_all_registries(self) -> None:
         from neuroforge.factories.hub import DEFAULT_HUB
 
-        for attr in ("neurons", "synapses", "encoders", "readouts", "losses"):
+        for attr in (
+            "neurons",
+            "synapses",
+            "encoders",
+            "readouts",
+            "vision_backbones",
+            "losses",
+        ):
             reg = getattr(DEFAULT_HUB, attr)
             assert reg is not None
             assert len(reg.list_keys()) > 0, f"{attr} registry is empty"
@@ -70,6 +77,11 @@ class TestHubBuiltins:
         from neuroforge.factories.hub import DEFAULT_HUB
 
         assert DEFAULT_HUB.losses.has("bce_logits")
+
+    def test_vision_backbones_has_lif_convnet_v1(self) -> None:
+        from neuroforge.factories.hub import DEFAULT_HUB
+
+        assert DEFAULT_HUB.vision_backbones.has("lif_convnet_v1")
 
 
 # ── create() round-trips ────────────────────────────────────────────
@@ -120,6 +132,22 @@ class TestHubCreation:
 
         obj = DEFAULT_HUB.readouts.create("spike_count")
         assert isinstance(obj, SpikeCountReadout)
+
+    def test_vision_backbone_factory_instantiates(self) -> None:
+        from neuroforge.factories.hub import DEFAULT_HUB
+        from neuroforge.network.specs import VisionBackboneSpec, VisionBlockSpec, VisionInputSpec
+        from neuroforge.vision.factory import LIFConvNetV1BackboneFactory
+
+        spec = VisionBackboneSpec(
+            type="lif_convnet_v1",
+            input=VisionInputSpec(channels=1, height=8, width=8),
+            time_steps=8,
+            encoding_mode="poisson",
+            blocks=[VisionBlockSpec(type="conv", params={"out_channels": 8, "kernel_size": 3})],
+            output_dim=32,
+        )
+        obj = DEFAULT_HUB.vision_backbones.create(spec.type, spec=spec)
+        assert isinstance(obj, LIFConvNetV1BackboneFactory)
 
     def test_unknown_key_raises(self) -> None:
         from neuroforge.factories.hub import DEFAULT_HUB
@@ -178,6 +206,12 @@ class TestBackwardCompat:
         from neuroforge.losses.registry import LOSSES
 
         assert LOSSES is DEFAULT_HUB.losses
+
+    def test_vision_registry_is_hub_vision_backbones(self) -> None:
+        from neuroforge.factories.hub import DEFAULT_HUB
+        from neuroforge.vision.registry import VISION_BACKBONES
+
+        assert VISION_BACKBONES is DEFAULT_HUB.vision_backbones
 
 
 # ── Fresh hub isolation ─────────────────────────────────────────────

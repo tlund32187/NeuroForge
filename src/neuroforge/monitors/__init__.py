@@ -23,6 +23,14 @@ from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMoni
 from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
+from neuroforge.monitors.vision_monitors import (
+    ConfusionMatrixExporter,
+    ConfusionMatrixMonitor,
+    VisionLayerStatsExporter,
+    VisionLayerStatsMonitor,
+    VisionSampleGridExporter,
+    VisionSampleGridMonitor,
+)
 from neuroforge.monitors.voltage_monitor import VoltageMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
 
@@ -43,5 +51,11 @@ __all__ = [
     "TrialStatsMonitor",
     "TrainingMonitor",
     "VoltageMonitor",
+    "VisionLayerStatsMonitor",
+    "VisionLayerStatsExporter",
+    "ConfusionMatrixMonitor",
+    "ConfusionMatrixExporter",
+    "VisionSampleGridMonitor",
+    "VisionSampleGridExporter",
     "WeightMonitor",
 ]

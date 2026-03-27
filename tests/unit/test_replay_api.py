@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import json
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,9 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (run_dir / "logs").mkdir()
     (run_dir / "events").mkdir()
     (run_dir / "topology").mkdir()
+    (run_dir / "reports").mkdir()
+    (run_dir / "vision" / "metrics").mkdir(parents=True)
+    (run_dir / "vision" / "samples").mkdir(parents=True)
 
     (run_dir / "run_meta.json").write_text(
         json.dumps({
@@ -144,6 +148,87 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         encoding="utf-8",
     )
 
+    (run_dir / "vision" / "metrics" / "vision_layer_stats.csv").write_text(
+        "\n".join([
+            "trial,layer,spike_rate,mean_activation,max_activation",
+            "1,conv_0,0.12,0.24,0.90",
+            "2,res_1,0.10,0.22,0.88",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "vision" / "metrics" / "confusion_matrix.json").write_text(
+        json.dumps({
+            "matrix": [
+                [5, 1, 0],
+                [0, 4, 2],
+                [1, 0, 6],
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (run_dir / "vision" / "metrics" / "per_class_accuracy.json").write_text(
+        json.dumps({
+            "n_classes": 3,
+            "total_samples": 19,
+            "per_class_accuracy": {
+                "0": 0.8333333333,
+                "1": 0.6666666667,
+                "2": 0.8571428571,
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    tiny_png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XfOQAAAAASUVORK5CYII="
+    )
+    (run_dir / "vision" / "samples" / "input_grid.png").write_bytes(base64.b64decode(tiny_png))
+    (run_dir / "vision" / "samples" / "event_bins_grid.png").write_bytes(base64.b64decode(tiny_png))
+    (run_dir / "vision" / "samples" / "event_sum.png").write_bytes(base64.b64decode(tiny_png))
+    (run_dir / "vision" / "metrics" / "event_sample_stats.json").write_text(
+        json.dumps({
+            "total_events": 1234.0,
+            "positive_events": 700.0,
+            "negative_events": 534.0,
+            "positive_fraction": 0.5673,
+            "polarity_balance": 0.1345,
+            "duration_bins": 8,
+            "duration_us": 10000,
+            "slice_mode": "fixed_time",
+            "expected_label": 4,
+            "predicted_label": 7,
+            "image_files": {
+                "bins_grid": "event_bins_grid.png",
+                "sum": "event_sum.png",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    (run_dir / "reports" / "benchmark_summary.json").write_text(
+        json.dumps({
+            "task": "vision_bench",
+            "seed": 42,
+            "device": "cpu",
+            "steps": 2,
+            "throughput": {
+                "steps_per_sec": 31.25,
+                "ms_per_step": 32.0,
+                "wall_ms": 64.0,
+            },
+            "final_metrics": {
+                "loss": 0.2,
+                "accuracy": 0.75,
+            },
+            "best_metrics": {
+                "loss": 0.2,
+                "accuracy": 0.75,
+                "val_accuracy": 0.8,
+            },
+        }),
+        encoding="utf-8",
+    )
+
     # Patch the module-level _ARTIFACTS_DIR constant in the server.
     import neuroforge.dashboard.server as srv
 
@@ -167,6 +252,12 @@ def _make_app() -> Any:
     app.router.add_get("/api/run/{run_id}/topology", srv._handle_run_topology)
     app.router.add_get("/api/run/{run_id}/topology-stats", srv._handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", srv._handle_run_scalars)
+    app.router.add_get("/api/run/{run_id}/vision/sample-grid", srv._handle_run_vision_sample_grid)
+    app.router.add_get("/api/run/{run_id}/vision/event-sample", srv._handle_run_vision_event_sample)
+    app.router.add_get("/api/run/{run_id}/vision/event-image", srv._handle_run_vision_event_image)
+    app.router.add_get("/api/run/{run_id}/vision/confusion", srv._handle_run_vision_confusion)
+    app.router.add_get("/api/run/{run_id}/vision/layer-stats", srv._handle_run_vision_layer_stats)
+    app.router.add_get("/api/run/{run_id}/vision/summary", srv._handle_run_vision_summary)
     app.router.add_get("/api/run/{run_id}/events", srv._handle_run_events)
     app.router.add_get("/api/run/{run_id}/events/index", srv._handle_run_events_index)
     return app
@@ -181,6 +272,17 @@ async def _get(path: str) -> tuple[int, Any]:
         resp = await tc.get(path)
         body = await resp.json()
         return resp.status, body
+
+
+async def _get_raw(path: str) -> tuple[int, bytes, str]:
+    """Issue a GET request via TestClient and return (status, bytes, content-type)."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    app = _make_app()
+    async with TestClient(TestServer(app)) as tc:
+        resp = await tc.get(path)
+        body = await resp.read()
+        return resp.status, body, resp.content_type
 
 
 # ── Synchronous _safe_run_dir tests ─────────────────────────────────
@@ -287,6 +389,61 @@ class TestReplayEndpoints:
         assert data["count"] == 3
         assert data["items"][0]["idx"] == 0
         assert data["items"][0]["topic"] == "training_start"
+
+    def test_run_vision_sample_grid(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, body, content_type = asyncio.run(
+            _get_raw(f"/api/run/{_RUN_ID}/vision/sample-grid")
+        )
+        assert status == 200
+        assert content_type == "image/png"
+        assert len(body) > 0
+
+    def test_run_vision_event_sample(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/event-sample"))
+        assert status == 200
+        assert data["total_events"] == 1234.0
+        assert data["duration_bins"] == 8
+        assert data["has_bins_grid"] is True
+        assert data["has_sum"] is True
+
+    def test_run_vision_event_image_bins(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, body, content_type = asyncio.run(
+            _get_raw(f"/api/run/{_RUN_ID}/vision/event-image?mode=bins")
+        )
+        assert status == 200
+        assert content_type == "image/png"
+        assert len(body) > 0
+
+    def test_run_vision_event_image_sum(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, body, content_type = asyncio.run(
+            _get_raw(f"/api/run/{_RUN_ID}/vision/event-image?mode=sum")
+        )
+        assert status == 200
+        assert content_type == "image/png"
+        assert len(body) > 0
+
+    def test_run_vision_confusion(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/confusion"))
+        assert status == 200
+        assert data["n_classes"] == 3
+        assert data["total_samples"] == 19
+        assert data["matrix"][0][0] == 5
+        assert "0" in data["per_class_accuracy"]
+
+    def test_run_vision_layer_stats(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/layer-stats"))
+        assert status == 200
+        assert data["layers"] == ["conv_0", "res_1"]
+        assert len(data["rows"]) == 2
+        assert data["rows"][0]["spike_rate"] == 0.12
+
+    def test_run_vision_summary(self, _artifacts: Path) -> None:  # noqa: ARG002
+        status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/summary"))
+        assert status == 200
+        assert data["summary_source"] == "benchmark_summary"
+        assert data["throughput"]["steps_per_sec"] == 31.25
+        assert data["throughput"]["ms_per_step"] == 32.0
+        assert data["final_metrics"]["accuracy"] == 0.75
 
     def test_invalid_run_returns_404(self, _artifacts: Path) -> None:  # noqa: ARG002
         status, _data = asyncio.run(_get("/api/run/not_a_valid_run/meta"))

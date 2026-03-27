@@ -13,6 +13,13 @@ from neuroforge.tasks.multi_gate import (
     MultiGateResult,
     MultiGateTask,
 )
+from neuroforge.tasks.vision_classification import (
+    SyntheticVisionBatch,
+    SyntheticVisionDataLoader,
+    VisionClassificationConfig,
+    VisionClassificationResult,
+    VisionClassificationTask,
+)
 
 __all__ = [
     "ALL_GATES",
@@ -24,4 +31,9 @@ __all__ = [
     "MultiGateConfig",
     "MultiGateResult",
     "MultiGateTask",
+    "SyntheticVisionBatch",
+    "SyntheticVisionDataLoader",
+    "VisionClassificationConfig",
+    "VisionClassificationResult",
+    "VisionClassificationTask",
 ]

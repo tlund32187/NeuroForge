@@ -18,7 +18,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from neuroforge.api.version import __version__
 
@@ -542,6 +542,209 @@ def _cmd_bench(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: vision
+# ---------------------------------------------------------------------------
+
+
+def _cmd_vision(args: argparse.Namespace) -> int:
+    """Run one vision classification training session."""
+    from neuroforge.contracts.monitors import EventTopic, MonitorEvent
+    from neuroforge.core.determinism.mode import DeterminismConfig, apply_determinism
+    from neuroforge.monitors.artifact_writer import ArtifactWriter
+    from neuroforge.monitors.bus import EventBus
+    from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
+    from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
+    from neuroforge.monitors.vision_monitors import (
+        ConfusionMatrixExporter,
+        ConfusionMatrixMonitor,
+        VisionLayerStatsExporter,
+        VisionLayerStatsMonitor,
+        VisionSampleGridExporter,
+        VisionSampleGridMonitor,
+    )
+    from neuroforge.runners.run_context import create_run_dir
+    from neuroforge.runners.vision import VisionRunnerConfig, run_vision_classification
+
+    task_name = "vision_classification"
+    apply_determinism(
+        DeterminismConfig(
+            seed=int(args.seed),
+            deterministic=bool(args.deterministic),
+            benchmark=bool(args.benchmark),
+            warn_only=bool(args.warn_only),
+        )
+    )
+    cfg = VisionRunnerConfig(
+        seed=int(args.seed),
+        device=str(args.device),
+        dtype=str(args.dtype),
+        deterministic=bool(args.deterministic),
+        benchmark=bool(args.benchmark),
+        warn_only=bool(args.warn_only),
+        steps=int(args.steps),
+        batch_size=int(args.batch_size),
+        n_classes=int(args.n_classes),
+        image_channels=int(args.image_channels),
+        image_h=int(args.image_h),
+        image_w=int(args.image_w),
+        dataset=str(args.dataset),
+        dataset_root=str(args.dataset_root),
+        dataset_download=bool(args.dataset_download),
+        dataset_val_fraction=float(args.dataset_val_fraction),
+        dataset_num_workers=int(args.dataset_num_workers),
+        dataset_pin_memory=bool(args.dataset_pin_memory),
+        allow_fashion_mnist=bool(args.allow_fashion_mnist),
+        dataset_normalize=bool(args.dataset_normalize),
+        dataset_random_crop=bool(args.dataset_random_crop),
+        dataset_crop_padding=int(args.dataset_crop_padding),
+        dataset_random_horizontal_flip=bool(args.dataset_random_horizontal_flip),
+        dataset_event_tensor_mode=str(args.dataset_event_tensor_mode),
+        dataset_event_slice_mode=str(args.dataset_event_slice_mode),
+        dataset_event_window_us=int(args.dataset_event_window_us),
+        dataset_event_count=int(args.dataset_event_count),
+        dataset_event_polarity_channels=int(args.dataset_event_polarity_channels),
+        dataset_logic_image_size=int(args.dataset_logic_image_size),
+        dataset_logic_gates=tuple(str(v) for v in str(args.dataset_logic_gates).split(",") if str(v).strip()),
+        dataset_logic_mode=str(args.dataset_logic_mode),
+        dataset_logic_single_gate=str(args.dataset_logic_single_gate),
+        dataset_logic_samples_per_gate=int(args.dataset_logic_samples_per_gate),
+        dataset_logic_total_samples=int(args.dataset_logic_total_samples),
+        dataset_logic_train_ratio=float(args.dataset_logic_train_ratio),
+        dataset_logic_val_ratio=float(args.dataset_logic_val_ratio),
+        dataset_logic_test_ratio=float(args.dataset_logic_test_ratio),
+        lr=float(args.lr),
+        loss_fn=str(args.loss_fn),
+        readout=str(args.readout),
+        readout_threshold=float(args.readout_threshold),
+        backbone_type=str(args.backbone_type),
+        backbone_time_steps=int(args.backbone_time_steps),
+        backbone_encoding_mode=str(args.backbone_encoding_mode),
+        backbone_output_dim=int(args.backbone_output_dim),
+    )
+
+    ctx = create_run_dir(
+        base_dir=args.artifacts,
+        seed=cfg.seed,
+        device=cfg.device,
+    )
+    bus = EventBus()
+    writer = ArtifactWriter(ctx.run_dir)
+
+    layer_stats = VisionLayerStatsMonitor(interval_steps=1, enabled=True)
+    confusion = ConfusionMatrixMonitor(enabled=True)
+    samples = VisionSampleGridMonitor(max_samples=16, enabled=True)
+
+    pre_write_monitors: list[Any] = [
+        TopologyStatsMonitor(event_bus=bus, enabled=True),
+        layer_stats,
+        confusion,
+        samples,
+    ]
+    if str(cfg.device).startswith("cuda"):
+        pre_write_monitors.append(CudaMetricsMonitor(enabled=True))
+    for monitor in pre_write_monitors:
+        bus.subscribe_all(monitor)
+    bus.subscribe_all(VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True))
+    bus.subscribe_all(ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True))
+    bus.subscribe_all(VisionSampleGridExporter(ctx.run_dir, samples, enabled=True))
+    bus.subscribe_all(writer)
+
+    def _log(msg: str) -> None:
+        ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
+        line = f"[{ts}] {msg}"
+        writer.add_log_line(line)
+        print(line, flush=True)  # noqa: T201
+
+    def _publish(topic: str, *, step: int, data: dict[str, Any]) -> None:
+        bus.publish(
+            MonitorEvent(
+                topic=EventTopic(topic),
+                step=step,
+                t=0.0,
+                source=task_name,
+                data=data,
+            )
+        )
+
+    _publish(
+        "run_start",
+        step=0,
+        data={
+            "run_meta": ctx.to_dict(),
+            "config": asdict(cfg),
+        },
+    )
+    _log(f"run_id   : {ctx.run_id}")
+    _log(f"task     : {task_name}")
+    _log(f"seed     : {cfg.seed}")
+    _log(f"device   : {cfg.device}")
+    _log(f"dtype    : {cfg.dtype}")
+    _log(f"steps    : {cfg.steps}")
+    _log(f"batch    : {cfg.batch_size}")
+    _log(f"dataset  : {cfg.dataset}")
+
+    t0 = time.perf_counter()
+    try:
+        summary = run_vision_classification(cfg, event_bus=bus)
+    except Exception as exc:
+        wall_ms = (time.perf_counter() - t0) * 1_000.0
+        _publish(
+            "run_end",
+            step=0,
+            data={
+                "converged": False,
+                "failed": True,
+                "error": str(exc),
+                "wall_ms": round(wall_ms, 1),
+            },
+        )
+        writer.flush()
+        print(f"Vision run failed: {exc}", file=sys.stderr)  # noqa: T201
+        return 2
+
+    wall_ms = (time.perf_counter() - t0) * 1_000.0
+    result_data = cast("dict[str, Any]", summary["result"])
+    _publish(
+        "run_end",
+        step=int(result_data["steps"]),
+        data={
+            "converged": False,
+            "steps": int(result_data["steps"]),
+            "final_loss": float(result_data["final_loss"]),
+            "final_accuracy": float(result_data["final_accuracy"]),
+            "wall_ms": round(wall_ms, 1),
+        },
+    )
+
+    vision_dir = ctx.run_dir / "vision"
+    vision_dir.mkdir(parents=True, exist_ok=True)
+    summary_out = dict(summary)
+    summary_out["run_id"] = ctx.run_id
+    summary_out["run_dir"] = str(ctx.run_dir)
+    summary_out["wall_ms_cli"] = round(wall_ms, 1)
+    (vision_dir / "vision_summary.json").write_text(
+        json.dumps(summary_out, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    dataset_meta = summary_out.get("dataset_meta")
+    if isinstance(dataset_meta, dict):
+        dataset_dir = ctx.run_dir / "dataset"
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "dataset_meta.json").write_text(
+            json.dumps(dataset_meta, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    writer.flush()
+
+    _log(f"final_loss : {result_data['final_loss']:.6f}")
+    _log(f"final_acc  : {result_data['final_accuracy']:.4f}")
+    _log(f"wall_ms    : {wall_ms:,.1f}")
+    _log(f"artifacts  : {ctx.run_dir}")
+    print(json.dumps(summary_out, indent=2), flush=True)  # noqa: T201
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: ui
 # ---------------------------------------------------------------------------
 
@@ -904,6 +1107,298 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Base dir for run artifacts (default: artifacts)",
     )
 
+    p_vision = sub.add_parser(
+        "vision",
+        help="Run vision classification task",
+    )
+    p_vision.add_argument("--seed", type=int, default=42, help="Random seed")
+    p_vision.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device: cpu, cuda, cuda:0, or auto (default: cpu)",
+    )
+    p_vision.add_argument(
+        "--dtype",
+        default="float32",
+        help="Torch dtype string (default: float32)",
+    )
+    det_v_group = p_vision.add_mutually_exclusive_group()
+    det_v_group.add_argument(
+        "--deterministic",
+        dest="deterministic",
+        action="store_true",
+        help="Enable deterministic torch algorithms (default: on)",
+    )
+    det_v_group.add_argument(
+        "--no-deterministic",
+        dest="deterministic",
+        action="store_false",
+        help="Disable deterministic torch algorithms",
+    )
+    p_vision.set_defaults(deterministic=True)
+    p_vision.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=False,
+        help="Enable backend benchmark mode (default: off)",
+    )
+    warn_v_group = p_vision.add_mutually_exclusive_group()
+    warn_v_group.add_argument(
+        "--warn-only",
+        dest="warn_only",
+        action="store_true",
+        help="Warn on non-deterministic ops (default)",
+    )
+    warn_v_group.add_argument(
+        "--strict-determinism",
+        dest="warn_only",
+        action="store_false",
+        help="Raise on non-deterministic ops",
+    )
+    p_vision.set_defaults(warn_only=True)
+    p_vision.add_argument("--steps", type=int, default=1, help="Training steps")
+    p_vision.add_argument("--batch-size", type=int, default=8, help="Batch size")
+    p_vision.add_argument("--n-classes", type=int, default=4, help="Class count")
+    p_vision.add_argument(
+        "--dataset",
+        choices=["synthetic", "mnist", "fashion_mnist", "nmnist", "pokerdvs", "logic_gates_pixels"],
+        default="synthetic",
+        help="Dataset source (default: synthetic)",
+    )
+    p_vision.add_argument(
+        "--dataset-root",
+        default=".cache/torchvision",
+        help="Dataset cache root (torchvision/Tonic)",
+    )
+    dataset_dl_group = p_vision.add_mutually_exclusive_group()
+    dataset_dl_group.add_argument(
+        "--dataset-download",
+        dest="dataset_download",
+        action="store_true",
+        help="Allow torchvision dataset download (default: on)",
+    )
+    dataset_dl_group.add_argument(
+        "--no-dataset-download",
+        dest="dataset_download",
+        action="store_false",
+        help="Require dataset files to already exist in --dataset-root",
+    )
+    p_vision.set_defaults(dataset_download=True)
+    p_vision.add_argument(
+        "--dataset-val-fraction",
+        type=float,
+        default=0.1,
+        help="Validation split fraction from train set for torchvision datasets",
+    )
+    p_vision.add_argument(
+        "--dataset-num-workers",
+        type=int,
+        default=0,
+        help="DataLoader worker count for torchvision datasets",
+    )
+    dataset_pin_group = p_vision.add_mutually_exclusive_group()
+    dataset_pin_group.add_argument(
+        "--dataset-pin-memory",
+        dest="dataset_pin_memory",
+        action="store_true",
+        help="Enable DataLoader pin_memory for torchvision datasets",
+    )
+    dataset_pin_group.add_argument(
+        "--no-dataset-pin-memory",
+        dest="dataset_pin_memory",
+        action="store_false",
+        help="Disable DataLoader pin_memory (default)",
+    )
+    p_vision.set_defaults(dataset_pin_memory=False)
+    p_vision.add_argument(
+        "--allow-fashion-mnist",
+        action="store_true",
+        help="Allow dataset=fashion_mnist",
+    )
+    p_vision.add_argument(
+        "--dataset-event-tensor-mode",
+        choices=["frames", "voxel_grid"],
+        default="frames",
+        help="Event tensorization mode for NMNIST/POKERDVS datasets",
+    )
+    p_vision.add_argument(
+        "--dataset-event-slice-mode",
+        choices=["time", "count"],
+        default="time",
+        help="Deterministic event slicing mode for NMNIST/POKERDVS datasets",
+    )
+    p_vision.add_argument(
+        "--dataset-event-window-us",
+        type=int,
+        default=100_000,
+        help="Fixed time window in microseconds for event slice mode=time",
+    )
+    p_vision.add_argument(
+        "--dataset-event-count",
+        type=int,
+        default=20_000,
+        help="Fixed event count for event slice mode=count",
+    )
+    p_vision.add_argument(
+        "--dataset-event-polarity-channels",
+        type=int,
+        default=2,
+        help="Output event polarity channels (1 or 2)",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-image-size",
+        type=int,
+        default=8,
+        help="Image size for logic_gates_pixels dataset (default: 8)",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-gates",
+        default="AND,OR,NAND,NOR",
+        help="Comma-separated gate set for logic_gates_pixels (default: AND,OR,NAND,NOR)",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-mode",
+        choices=["multiclass", "single_gate"],
+        default="multiclass",
+        help="Label mode for logic_gates_pixels dataset",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-single-gate",
+        default="AND",
+        help="Single gate name when --dataset-logic-mode=single_gate",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-samples-per-gate",
+        type=int,
+        default=128,
+        help="Samples per gate for logic_gates_pixels when total-samples is 0",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-total-samples",
+        type=int,
+        default=0,
+        help="Total sample count override for logic_gates_pixels (0 disables)",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-train-ratio",
+        type=float,
+        default=0.7,
+        help="Train split ratio for logic_gates_pixels",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-val-ratio",
+        type=float,
+        default=0.15,
+        help="Validation split ratio for logic_gates_pixels",
+    )
+    p_vision.add_argument(
+        "--dataset-logic-test-ratio",
+        type=float,
+        default=0.15,
+        help="Test split ratio for logic_gates_pixels",
+    )
+    norm_group = p_vision.add_mutually_exclusive_group()
+    norm_group.add_argument(
+        "--dataset-normalize",
+        dest="dataset_normalize",
+        action="store_true",
+        help="Enable dataset normalization (default: on)",
+    )
+    norm_group.add_argument(
+        "--no-dataset-normalize",
+        dest="dataset_normalize",
+        action="store_false",
+        help="Disable dataset normalization",
+    )
+    p_vision.set_defaults(dataset_normalize=True)
+    crop_group = p_vision.add_mutually_exclusive_group()
+    crop_group.add_argument(
+        "--dataset-random-crop",
+        dest="dataset_random_crop",
+        action="store_true",
+        help="Enable random crop augmentation (default: off)",
+    )
+    crop_group.add_argument(
+        "--no-dataset-random-crop",
+        dest="dataset_random_crop",
+        action="store_false",
+        help="Disable random crop augmentation",
+    )
+    p_vision.set_defaults(dataset_random_crop=False)
+    p_vision.add_argument(
+        "--dataset-crop-padding",
+        type=int,
+        default=2,
+        help="Padding used by random crop augmentation",
+    )
+    flip_group = p_vision.add_mutually_exclusive_group()
+    flip_group.add_argument(
+        "--dataset-random-horizontal-flip",
+        dest="dataset_random_horizontal_flip",
+        action="store_true",
+        help="Enable random horizontal flip augmentation (default: off)",
+    )
+    flip_group.add_argument(
+        "--no-dataset-random-horizontal-flip",
+        dest="dataset_random_horizontal_flip",
+        action="store_false",
+        help="Disable random horizontal flip augmentation",
+    )
+    p_vision.set_defaults(dataset_random_horizontal_flip=False)
+    p_vision.add_argument(
+        "--image-channels", type=int, default=1, help="Image channel count",
+    )
+    p_vision.add_argument("--image-h", type=int, default=16, help="Image height")
+    p_vision.add_argument("--image-w", type=int, default=16, help="Image width")
+    p_vision.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    p_vision.add_argument(
+        "--loss-fn",
+        choices=["bce_logits", "mse_count"],
+        default="bce_logits",
+        help="Loss factory key",
+    )
+    p_vision.add_argument(
+        "--readout",
+        choices=["spike_count"],
+        default="spike_count",
+        help="Readout factory key",
+    )
+    p_vision.add_argument(
+        "--readout-threshold",
+        type=float,
+        default=0.0,
+        help="Threshold for spike_count readout logits",
+    )
+    p_vision.add_argument(
+        "--backbone-type",
+        choices=["lif_convnet_v1", "none"],
+        default="lif_convnet_v1",
+        help="Backbone type (default: lif_convnet_v1)",
+    )
+    p_vision.add_argument(
+        "--backbone-time-steps",
+        type=int,
+        default=6,
+        help="Temporal steps in vision backbone encoding",
+    )
+    p_vision.add_argument(
+        "--backbone-encoding-mode",
+        choices=["rate", "poisson", "constant"],
+        default="rate",
+        help="Static image encoding mode",
+    )
+    p_vision.add_argument(
+        "--backbone-output-dim",
+        type=int,
+        default=64,
+        help="Backbone output feature dimension (ignored when backbone-type=none)",
+    )
+    p_vision.add_argument(
+        "--artifacts",
+        default="artifacts",
+        help="Base dir for run artifacts (default: artifacts)",
+    )
+
     p_ui = sub.add_parser("ui", help="Launch the dashboard web server")
     p_ui.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     p_ui.add_argument("--port", type=int, default=8050, help="Bind port (default: 8050)")
@@ -937,6 +1432,7 @@ def main(argv: list[str] | None = None) -> None:
         "run": _cmd_run,
         "stability": _cmd_stability,
         "bench": _cmd_bench,
+        "vision": _cmd_vision,
         "ui": _cmd_ui,
         "list-runs": _cmd_list_runs,
     }

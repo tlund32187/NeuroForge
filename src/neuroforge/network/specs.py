@@ -9,14 +9,229 @@ to produce a fully initialised :class:`CoreEngine`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 __all__ = [
     "GateNetworkSpec",
     "PopulationSpec",
     "ProjectionSpec",
     "NetworkSpec",
+    "VisionBackboneSpec",
+    "VisionBlockSpec",
+    "VisionInputSpec",
 ]
+
+_VISION_ENCODING_MODES: frozenset[str] = frozenset({"rate", "poisson", "constant"})
+_VISION_BLOCK_TYPES: frozenset[str] = frozenset({"conv", "res", "pool"})
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _validate_positive_int(value: object, *, field_name: str) -> None:
+    if not _is_positive_int(value):
+        msg = f"{field_name} must be a positive integer; got {value!r}"
+        raise ValueError(msg)
+
+
+def _validate_kernel_size(value: object, *, field_name: str) -> None:
+    if _is_positive_int(value):
+        return
+    if isinstance(value, tuple | list):
+        if len(value) != 2:
+            msg = f"{field_name} must be an int or a 2-tuple; got {value!r}"
+            raise ValueError(msg)
+        if all(_is_positive_int(v) for v in value):
+            return
+    msg = f"{field_name} must be an int or a 2-tuple of positive integers; got {value!r}"
+    raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionInputSpec:
+    """Input tensor shape for a vision backbone."""
+
+    channels: int
+    height: int
+    width: int
+
+    def __post_init__(self) -> None:
+        _validate_positive_int(self.channels, field_name="VisionInputSpec.channels")
+        _validate_positive_int(self.height, field_name="VisionInputSpec.height")
+        _validate_positive_int(self.width, field_name="VisionInputSpec.width")
+
+
+@dataclass(frozen=True, slots=True)
+class VisionBlockSpec:
+    """One block in a vision backbone pipeline."""
+
+    type: str
+    params: dict[str, Any] = field(default_factory=lambda: {})
+
+    def __post_init__(self) -> None:
+        block_type = self.type.strip().lower()
+        if block_type not in _VISION_BLOCK_TYPES:
+            msg = (
+                "VisionBlockSpec.type must be one of "
+                f"{sorted(_VISION_BLOCK_TYPES)}; got {self.type!r}"
+            )
+            raise ValueError(msg)
+        if not isinstance(self.params, dict):
+            msg = "VisionBlockSpec.params must be a dict[str, Any]"
+            raise ValueError(msg)
+        object.__setattr__(self, "type", block_type)
+
+        params = dict(self.params)
+        object.__setattr__(self, "params", params)
+        if block_type == "conv":
+            if "out_channels" not in params:
+                msg = "VisionBlockSpec(type='conv') missing required param: 'out_channels'"
+                raise ValueError(msg)
+            if "kernel_size" not in params:
+                msg = "VisionBlockSpec(type='conv') missing required param: 'kernel_size'"
+                raise ValueError(msg)
+            _validate_positive_int(
+                params["out_channels"],
+                field_name="VisionBlockSpec.params['out_channels']",
+            )
+            _validate_kernel_size(
+                params["kernel_size"],
+                field_name="VisionBlockSpec.params['kernel_size']",
+            )
+            if "stride" in params:
+                _validate_kernel_size(
+                    params["stride"],
+                    field_name="VisionBlockSpec.params['stride']",
+                )
+        elif block_type == "res":
+            if "channels" in params:
+                _validate_positive_int(
+                    params["channels"],
+                    field_name="VisionBlockSpec.params['channels']",
+                )
+            if "depth" in params:
+                _validate_positive_int(
+                    params["depth"],
+                    field_name="VisionBlockSpec.params['depth']",
+                )
+        elif block_type == "pool":
+            if "kernel_size" not in params:
+                msg = "VisionBlockSpec(type='pool') missing required param: 'kernel_size'"
+                raise ValueError(msg)
+            _validate_kernel_size(
+                params["kernel_size"],
+                field_name="VisionBlockSpec.params['kernel_size']",
+            )
+            if "stride" in params:
+                _validate_kernel_size(
+                    params["stride"],
+                    field_name="VisionBlockSpec.params['stride']",
+                )
+            mode = str(params.get("mode", "max")).lower()
+            if mode not in {"max", "avg"}:
+                msg = (
+                    "VisionBlockSpec(type='pool').params['mode'] must be "
+                    f"'max' or 'avg'; got {mode!r}"
+                )
+                raise ValueError(msg)
+            params["mode"] = mode
+            object.__setattr__(self, "params", params)
+
+
+@dataclass(frozen=True, slots=True)
+class VisionBackboneSpec:
+    """Config DTO for selecting and shaping a vision backbone."""
+
+    type: str
+    input: VisionInputSpec
+    time_steps: int
+    encoding_mode: str = "rate"
+    blocks: list[VisionBlockSpec] = field(default_factory=lambda: [])
+    output_dim: int = 1
+
+    @property
+    def T(self) -> int:
+        """Alias for ``time_steps`` used in config docs."""
+        return self.time_steps
+
+    def __post_init__(self) -> None:
+        backbone_type = self.type.strip()
+        if not backbone_type:
+            msg = "VisionBackboneSpec.type must be a non-empty string"
+            raise ValueError(msg)
+        object.__setattr__(self, "type", backbone_type)
+
+        if not isinstance(self.input, VisionInputSpec):
+            if isinstance(self.input, dict):
+                raw = cast("dict[object, Any]", self.input)
+                try:
+                    parsed_input = VisionInputSpec(
+                        channels=raw["channels"],
+                        height=raw["height"],
+                        width=raw["width"],
+                    )
+                except KeyError as exc:
+                    msg = "VisionBackboneSpec.input must include channels, height, width"
+                    raise ValueError(msg) from exc
+                object.__setattr__(self, "input", parsed_input)
+            else:
+                msg = (
+                    "VisionBackboneSpec.input must be a VisionInputSpec "
+                    "or dict with channels/height/width"
+                )
+                raise ValueError(msg)
+
+        _validate_positive_int(self.time_steps, field_name="VisionBackboneSpec.time_steps")
+        _validate_positive_int(self.output_dim, field_name="VisionBackboneSpec.output_dim")
+
+        encoding_mode = self.encoding_mode.strip().lower()
+        if encoding_mode not in _VISION_ENCODING_MODES:
+            msg = (
+                "VisionBackboneSpec.encoding_mode must be one of "
+                f"{sorted(_VISION_ENCODING_MODES)}; got {self.encoding_mode!r}"
+            )
+            raise ValueError(msg)
+        object.__setattr__(self, "encoding_mode", encoding_mode)
+
+        if not isinstance(self.blocks, list):
+            msg = "VisionBackboneSpec.blocks must be a list[VisionBlockSpec]"
+            raise ValueError(msg)
+        if not self.blocks:
+            msg = "VisionBackboneSpec.blocks must contain at least one block"
+            raise ValueError(msg)
+
+        parsed_blocks: list[VisionBlockSpec] = []
+        for idx, block in enumerate(self.blocks):
+            if isinstance(block, VisionBlockSpec):
+                parsed_blocks.append(block)
+                continue
+            if isinstance(block, dict):
+                raw_block = cast("dict[object, Any]", block)
+                block_type = raw_block.get("type")
+                if block_type is None:
+                    msg = f"VisionBackboneSpec.blocks[{idx}] missing required key: 'type'"
+                    raise ValueError(msg)
+
+                raw_params = raw_block.get("params", {})
+                if raw_params is None:
+                    raw_params = {}
+                if not isinstance(raw_params, dict):
+                    msg = (
+                        f"VisionBackboneSpec.blocks[{idx}].params must be a dict[str, Any]"
+                    )
+                    raise ValueError(msg)
+                params = {str(k): v for k, v in cast("dict[object, Any]", raw_params).items()}
+                parsed_blocks.append(VisionBlockSpec(type=str(block_type), params=params))
+                continue
+
+            msg = (
+                f"VisionBackboneSpec.blocks[{idx}] must be VisionBlockSpec "
+                "or dict[type, params]"
+            )
+            raise ValueError(msg)
+
+        object.__setattr__(self, "blocks", parsed_blocks)
 
 
 @dataclass(frozen=True, slots=True)

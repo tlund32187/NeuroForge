@@ -1,0 +1,35 @@
+{
+  "artifacts": "artifacts",
+  "runner": {
+    "seed": 42,
+    "device": "auto",
+    "dtype": "float32",
+    "deterministic": true,
+    "benchmark": false,
+    "warn_only": true,
+    "steps": 320,
+    "batch_size": 64,
+    "n_classes": 10,
+    "dataset": "mnist",
+    "dataset_root": ".cache/torchvision",
+    "dataset_download": true,
+    "dataset_val_fraction": 0.1,
+    "dataset_num_workers": 0,
+    "dataset_pin_memory": false,
+    "allow_fashion_mnist": false,
+    "dataset_normalize": true,
+    "dataset_random_crop": false,
+    "dataset_crop_padding": 2,
+    "dataset_random_horizontal_flip": false,
+    "image_channels": 1,
+    "image_h": 28,
+    "image_w": 28,
+    "lr": 0.001,
+    "loss_fn": "bce_logits",
+    "readout": "spike_count",
+    "readout_threshold": 0.0,
+    "backbone_time_steps": 4,
+    "backbone_encoding_mode": "rate"
+  }
+}
+

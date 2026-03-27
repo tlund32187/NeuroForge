@@ -15,6 +15,12 @@ Serves static files (HTML/CSS/JS) and provides:
 - ``GET /api/run/<run_id>/topology``— topology.json
 - ``GET /api/run/<run_id>/topology-stats`` — topology/topology_stats.json
 - ``GET /api/run/<run_id>/scalars`` — metrics/scalars.csv as JSON
+- ``GET /api/run/<run_id>/vision/sample-grid`` — vision/samples/input_grid.png
+- ``GET /api/run/<run_id>/vision/event-sample`` — event sample stats summary
+- ``GET /api/run/<run_id>/vision/event-image?mode=bins|sum`` — event sample images
+- ``GET /api/run/<run_id>/vision/confusion`` — confusion matrix + per-class accuracy
+- ``GET /api/run/<run_id>/vision/layer-stats`` — vision layer stats CSV as JSON
+- ``GET /api/run/<run_id>/vision/summary`` — throughput summary from reports/scalars
 
 The training task runs in a background thread so the event loop stays
 responsive.
@@ -341,7 +347,96 @@ async def _handle_train(request: web.Request) -> web.Response:
         global _current_config
 
         try:
-            if gate == "MULTI":
+            if gate == "LOGIC_BACKBONE_TINY":
+                from neuroforge.monitors.vision_monitors import (
+                    ConfusionMatrixExporter,
+                    ConfusionMatrixMonitor,
+                    VisionLayerStatsExporter,
+                    VisionLayerStatsMonitor,
+                    VisionSampleGridExporter,
+                    VisionSampleGridMonitor,
+                )
+                from neuroforge.runners.vision import (
+                    VisionRunnerConfig,
+                    run_vision_classification,
+                )
+
+                layer_stats = VisionLayerStatsMonitor(interval_steps=1, enabled=True)
+                confusion = ConfusionMatrixMonitor(enabled=True)
+                samples = VisionSampleGridMonitor(max_samples=16, enabled=True)
+                _bus.subscribe_all(layer_stats)
+                _bus.subscribe_all(confusion)
+                _bus.subscribe_all(samples)
+                _bus.subscribe_all(VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True))
+                _bus.subscribe_all(ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True))
+                _bus.subscribe_all(VisionSampleGridExporter(ctx.run_dir, samples, enabled=True))
+
+                vision_cfg = VisionRunnerConfig(
+                    seed=seed,
+                    device=device,
+                    dtype="float32",
+                    deterministic=True,
+                    benchmark=False,
+                    warn_only=True,
+                    steps=max(1, max_trials),
+                    batch_size=16,
+                    n_classes=4,
+                    image_channels=1,
+                    image_h=8,
+                    image_w=8,
+                    dataset="logic_gates_pixels",
+                    dataset_root=".cache/logic_gates_pixels",
+                    dataset_download=False,
+                    dataset_num_workers=0,
+                    dataset_pin_memory=False,
+                    dataset_logic_image_size=8,
+                    dataset_logic_gates=("AND", "OR", "NAND", "NOR"),
+                    dataset_logic_mode="multiclass",
+                    dataset_logic_samples_per_gate=256,
+                    dataset_logic_train_ratio=0.7,
+                    dataset_logic_val_ratio=0.15,
+                    dataset_logic_test_ratio=0.15,
+                    lr=1e-3,
+                    loss_fn="bce_logits",
+                    readout="spike_count",
+                    readout_threshold=0.0,
+                    backbone_type="lif_convnet_v1",
+                    backbone_time_steps=8,
+                    backbone_encoding_mode="rate",
+                    backbone_output_dim=32,
+                    backbone_blocks=(
+                        {"type": "conv", "params": {"out_channels": 8, "kernel_size": 3}},
+                        {"type": "pool", "params": {"kernel_size": 2, "mode": "avg"}},
+                        {"type": "conv", "params": {"out_channels": 12, "kernel_size": 3}},
+                    ),
+                )
+                _current_config = _attach_monitoring_cfg(
+                    _make_config_dict(vision_cfg),
+                    resource_cfg,
+                )
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_START, step=0, t=0.0,
+                    source="dashboard",
+                    data={
+                        "run_meta": ctx.to_dict(),
+                        "config": _current_config,
+                    },
+                ))
+                summary = run_vision_classification(vision_cfg, event_bus=_bus)
+                result = summary.get("result", {})
+                steps = int(result.get("steps", max_trials))
+                _bus.publish(MonitorEvent(
+                    topic=EventTopic.RUN_END, step=steps, t=0.0,
+                    source="dashboard",
+                    data={
+                        "converged": True,
+                        "trials": steps,
+                        "steps": steps,
+                        "final_loss": float(result.get("final_loss", 0.0)),
+                        "final_accuracy": float(result.get("final_accuracy", 0.0)),
+                    },
+                ))
+            elif gate == "MULTI":
                 from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
 
                 multi_cfg = MultiGateConfig(
@@ -459,6 +554,204 @@ def _safe_run_dir(run_id: str) -> Path | None:
     return None
 
 
+def _parse_csv_value(value: str | None) -> Any:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            if value == "True":
+                return True
+            if value == "False":
+                return False
+            return value
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            parsed: dict[str, Any] = {}
+            for key, value in row.items():
+                parsed[str(key)] = _parse_csv_value(value)
+            rows.append(parsed)
+    return rows
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_json_load(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _is_vision_config(cfg: dict[str, Any]) -> bool:
+    task_name = str(cfg.get("task", "")).strip().lower()
+    if "vision" in task_name:
+        return True
+    if "backbone_time_steps" in cfg or "backbone_encoding_mode" in cfg:
+        return True
+    if "dataset_name" in cfg:
+        return True
+    return str(cfg.get("dataset", "")).strip().lower() in {
+        "synthetic",
+        "mnist",
+        "fashion_mnist",
+        "nmnist",
+        "pokerdvs",
+        "logic_gates_pixels",
+    }
+
+
+def _vision_sample_grid_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "samples" / "input_grid.png"
+
+
+def _vision_event_bins_grid_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "samples" / "event_bins_grid.png"
+
+
+def _vision_event_sum_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "samples" / "event_sum.png"
+
+
+def _vision_event_stats_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "metrics" / "event_sample_stats.json"
+
+
+def _vision_layer_stats_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "metrics" / "vision_layer_stats.csv"
+
+
+def _vision_confusion_npy_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "metrics" / "confusion_matrix.npy"
+
+
+def _vision_confusion_json_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "metrics" / "confusion_matrix.json"
+
+
+def _vision_per_class_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "metrics" / "per_class_accuracy.json"
+
+
+def _vision_benchmark_summary_path(run_dir: Path) -> Path:
+    return run_dir / "reports" / "benchmark_summary.json"
+
+
+def _vision_summary_path(run_dir: Path) -> Path:
+    return run_dir / "vision" / "vision_summary.json"
+
+
+def _load_confusion_matrix_from_npy(path: Path) -> list[list[int]] | None:
+    if not path.is_file():
+        return None
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        arr = np.load(path)
+        rows_raw = arr.tolist()
+    except Exception:
+        return None
+    if not isinstance(rows_raw, list):
+        return None
+    out: list[list[int]] = []
+    for row in rows_raw:
+        if not isinstance(row, list):
+            return None
+        out.append([int(v) for v in row])
+    return out
+
+
+def _load_confusion_matrix_from_json(path: Path) -> list[list[int]] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    matrix_raw: Any = payload
+    if isinstance(payload, dict):
+        if "matrix" in payload:
+            matrix_raw = payload.get("matrix")
+        elif "confusion_matrix" in payload:
+            matrix_raw = payload.get("confusion_matrix")
+    if not isinstance(matrix_raw, list):
+        return None
+    out: list[list[int]] = []
+    for row in matrix_raw:
+        if not isinstance(row, list):
+            return None
+        out.append([int(v) for v in row])
+    return out
+
+
+def _throughput_from_scalars(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    last_steps_per_sec: float | None = None
+    last_ms_per_step: float | None = None
+    last_wall_ms: float | None = None
+    last_trial: int | None = None
+    for row in rows:
+        sps = _to_float(row.get("perf.steps_per_sec"))
+        if sps is None:
+            sps = _to_float(row.get("steps_per_sec"))
+        if sps is not None:
+            last_steps_per_sec = sps
+
+        ms = _to_float(row.get("perf.ms_per_step"))
+        if ms is None:
+            ms = _to_float(row.get("ms_per_step"))
+        wall_ms = _to_float(row.get("wall_ms"))
+        if ms is None and wall_ms is not None:
+            ms = wall_ms
+        if ms is not None:
+            last_ms_per_step = ms
+            if ms > 0:
+                last_steps_per_sec = 1000.0 / ms if sps is None else last_steps_per_sec
+        if wall_ms is not None:
+            last_wall_ms = wall_ms
+
+        trial = _to_int(row.get("trial"))
+        if trial is not None:
+            last_trial = trial
+
+    return {
+        "steps_per_sec": last_steps_per_sec,
+        "ms_per_step": last_ms_per_step,
+        "wall_ms": last_wall_ms,
+        "steps": int(last_trial) if last_trial is not None else len(rows),
+    }
+
+
 async def _handle_runs(_request: web.Request) -> web.Response:
     """List completed runs under artifacts/, newest first."""
     if not _ARTIFACTS_DIR.is_dir():
@@ -483,7 +776,11 @@ async def _handle_runs(_request: web.Request) -> web.Response:
         if cfg_path.is_file():
             try:
                 cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-                if "max_epochs" in cfg:
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                if _is_vision_config(cfg):
+                    entry["task_name"] = "vision"
+                elif "max_epochs" in cfg:
                     entry["task_name"] = "multi_gate"
                 elif "gate" in cfg:
                     entry["task_name"] = f"logic_gate ({cfg['gate']})"
@@ -558,30 +855,207 @@ async def _handle_run_scalars(request: web.Request) -> web.Response:
     path = run_dir / "metrics" / "scalars.csv"
     if not path.is_file():
         return web.json_response({"error": "not found"}, status=404)
-    rows: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            # Convert numeric fields.
-            parsed: dict[str, Any] = {}
-            for k, v in row.items():
-                if v == "":
-                    parsed[k] = None
-                else:
-                    try:
-                        parsed[k] = int(v)
-                    except (ValueError, TypeError):
-                        try:
-                            parsed[k] = float(v)
-                        except (ValueError, TypeError):
-                            if v == "True":
-                                parsed[k] = True
-                            elif v == "False":
-                                parsed[k] = False
-                            else:
-                                parsed[k] = v
-            rows.append(parsed)
+    rows = _read_csv_rows(path)
     return web.json_response(rows)
+
+
+async def _handle_run_vision_sample_grid(request: web.Request) -> web.StreamResponse:
+    """Serve vision sample grid image for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = _vision_sample_grid_path(run_dir)
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.FileResponse(path)
+
+
+async def _handle_run_vision_event_image(request: web.Request) -> web.StreamResponse:
+    """Serve event-sample artifact image for a given run and display mode."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    mode_raw = str(request.rel_url.query.get("mode", "bins")).strip().lower()
+    mode = "sum" if mode_raw in {"sum", "summed", "aggregate"} else "bins"
+    path = (
+        _vision_event_sum_path(run_dir)
+        if mode == "sum"
+        else _vision_event_bins_grid_path(run_dir)
+    )
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.FileResponse(path)
+
+
+async def _handle_run_vision_event_sample(request: web.Request) -> web.Response:
+    """Serve event-sample stats + artifact availability for a given run."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    stats = _safe_json_load(_vision_event_stats_path(run_dir))
+    has_bins_grid = _vision_event_bins_grid_path(run_dir).is_file()
+    has_sum = _vision_event_sum_path(run_dir).is_file()
+    if stats is None and not has_bins_grid and not has_sum:
+        return web.json_response({"error": "not found"}, status=404)
+
+    payload = dict(stats or {})
+    image_files_raw = payload.get("image_files")
+    image_files = dict(image_files_raw) if isinstance(image_files_raw, dict) else {}
+    image_files.setdefault("bins_grid", "event_bins_grid.png")
+    image_files.setdefault("sum", "event_sum.png")
+
+    payload["image_files"] = image_files
+    payload["has_bins_grid"] = has_bins_grid
+    payload["has_sum"] = has_sum
+    return web.json_response(payload)
+
+
+async def _handle_run_vision_layer_stats(request: web.Request) -> web.Response:
+    """Serve vision_layer_stats.csv as JSON rows."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+    path = _vision_layer_stats_path(run_dir)
+    if not path.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    rows = _read_csv_rows(path)
+    layers = sorted({
+        str(row.get("layer"))
+        for row in rows
+        if row.get("layer") not in (None, "")
+    })
+    return web.json_response({
+        "rows": rows,
+        "layers": layers,
+        "metrics": ["spike_rate", "mean_activation", "max_activation"],
+    })
+
+
+async def _handle_run_vision_confusion(request: web.Request) -> web.Response:
+    """Serve confusion matrix summary from vision artifacts."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    npy_path = _vision_confusion_npy_path(run_dir)
+    matrix_json_path = _vision_confusion_json_path(run_dir)
+    per_class_path = _vision_per_class_path(run_dir)
+
+    per_class_payload = _safe_json_load(per_class_path) or {}
+    if (
+        not npy_path.is_file()
+        and not matrix_json_path.is_file()
+        and not per_class_payload
+    ):
+        return web.json_response({"error": "not found"}, status=404)
+
+    matrix: list[list[int]] = []
+    matrix_source = "none"
+
+    matrix_npy = _load_confusion_matrix_from_npy(npy_path)
+    if matrix_npy is not None:
+        matrix = matrix_npy
+        matrix_source = "npy"
+    else:
+        matrix_json = _load_confusion_matrix_from_json(matrix_json_path)
+        if matrix_json is not None:
+            matrix = matrix_json
+            matrix_source = "json"
+
+    total_samples = int(sum(sum(row) for row in matrix))
+    payload_total = _to_int(per_class_payload.get("total_samples"))
+    if payload_total is not None and payload_total > total_samples:
+        total_samples = payload_total
+
+    n_classes = len(matrix)
+    payload_classes = _to_int(per_class_payload.get("n_classes"))
+    if payload_classes is not None and payload_classes > n_classes:
+        n_classes = payload_classes
+
+    per_class_accuracy = per_class_payload.get("per_class_accuracy", {})
+    if not isinstance(per_class_accuracy, dict):
+        per_class_accuracy = {}
+
+    return web.json_response({
+        "matrix": matrix,
+        "matrix_source": matrix_source,
+        "n_classes": n_classes,
+        "total_samples": total_samples,
+        "per_class_accuracy": per_class_accuracy,
+    })
+
+
+async def _handle_run_vision_summary(request: web.Request) -> web.Response:
+    """Serve throughput/metrics summary for vision runs."""
+    run_dir = _safe_run_dir(request.match_info["run_id"])
+    if run_dir is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    benchmark_summary = _safe_json_load(_vision_benchmark_summary_path(run_dir))
+    vision_summary = _safe_json_load(_vision_summary_path(run_dir))
+
+    summary_source = "none"
+    throughput: dict[str, Any] = {
+        "steps_per_sec": None,
+        "ms_per_step": None,
+        "wall_ms": None,
+        "steps": None,
+    }
+    final_metrics: dict[str, Any] = {}
+    best_metrics: dict[str, Any] = {}
+    summary_payload: dict[str, Any] = {}
+
+    if benchmark_summary is not None:
+        summary_source = "benchmark_summary"
+        summary_payload = benchmark_summary
+        raw_throughput = benchmark_summary.get("throughput", {})
+        if isinstance(raw_throughput, dict):
+            throughput["steps_per_sec"] = _to_float(raw_throughput.get("steps_per_sec"))
+            throughput["ms_per_step"] = _to_float(raw_throughput.get("ms_per_step"))
+            throughput["wall_ms"] = _to_float(raw_throughput.get("wall_ms"))
+        throughput["steps"] = _to_int(benchmark_summary.get("steps"))
+        raw_final = benchmark_summary.get("final_metrics", {})
+        raw_best = benchmark_summary.get("best_metrics", {})
+        if isinstance(raw_final, dict):
+            final_metrics = raw_final
+        if isinstance(raw_best, dict):
+            best_metrics = raw_best
+    elif vision_summary is not None:
+        summary_source = "vision_summary"
+        summary_payload = vision_summary
+        result = vision_summary.get("result", {})
+        if isinstance(result, dict):
+            throughput["steps"] = _to_int(result.get("steps"))
+            final_metrics = {
+                "loss": _to_float(result.get("final_loss")),
+                "accuracy": _to_float(result.get("final_accuracy")),
+            }
+            best_metrics = {}
+
+    scalars_path = run_dir / "metrics" / "scalars.csv"
+    scalars_rows = _read_csv_rows(scalars_path) if scalars_path.is_file() else []
+    scalars_throughput = _throughput_from_scalars(scalars_rows)
+    for key in ("steps_per_sec", "ms_per_step", "wall_ms", "steps"):
+        if throughput.get(key) is None:
+            throughput[key] = scalars_throughput.get(key)
+
+    if summary_source == "none" and any(
+        throughput.get(key) is not None for key in ("steps_per_sec", "ms_per_step", "steps")
+    ):
+        summary_source = "scalars"
+
+    if summary_source == "none":
+        return web.json_response({"error": "not found"}, status=404)
+
+    return web.json_response({
+        "summary_source": summary_source,
+        "throughput": throughput,
+        "final_metrics": final_metrics,
+        "best_metrics": best_metrics,
+        "summary": summary_payload,
+    })
 
 
 def _events_path(run_dir: Path) -> Path:
@@ -699,6 +1173,12 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     app.router.add_get("/api/run/{run_id}/topology", _handle_run_topology)
     app.router.add_get("/api/run/{run_id}/topology-stats", _handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", _handle_run_scalars)
+    app.router.add_get("/api/run/{run_id}/vision/sample-grid", _handle_run_vision_sample_grid)
+    app.router.add_get("/api/run/{run_id}/vision/event-sample", _handle_run_vision_event_sample)
+    app.router.add_get("/api/run/{run_id}/vision/event-image", _handle_run_vision_event_image)
+    app.router.add_get("/api/run/{run_id}/vision/confusion", _handle_run_vision_confusion)
+    app.router.add_get("/api/run/{run_id}/vision/layer-stats", _handle_run_vision_layer_stats)
+    app.router.add_get("/api/run/{run_id}/vision/summary", _handle_run_vision_summary)
     app.router.add_get("/api/run/{run_id}/events", _handle_run_events)
     app.router.add_get("/api/run/{run_id}/events/index", _handle_run_events_index)
 

@@ -22,6 +22,8 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch>=2.3", "numpy>=1.26"]
+vision = ["torchvision>=0.18"]
+events = ["tonic>=1.5"]
 dashboard = ["aiohttp>=3.9"]
 monitoring = ["psutil>=5.9", "nvidia-ml-py>=11.0"]
 dev = [

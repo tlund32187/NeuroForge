@@ -83,6 +83,32 @@ const state = {
   replayTimer: null,
   replayIntervalMs: 80,
   replayStaticTopologyStats: null, // { totals, projections } from topology-stats API
+  uiTab: "core",       // "core" | "vision"
+
+  // Vision tab state
+  visionConfusionMatrix: [],
+  visionPerClassAccuracy: {},
+  visionLayerRows: [],
+  visionLayerSeries: {
+    spikeRate: {},       // { layerName: [[step, value], ...] }
+    meanActivation: {},  // { layerName: [[step, value], ...] }
+    maxActivation: {},   // { layerName: [[step, value], ...] }
+  },
+  visionSampleGridSource: null, // artifact URL or live data URL
+  visionEvent: {
+    mode: "bins",        // "bins" | "sum"
+    stats: null,         // event_sample_stats.json payload
+    hasBinsGrid: false,
+    hasSum: false,
+    imageSource: null,   // artifact URL
+  },
+  visionThroughput: {
+    stepsPerSec: null,
+    msPerStep: null,
+    wallMs: null,
+    steps: null,
+    source: "none",
+  },
 
   // Topology view controls
   edgeMode: "sampled",  // off | sampled | full
@@ -167,10 +193,35 @@ const btnLoadRun     = $("#btn-load-run");
 const btnRefreshRuns = $("#btn-refresh-runs");
 const btnModeLive    = $("#btn-mode-live");
 const btnModeReplay  = $("#btn-mode-replay");
+const btnTabCore = $("#btn-tab-core");
+const btnTabVision = $("#btn-tab-vision");
 const replayEventsControls = $("#replay-events-controls");
 const btnReplayPlay = $("#btn-replay-play");
 const replayScrubber = $("#replay-scrubber");
 const replayScrubberLabel = $("#replay-scrubber-label");
+const gridCore = $("#grid-core");
+const gridVision = $("#grid-vision");
+
+// Vision tab refs
+const visionSampleGridImg = $("#vision-sample-grid");
+const visionSampleGridEmpty = $("#vision-sample-grid-empty");
+const canvasVisionConfusion = $("#canvas-vision-confusion");
+const visionConfusionSummary = $("#vision-confusion-summary");
+const visionPerClassBody = $("#vision-per-class-body");
+const visionLayerStatsNote = $("#vision-layer-stats-note");
+const canvasVisionSpikeRate = $("#canvas-vision-spike-rate");
+const canvasVisionMeanActivation = $("#canvas-vision-mean-activation");
+const canvasVisionMaxActivation = $("#canvas-vision-max-activation");
+const visionThroughputSteps = $("#vision-throughput-steps");
+const visionThroughputMs = $("#vision-throughput-ms");
+const visionThroughputWall = $("#vision-throughput-wall");
+const visionThroughputSource = $("#vision-throughput-source");
+const visionEventModeSel = $("#vision-event-mode");
+const visionEventImg = $("#vision-event-image");
+const visionEventEmpty = $("#vision-event-empty");
+const visionEventTotal = $("#vision-event-total");
+const visionEventPolarity = $("#vision-event-polarity");
+const visionEventDuration = $("#vision-event-duration");
 
 // Run info banner (live → replay handoff)
 const runInfoBanner    = $("#run-info-banner");
@@ -256,6 +307,9 @@ function handleMessage(msg) {
       resetStabilitySeries();
       resetPerformanceSeries();
       if (state.mode === "live") {
+        resetVisionState();
+      }
+      if (state.mode === "live") {
         state.topologyStats = null;
         state.topologyProjections = [];
         state.replayStaticTopologyStats = null;
@@ -300,6 +354,9 @@ function handleMessage(msg) {
       ingestResourceMetrics(msg.data, msg.step);
       ingestStabilityMetrics(msg.data, msg.step, { deferDraw: true });
       ingestPerformanceMetrics(msg.data, msg.step, { deferDraw: true });
+      if (state.mode === "live") {
+        ingestVisionTrial(msg.data || {});
+      }
 
       updateTruthTableEntry(msg.data);
       updateNeuronSpikes(msg.data);
@@ -323,6 +380,10 @@ function handleMessage(msg) {
       ingestResourceMetrics(msg.data, msg.step);
       ingestStabilityMetrics(msg.data, msg.step);
       ingestPerformanceMetrics(msg.data, msg.step);
+      if (state.mode === "live") {
+        ingestVisionLayerMetrics(msg.data || {}, msg.step);
+        ingestVisionThroughputMetrics(msg.data || {}, msg.step);
+      }
       break;
 
     case "topology_stats":
@@ -550,13 +611,22 @@ function updateTopologyStatsSummary() {
 }
 
 function parseProjectionStatsRows(projectionsRaw) {
-  if (!Array.isArray(projectionsRaw)) return [];
+  if (!Array.isArray(projectionsRaw)) return { rows: [], hasDetailedBytes: false };
   const rows = [];
+  let hasDetailedBytes = false;
   for (const raw of projectionsRaw) {
     if (!raw || typeof raw !== "object") continue;
     const src = String(raw.src || "");
     const dst = String(raw.dst || "");
     const nEdges = parseMetricNumber(raw.n_edges);
+    const hasBytesKeys = (
+      "bytes_total_est" in raw
+      || "bytes_idx_est" in raw
+      || "bytes_delays_est" in raw
+      || "bytes_weights_est" in raw
+      || "bytes_dense_matrix_est" in raw
+    );
+    if (hasBytesKeys) hasDetailedBytes = true;
     const bytesTotal = parseMetricNumber(raw.bytes_total_est);
     const fallbackBytes =
       Number(parseMetricNumber(raw.bytes_idx_est) || 0)
@@ -573,7 +643,7 @@ function parseProjectionStatsRows(projectionsRaw) {
       bytes_total_est: bytesTotal !== null ? bytesTotal : fallbackBytes,
     });
   }
-  return rows;
+  return { rows, hasDetailedBytes };
 }
 
 function renderTopologyStatsPanel() {
@@ -625,14 +695,21 @@ function renderTopologyStatsPanel() {
 
 function applyTopologyStats(totalsRaw, projectionsRaw, stepRaw) {
   const totals = totalsRaw || {};
-  const projections = parseProjectionStatsRows(projectionsRaw);
+  const parsed = parseProjectionStatsRows(projectionsRaw);
+  const projections = parsed.rows;
   let edgesTotal = parseMetricNumber(totals.edges_total);
   let bytesTotal = parseMetricNumber(totals.bytes_total_est);
   let projCount = parseMetricNumber(totals.projection_count);
   let bytesDenseTotal = parseMetricNumber(totals.bytes_dense_total_est);
 
   if (Array.isArray(projectionsRaw)) {
-    state.topologyProjections = projections;
+    const existingHasDetailed = state.topologyProjections.some((row) => {
+      const n = parseMetricNumber(row.bytes_total_est);
+      return n !== null && n > 0;
+    });
+    if (parsed.hasDetailedBytes || !existingHasDetailed || state.topologyProjections.length === 0) {
+      state.topologyProjections = projections;
+    }
   }
 
   const rows = state.topologyProjections || [];
@@ -922,6 +999,8 @@ function ingestPerformanceMetrics(data, stepRaw, opts = {}) {
   const step = Number.isFinite(stepRaw) ? stepRaw : state.performanceLastStep + 1;
   const deferDraw = !!opts.deferDraw;
   let added = false;
+  let msValue = null;
+  let spsValue = null;
 
   const mapping = [
     ["perf.ms_per_step", "msPerStep"],
@@ -933,7 +1012,28 @@ function ingestPerformanceMetrics(data, stepRaw, opts = {}) {
     if (!(key in dataObj)) continue;
     const parsed = parseMetricNumber(dataObj[key]);
     if (parsed === null) continue;
-    pushPerformancePoint(seriesName, step, parsed);
+    if (seriesName === "msPerStep") msValue = parsed;
+    if (seriesName === "stepsPerSec") spsValue = parsed;
+  }
+
+  // Fallback for task runs that emit wall_ms but not perf.* scalars.
+  if (msValue === null && "wall_ms" in dataObj) {
+    const wallMs = parseMetricNumber(dataObj.wall_ms);
+    if (wallMs !== null) {
+      const denom = Math.max(1, Number(state.windowSteps || 1));
+      msValue = wallMs / denom;
+    }
+  }
+  if (spsValue === null && msValue !== null && msValue > 0) {
+    spsValue = 1000.0 / msValue;
+  }
+
+  if (msValue !== null) {
+    pushPerformancePoint("msPerStep", step, msValue);
+    added = true;
+  }
+  if (spsValue !== null) {
+    pushPerformancePoint("stepsPerSec", step, spsValue);
     added = true;
   }
 
@@ -1218,6 +1318,662 @@ function drawStabilityCharts() {
   updateStabilityBadges();
 }
 
+function resetVisionState() {
+  state.visionConfusionMatrix = [];
+  state.visionPerClassAccuracy = {};
+  state.visionLayerRows = [];
+  state.visionLayerSeries = {
+    spikeRate: {},
+    meanActivation: {},
+    maxActivation: {},
+  };
+  state.visionSampleGridSource = null;
+  state.visionEvent = {
+    mode: "bins",
+    stats: null,
+    hasBinsGrid: false,
+    hasSum: false,
+    imageSource: null,
+  };
+  state.visionThroughput = {
+    stepsPerSec: null,
+    msPerStep: null,
+    wallMs: null,
+    steps: null,
+    source: "none",
+  };
+
+  if (visionSampleGridImg) {
+    visionSampleGridImg.removeAttribute("src");
+    visionSampleGridImg.style.display = "none";
+  }
+  if (visionSampleGridEmpty) {
+    visionSampleGridEmpty.textContent = "No sample grid yet.";
+    visionSampleGridEmpty.style.display = "";
+  }
+  if (visionEventModeSel) {
+    visionEventModeSel.value = "bins";
+  }
+  if (visionEventImg) {
+    visionEventImg.removeAttribute("src");
+    visionEventImg.style.display = "none";
+  }
+  if (visionEventEmpty) {
+    visionEventEmpty.textContent = "No event sample artifacts found.";
+    visionEventEmpty.style.display = "";
+  }
+  if (visionEventTotal) {
+    visionEventTotal.textContent = "--";
+  }
+  if (visionEventPolarity) {
+    visionEventPolarity.textContent = "--";
+  }
+  if (visionEventDuration) {
+    visionEventDuration.textContent = "--";
+  }
+  if (visionPerClassBody) {
+    visionPerClassBody.innerHTML = "";
+  }
+  drawVisionConfusionMatrix();
+  drawVisionLayerCharts();
+  updateVisionThroughputPanel();
+}
+
+function ensureVisionConfusionSize(size) {
+  const target = Math.max(0, Number(size) || 0);
+  const matrix = state.visionConfusionMatrix;
+  while (matrix.length < target) {
+    matrix.push(new Array(target).fill(0));
+  }
+  for (let i = 0; i < matrix.length; i++) {
+    while (matrix[i].length < target) matrix[i].push(0);
+  }
+}
+
+function computePerClassAccuracyFromMatrix() {
+  const matrix = state.visionConfusionMatrix || [];
+  const out = {};
+  for (let i = 0; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] : [];
+    const rowSum = row.reduce((acc, v) => acc + (Number(v) || 0), 0);
+    const correct = Number(row[i]) || 0;
+    out[String(i)] = rowSum > 0 ? correct / rowSum : 0;
+  }
+  return out;
+}
+
+function parseIntArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+      .map((v) => Math.trunc(v));
+  }
+  if (value && typeof value === "object" && Array.isArray(value.sample)) {
+    return value.sample
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+      .map((v) => Math.trunc(v));
+  }
+  return [];
+}
+
+function normalizeVisionImageBatch(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const sample of raw) {
+    if (!Array.isArray(sample) || sample.length === 0) continue;
+    const channels = [];
+    for (const channel of sample) {
+      if (!Array.isArray(channel) || channel.length === 0) continue;
+      const rows = [];
+      for (const row of channel) {
+        if (!Array.isArray(row) || row.length === 0) continue;
+        rows.push(row.map((v) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
+        }));
+      }
+      if (rows.length > 0) channels.push(rows);
+    }
+    if (channels.length > 0) out.push(channels);
+  }
+  return out;
+}
+
+function setVisionSampleGridFromDataUrl(dataUrl, noteText) {
+  if (!visionSampleGridImg || !visionSampleGridEmpty) return;
+  if (!dataUrl) {
+    visionSampleGridImg.removeAttribute("src");
+    visionSampleGridImg.style.display = "none";
+    visionSampleGridEmpty.textContent = noteText || "No sample grid yet.";
+    visionSampleGridEmpty.style.display = "";
+    state.visionSampleGridSource = null;
+    return;
+  }
+  visionSampleGridImg.src = dataUrl;
+  visionSampleGridImg.style.display = "";
+  visionSampleGridEmpty.textContent = noteText || "";
+  visionSampleGridEmpty.style.display = noteText ? "" : "none";
+  state.visionSampleGridSource = dataUrl;
+}
+
+function setVisionSampleGridFromRun(runId) {
+  if (!visionSampleGridImg || !visionSampleGridEmpty || !runId) return;
+  const src = `/api/run/${runId}/vision/sample-grid?v=${Date.now()}`;
+  visionSampleGridEmpty.textContent = "Loading sample grid...";
+  visionSampleGridEmpty.style.display = "";
+  visionSampleGridImg.style.display = "none";
+  visionSampleGridImg.onload = () => {
+    visionSampleGridImg.style.display = "";
+    visionSampleGridEmpty.style.display = "none";
+    state.visionSampleGridSource = src;
+  };
+  visionSampleGridImg.onerror = () => {
+    visionSampleGridImg.removeAttribute("src");
+    visionSampleGridImg.style.display = "none";
+    visionSampleGridEmpty.textContent = "No sample grid artifact found.";
+    visionSampleGridEmpty.style.display = "";
+    state.visionSampleGridSource = null;
+  };
+  visionSampleGridImg.src = src;
+}
+
+function renderVisionEventStats() {
+  const stats = state.visionEvent && state.visionEvent.stats;
+  if (!stats || typeof stats !== "object") {
+    if (visionEventTotal) visionEventTotal.textContent = "--";
+    if (visionEventPolarity) visionEventPolarity.textContent = "--";
+    if (visionEventDuration) visionEventDuration.textContent = "--";
+    return;
+  }
+
+  const totalEvents = parseMetricNumber(stats.total_events);
+  const positiveFraction = parseMetricNumber(stats.positive_fraction);
+  const polarityBalance = parseMetricNumber(stats.polarity_balance);
+  const durationBins = parseMetricNumber(stats.duration_bins);
+  const durationUs = parseMetricNumber(stats.duration_us);
+  const sliceMode = typeof stats.slice_mode === "string" ? stats.slice_mode.trim() : "";
+
+  if (visionEventTotal) {
+    visionEventTotal.textContent =
+      totalEvents === null ? "--" : formatCount(Math.round(totalEvents));
+  }
+
+  let polarityText = "--";
+  if (positiveFraction !== null || polarityBalance !== null) {
+    const chunks = [];
+    if (positiveFraction !== null) chunks.push(`pos ${(positiveFraction * 100).toFixed(1)}%`);
+    if (polarityBalance !== null) chunks.push(`bal ${polarityBalance.toFixed(3)}`);
+    polarityText = chunks.join(" | ");
+  }
+  if (visionEventPolarity) visionEventPolarity.textContent = polarityText;
+
+  let durationText = "--";
+  const durationParts = [];
+  if (durationUs !== null && durationUs > 0) {
+    durationParts.push(`${Math.round(durationUs).toLocaleString()} us`);
+  }
+  if (durationBins !== null && durationBins > 0) {
+    durationParts.push(`T=${Math.round(durationBins)}`);
+  }
+  if (sliceMode) durationParts.push(sliceMode);
+  if (durationParts.length > 0) {
+    durationText = durationParts.join(" | ");
+  }
+  if (visionEventDuration) visionEventDuration.textContent = durationText;
+}
+
+function setVisionEventImageFromRun(runId) {
+  if (!visionEventImg || !visionEventEmpty || !runId) return;
+  const hasBins = !!state.visionEvent.hasBinsGrid;
+  const hasSum = !!state.visionEvent.hasSum;
+  if (!hasBins && !hasSum) {
+    visionEventImg.removeAttribute("src");
+    visionEventImg.style.display = "none";
+    visionEventEmpty.textContent = "No event sample artifacts found.";
+    visionEventEmpty.style.display = "";
+    state.visionEvent.imageSource = null;
+    return;
+  }
+
+  let mode = state.visionEvent.mode === "sum" ? "sum" : "bins";
+  if (mode === "sum" && !hasSum) mode = "bins";
+  if (mode === "bins" && !hasBins) mode = "sum";
+  state.visionEvent.mode = mode;
+  if (visionEventModeSel) {
+    visionEventModeSel.value = mode;
+  }
+
+  const src = `/api/run/${runId}/vision/event-image?mode=${mode}&v=${Date.now()}`;
+  visionEventEmpty.textContent = "Loading event sample...";
+  visionEventEmpty.style.display = "";
+  visionEventImg.style.display = "none";
+  visionEventImg.onload = () => {
+    visionEventImg.style.display = "";
+    visionEventEmpty.style.display = "none";
+    state.visionEvent.imageSource = src;
+  };
+  visionEventImg.onerror = () => {
+    visionEventImg.removeAttribute("src");
+    visionEventImg.style.display = "none";
+    visionEventEmpty.textContent = "Event image artifact not found.";
+    visionEventEmpty.style.display = "";
+    state.visionEvent.imageSource = null;
+  };
+  visionEventImg.src = src;
+}
+
+function applyVisionEventSamplePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    state.visionEvent.stats = null;
+    state.visionEvent.hasBinsGrid = false;
+    state.visionEvent.hasSum = false;
+    state.visionEvent.imageSource = null;
+    renderVisionEventStats();
+    if (visionEventImg) {
+      visionEventImg.removeAttribute("src");
+      visionEventImg.style.display = "none";
+    }
+    if (visionEventEmpty) {
+      visionEventEmpty.textContent = "No event sample artifacts found.";
+      visionEventEmpty.style.display = "";
+    }
+    return;
+  }
+  state.visionEvent.stats = payload;
+  state.visionEvent.hasBinsGrid = !!payload.has_bins_grid;
+  state.visionEvent.hasSum = !!payload.has_sum;
+  renderVisionEventStats();
+  if (state.activeRunId) {
+    setVisionEventImageFromRun(state.activeRunId);
+  }
+}
+
+function renderLiveVisionSampleGrid(images, expected, predicted) {
+  const batch = normalizeVisionImageBatch(images);
+  if (batch.length === 0) return;
+  const nSamples = Math.min(16, batch.length);
+  const first = batch[0];
+  if (!Array.isArray(first) || !Array.isArray(first[0]) || !Array.isArray(first[0][0])) return;
+  const h = first[0].length;
+  const w = first[0][0].length;
+  if (h <= 0 || w <= 0) return;
+
+  const nCols = Math.min(4, nSamples);
+  const nRows = Math.ceil(nSamples / nCols);
+  const scale = w <= 14 ? 4 : (w <= 28 ? 2 : 1);
+  const labelH = 14;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = nCols * w * scale;
+  canvas.height = nRows * (h * scale + labelH);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "10px monospace";
+  ctx.textBaseline = "top";
+
+  for (let idx = 0; idx < nSamples; idx++) {
+    const row = Math.floor(idx / nCols);
+    const col = idx % nCols;
+    const x0 = col * w * scale;
+    const y0 = row * (h * scale + labelH);
+    const sample = batch[idx];
+    const channels = sample.length;
+    let lo = Infinity;
+    let hi = -Infinity;
+
+    for (let c = 0; c < channels; c++) {
+      const ch = sample[c];
+      for (let yy = 0; yy < h; yy++) {
+        for (let xx = 0; xx < w; xx++) {
+          const v = Number(ch[yy][xx]);
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+    }
+    const range = hi - lo;
+    for (let yy = 0; yy < h; yy++) {
+      for (let xx = 0; xx < w; xx++) {
+        let acc = 0;
+        for (let c = 0; c < channels; c++) {
+          acc += Number(sample[c][yy][xx]);
+        }
+        const mean = acc / Math.max(1, channels);
+        const norm = range > 1e-12 ? (mean - lo) / range : 0;
+        const g = Math.max(0, Math.min(255, Math.round(norm * 255)));
+        ctx.fillStyle = `rgb(${g},${g},${g})`;
+        ctx.fillRect(x0 + xx * scale, y0 + labelH + yy * scale, scale, scale);
+      }
+    }
+
+    const gt = idx < expected.length ? expected[idx] : "?";
+    const pred = idx < predicted.length ? predicted[idx] : "?";
+    ctx.fillStyle = "#111111";
+    ctx.fillText(`gt:${gt} pred:${pred}`, x0 + 2, y0 + 1);
+  }
+
+  setVisionSampleGridFromDataUrl(
+    canvas.toDataURL("image/png"),
+    "Live preview from streamed training samples.",
+  );
+}
+
+function updateVisionConfusionSummary() {
+  const matrix = state.visionConfusionMatrix || [];
+  let total = 0;
+  for (const row of matrix) {
+    if (!Array.isArray(row)) continue;
+    for (const value of row) total += Number(value) || 0;
+  }
+
+  const hasPerClass = state.visionPerClassAccuracy && Object.keys(state.visionPerClassAccuracy).length > 0;
+  if (visionConfusionSummary) {
+    if (matrix.length === 0 && !hasPerClass) {
+      visionConfusionSummary.textContent = "No confusion matrix yet.";
+    } else {
+      const classes = matrix.length > 0
+        ? matrix.length
+        : Object.keys(state.visionPerClassAccuracy).length;
+      visionConfusionSummary.textContent = `classes=${classes} | samples=${total}`;
+    }
+  }
+
+  if (!visionPerClassBody) return;
+  const perClass = hasPerClass ? state.visionPerClassAccuracy : computePerClassAccuracyFromMatrix();
+  const classIds = Object.keys(perClass).sort((a, b) => Number(a) - Number(b));
+  if (classIds.length === 0) {
+    visionPerClassBody.innerHTML = "";
+    return;
+  }
+  let html = "";
+  for (const classId of classIds) {
+    const idx = Number(classId);
+    const row = Array.isArray(matrix[idx]) ? matrix[idx] : [];
+    const support = row.length > 0
+      ? row.reduce((acc, v) => acc + (Number(v) || 0), 0)
+      : null;
+    const acc = Number(perClass[classId]);
+    html += `<tr><td>${classId}</td><td>${(acc * 100).toFixed(1)}%</td><td>${support === null ? "—" : support}</td></tr>`;
+  }
+  visionPerClassBody.innerHTML = html;
+}
+
+function drawVisionConfusionMatrix() {
+  if (!canvasVisionConfusion) return;
+  const { ctx, w, h } = setupCanvas(canvasVisionConfusion);
+  ctx.clearRect(0, 0, w, h);
+
+  const matrix = state.visionConfusionMatrix || [];
+  if (matrix.length === 0) {
+    ctx.fillStyle = "#8b949e";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("No confusion matrix", w / 2, h / 2);
+    updateVisionConfusionSummary();
+    return;
+  }
+
+  const n = matrix.length;
+  const padL = 34;
+  const padR = 8;
+  const padT = 18;
+  const padB = 22;
+  const availW = w - padL - padR;
+  const availH = h - padT - padB;
+  const cell = Math.max(8, Math.floor(Math.min(availW / n, availH / n)));
+  const gridW = cell * n;
+  const gridH = cell * n;
+  const ox = padL + Math.floor((availW - gridW) / 2);
+  const oy = padT + Math.floor((availH - gridH) / 2);
+
+  let maxVal = 0;
+  for (const row of matrix) {
+    for (const val of row) {
+      const nVal = Number(val) || 0;
+      if (nVal > maxVal) maxVal = nVal;
+    }
+  }
+  if (maxVal <= 0) maxVal = 1;
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const value = Number(matrix[r][c]) || 0;
+      const t = value / maxVal;
+      const alpha = 0.1 + (0.85 * t);
+      ctx.fillStyle = `rgba(88, 166, 255, ${alpha.toFixed(3)})`;
+      ctx.fillRect(ox + c * cell, oy + r * cell, cell, cell);
+      ctx.strokeStyle = "rgba(13, 17, 23, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(ox + c * cell, oy + r * cell, cell, cell);
+
+      if (cell >= 18) {
+        ctx.fillStyle = "#e6edf3";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(value), ox + c * cell + cell / 2, oy + r * cell + cell / 2);
+      }
+    }
+  }
+
+  ctx.fillStyle = "#8b949e";
+  ctx.font = "10px monospace";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < n; i++) {
+    ctx.textAlign = "center";
+    ctx.fillText(String(i), ox + i * cell + cell / 2, oy - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(String(i), ox - 4, oy + i * cell + cell / 2);
+  }
+
+  updateVisionConfusionSummary();
+}
+
+function pushVisionLayerPoint(bucket, layerName, step, value) {
+  if (!(bucket in state.visionLayerSeries)) return;
+  const layer = String(layerName || "").trim();
+  if (!layer) return;
+  if (!state.visionLayerSeries[bucket][layer]) {
+    state.visionLayerSeries[bucket][layer] = [];
+  }
+  const series = state.visionLayerSeries[bucket][layer];
+  series.push([step, value]);
+  if (series.length > 1500) series.shift();
+}
+
+function ingestVisionLayerMetrics(data, stepRaw, opts = {}) {
+  const payload = data || {};
+  const step = Number.isFinite(stepRaw) ? stepRaw : 0;
+  const deferDraw = !!opts.deferDraw;
+  let added = false;
+
+  for (const [key, raw] of Object.entries(payload)) {
+    if (!String(key).startsWith("vision.layer.")) continue;
+    const tail = String(key).slice("vision.layer.".length);
+    const idx = tail.lastIndexOf(".");
+    if (idx <= 0) continue;
+    const layer = tail.slice(0, idx);
+    const metric = tail.slice(idx + 1);
+    const parsed = parseMetricNumber(raw);
+    if (parsed === null) continue;
+
+    if (metric === "spike_rate") {
+      pushVisionLayerPoint("spikeRate", layer, step, parsed);
+      added = true;
+    } else if (metric === "mean_activation") {
+      pushVisionLayerPoint("meanActivation", layer, step, parsed);
+      added = true;
+    } else if (metric === "max_activation") {
+      pushVisionLayerPoint("maxActivation", layer, step, parsed);
+      added = true;
+    }
+  }
+
+  if (added && !deferDraw) drawVisionLayerCharts();
+  return added;
+}
+
+function rebuildVisionLayerSeriesFromRows(rows) {
+  state.visionLayerRows = Array.isArray(rows) ? rows : [];
+  state.visionLayerSeries = {
+    spikeRate: {},
+    meanActivation: {},
+    maxActivation: {},
+  };
+  for (const row of state.visionLayerRows) {
+    const step = parseMetricNumber(row.trial);
+    const layer = row.layer;
+    if (step === null || !layer) continue;
+    const sr = parseMetricNumber(row.spike_rate);
+    const ma = parseMetricNumber(row.mean_activation);
+    const xa = parseMetricNumber(row.max_activation);
+    if (sr !== null) pushVisionLayerPoint("spikeRate", layer, step, sr);
+    if (ma !== null) pushVisionLayerPoint("meanActivation", layer, step, ma);
+    if (xa !== null) pushVisionLayerPoint("maxActivation", layer, step, xa);
+  }
+}
+
+function collectVisionLayerLines(bucket) {
+  const byLayer = state.visionLayerSeries[bucket] || {};
+  const layers = Object.keys(byLayer).sort();
+  const palette = [
+    "#58a6ff", "#3fb950", "#f85149", "#d29922",
+    "#bc8cff", "#79c0ff", "#56d364", "#ff7b72",
+  ];
+  return layers.map((layer, idx) => ({
+    points: byLayer[layer] || [],
+    color: palette[idx % palette.length],
+    label: layer,
+  }));
+}
+
+function drawVisionLayerCharts() {
+  const spikeLines = collectVisionLayerLines("spikeRate");
+  const meanLines = collectVisionLayerLines("meanActivation");
+  const maxLines = collectVisionLayerLines("maxActivation");
+
+  drawResourceChart(canvasVisionSpikeRate, spikeLines, { fixedMin: 0 });
+  drawResourceChart(canvasVisionMeanActivation, meanLines);
+  drawResourceChart(canvasVisionMaxActivation, maxLines, { fixedMin: 0 });
+
+  const hasAny = spikeLines.length > 0 || meanLines.length > 0 || maxLines.length > 0;
+  if (visionLayerStatsNote) {
+    visionLayerStatsNote.textContent = hasAny
+      ? `Layers: ${Array.from(new Set([
+          ...spikeLines.map((line) => line.label),
+          ...meanLines.map((line) => line.label),
+          ...maxLines.map((line) => line.label),
+        ])).join(", ")}`
+      : "No vision layer stats yet.";
+  }
+}
+
+function updateVisionThroughputPanel() {
+  const tp = state.visionThroughput;
+  if (visionThroughputSteps) {
+    visionThroughputSteps.textContent = tp.stepsPerSec === null ? "--" : tp.stepsPerSec.toFixed(2);
+  }
+  if (visionThroughputMs) {
+    visionThroughputMs.textContent = tp.msPerStep === null ? "--" : tp.msPerStep.toFixed(3);
+  }
+  if (visionThroughputWall) {
+    visionThroughputWall.textContent = tp.wallMs === null ? "--" : tp.wallMs.toFixed(1);
+  }
+  if (visionThroughputSource) {
+    visionThroughputSource.textContent = tp.source || "--";
+  }
+}
+
+function ingestVisionThroughputMetrics(data, stepRaw) {
+  const payload = data || {};
+  const ms =
+    parseMetricNumber(payload["perf.ms_per_step"]) ??
+    parseMetricNumber(payload.ms_per_step) ??
+    parseMetricNumber(payload.wall_ms);
+  const sps =
+    parseMetricNumber(payload["perf.steps_per_sec"]) ??
+    parseMetricNumber(payload.steps_per_sec) ??
+    (ms !== null && ms > 0 ? (1000.0 / ms) : null);
+  const wall = parseMetricNumber(payload.wall_ms);
+  const step = Number.isFinite(stepRaw) ? stepRaw : null;
+
+  let changed = false;
+  if (ms !== null) {
+    state.visionThroughput.msPerStep = ms;
+    changed = true;
+  }
+  if (sps !== null) {
+    state.visionThroughput.stepsPerSec = sps;
+    changed = true;
+  }
+  if (wall !== null) {
+    state.visionThroughput.wallMs = wall;
+    changed = true;
+  }
+  if (step !== null) {
+    state.visionThroughput.steps = step;
+  }
+  if (changed) {
+    state.visionThroughput.source = "live_scalars";
+    updateVisionThroughputPanel();
+  }
+}
+
+function ingestVisionTrial(data) {
+  const predicted = parseIntArray(data ? data.predicted : null);
+  const expected = parseIntArray(data ? data.expected : null);
+  const n = Math.min(predicted.length, expected.length);
+  for (let i = 0; i < n; i++) {
+    const gt = expected[i];
+    const pred = predicted[i];
+    if (gt < 0 || pred < 0) continue;
+    ensureVisionConfusionSize(Math.max(gt, pred) + 1);
+    state.visionConfusionMatrix[gt][pred] += 1;
+  }
+  if (n > 0) {
+    state.visionPerClassAccuracy = computePerClassAccuracyFromMatrix();
+    drawVisionConfusionMatrix();
+  }
+
+  const rawImages = data ? data.images : null;
+  if (rawImages !== null && rawImages !== undefined) {
+    renderLiveVisionSampleGrid(rawImages, expected, predicted);
+  }
+}
+
+function applyVisionConfusionPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  const matrix = Array.isArray(payload.matrix) ? payload.matrix : [];
+  state.visionConfusionMatrix = matrix.map((row) => (
+    Array.isArray(row)
+      ? row.map((v) => Math.max(0, Math.trunc(Number(v) || 0)))
+      : []
+  ));
+  const perClass = payload.per_class_accuracy;
+  state.visionPerClassAccuracy =
+    perClass && typeof perClass === "object" && !Array.isArray(perClass)
+      ? perClass
+      : computePerClassAccuracyFromMatrix();
+  drawVisionConfusionMatrix();
+}
+
+function applyVisionSummaryPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  const throughput = payload.throughput || {};
+  state.visionThroughput = {
+    stepsPerSec: parseMetricNumber(throughput.steps_per_sec),
+    msPerStep: parseMetricNumber(throughput.ms_per_step),
+    wallMs: parseMetricNumber(throughput.wall_ms),
+    steps: parseMetricNumber(throughput.steps),
+    source: String(payload.summary_source || "unknown"),
+  };
+  updateVisionThroughputPanel();
+}
+
 // ── Training control ─────────────────────────────────────────────────
 
 // Adjust max-trials placeholder when MULTI is selected.
@@ -1227,8 +1983,13 @@ gateSelect.addEventListener("change", () => {
     maxTrials.title = "Max epochs (24 trials each)";
     maxTrials.min = "10";
     maxTrials.step = "50";
+  } else if (gateSelect.value === "LOGIC_BACKBONE_TINY") {
+    maxTrials.value = "200";
+    maxTrials.title = "Train steps for vision logic-backbone preset";
+    maxTrials.min = "10";
+    maxTrials.step = "10";
   } else {
-    if (maxTrials.title.includes("epoch")) {
+    if (maxTrials.title.includes("epoch") || maxTrials.title.includes("vision logic-backbone")) {
       maxTrials.value = "5000";
     }
     maxTrials.title = "Max trials";
@@ -1388,7 +2149,7 @@ function replaySeek(targetIdx) {
     const replayEvents = state.replayEvents;
     const replayIndex = state.replayIndex;
     const replayStaticTopo = state.replayStaticTopologyStats;
-    resetDashboardState({ preserveReplay: true });
+    resetDashboardState({ preserveReplay: true, preserveVision: true });
     state.activeRunId = runId;
     state.replayEvents = replayEvents;
     state.replayIndex = replayIndex;
@@ -2269,10 +3030,48 @@ window.addEventListener("resize", () => {
     drawWeightChart();
     drawResourceCharts();
     drawStabilityCharts();
+    drawPerformanceCharts();
+    drawVisionConfusionMatrix();
+    drawVisionLayerCharts();
   }, 150);
 });
 
 // ── Mode switching ───────────────────────────────────────────────────
+
+function setActiveTab(tab, opts = {}) {
+  const next = tab === "vision" ? "vision" : "core";
+  const updateUrl = opts.updateUrl !== false;
+  state.uiTab = next;
+
+  if (btnTabCore) btnTabCore.classList.toggle("mode-active", next === "core");
+  if (btnTabVision) btnTabVision.classList.toggle("mode-active", next === "vision");
+  if (gridCore) gridCore.style.display = next === "core" ? "" : "none";
+  if (gridVision) gridVision.style.display = next === "vision" ? "" : "none";
+
+  if (updateUrl) {
+    const url = new URL(window.location);
+    if (next === "vision") url.searchParams.set("tab", "vision");
+    else url.searchParams.delete("tab");
+    window.history.replaceState(null, "", url);
+  }
+
+  if (next === "vision") {
+    drawVisionConfusionMatrix();
+    drawVisionLayerCharts();
+    updateVisionThroughputPanel();
+  }
+}
+
+if (btnTabCore) btnTabCore.addEventListener("click", () => setActiveTab("core"));
+if (btnTabVision) btnTabVision.addEventListener("click", () => setActiveTab("vision"));
+if (visionEventModeSel) {
+  visionEventModeSel.addEventListener("change", () => {
+    state.visionEvent.mode = visionEventModeSel.value === "sum" ? "sum" : "bins";
+    if (state.mode === "replay" && state.activeRunId) {
+      setVisionEventImageFromRun(state.activeRunId);
+    }
+  });
+}
 
 function setMode(mode) {
   if (state.mode !== mode) {
@@ -2388,12 +3187,26 @@ async function loadRun(runId) {
   setStatus("loading");
 
   try {
-    const [metaResp, cfgResp, topoResp, topoStatsResp, scalarsResp] = await Promise.all([
+    const [
+      metaResp,
+      cfgResp,
+      topoResp,
+      topoStatsResp,
+      scalarsResp,
+      visionConfusionResp,
+      visionLayerStatsResp,
+      visionSummaryResp,
+      visionEventSampleResp,
+    ] = await Promise.all([
       fetch(`/api/run/${runId}/meta`),
       fetch(`/api/run/${runId}/config`),
       fetch(`/api/run/${runId}/topology`),
       fetch(`/api/run/${runId}/topology-stats`),
       fetch(`/api/run/${runId}/scalars`),
+      fetch(`/api/run/${runId}/vision/confusion`),
+      fetch(`/api/run/${runId}/vision/layer-stats`),
+      fetch(`/api/run/${runId}/vision/summary`),
+      fetch(`/api/run/${runId}/vision/event-sample`),
     ]);
 
     if (!scalarsResp.ok) {
@@ -2413,6 +3226,10 @@ async function loadRun(runId) {
     const topo    = topoResp.ok   ? await topoResp.json()    : null;
     const topoStats = topoStatsResp.ok ? await topoStatsResp.json() : null;
     const scalars = await scalarsResp.json();
+    const visionConfusion = visionConfusionResp.ok ? await visionConfusionResp.json() : null;
+    const visionLayerStats = visionLayerStatsResp.ok ? await visionLayerStatsResp.json() : null;
+    const visionSummary = visionSummaryResp.ok ? await visionSummaryResp.json() : null;
+    const visionEventSample = visionEventSampleResp.ok ? await visionEventSampleResp.json() : null;
 
     if (topoStats && typeof topoStats === "object") {
       state.replayStaticTopologyStats = {
@@ -2457,6 +3274,25 @@ async function loadRun(runId) {
       );
     }
 
+    if (visionConfusion) {
+      applyVisionConfusionPayload(visionConfusion);
+    } else {
+      drawVisionConfusionMatrix();
+    }
+    if (visionLayerStats && Array.isArray(visionLayerStats.rows)) {
+      rebuildVisionLayerSeriesFromRows(visionLayerStats.rows);
+      drawVisionLayerCharts();
+    } else {
+      drawVisionLayerCharts();
+    }
+    if (visionSummary) {
+      applyVisionSummaryPayload(visionSummary);
+    } else {
+      updateVisionThroughputPanel();
+    }
+    applyVisionEventSamplePayload(visionEventSample);
+    setVisionSampleGridFromRun(runId);
+
     // Primary replay path: recorded events. Fallback: scalars only.
     const loadedEvents = await loadReplayEvents(runId);
     if (!loadedEvents) {
@@ -2487,6 +3323,7 @@ async function loadRun(runId) {
 
 function resetDashboardState(opts = {}) {
   const preserveReplay = !!opts.preserveReplay;
+  const preserveVision = !!opts.preserveVision;
   if (state._elapsedTimer) {
     clearInterval(state._elapsedTimer);
     state._elapsedTimer = null;
@@ -2513,6 +3350,9 @@ function resetDashboardState(opts = {}) {
   resetResourceSeries();
   resetStabilitySeries();
   resetPerformanceSeries();
+  if (!preserveVision) {
+    resetVisionState();
+  }
   if (!preserveReplay) {
     state.replayEvents = [];
     state.replayIndex = [];
@@ -2664,7 +3504,8 @@ function showRunInfoBanner(runId) {
   if (!runInfoBanner || !runId) return;
   state.activeRunId = runId;
   runInfoText.textContent = `Recording to: artifacts/${runId}`;
-  runInfoReplayLink.href = `/?mode=replay&run=${runId}`;
+  const tab = state.uiTab === "vision" ? "&tab=vision" : "";
+  runInfoReplayLink.href = `/?mode=replay&run=${runId}${tab}`;
   runInfoBanner.style.display = "";
 }
 
@@ -2679,6 +3520,7 @@ function hideRunInfoBanner() {
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("mode");
   const runId = params.get("run");
+  const tab = params.get("tab");
   initTopologyControls();
   updateTopologyStatsSummary();
   renderTopologyStatsPanel();
@@ -2689,6 +3531,7 @@ function hideRunInfoBanner() {
   drawStabilityCharts();
   setReplayControlsVisible(false);
   updateReplayScrubberUi();
+  resetVisionState();
 
   if (mode === "replay") {
     setMode("replay");
@@ -2703,6 +3546,8 @@ function hideRunInfoBanner() {
     // Default: live mode.
     setMode("live");
   }
+
+  setActiveTab(tab === "vision" ? "vision" : "core", { updateUrl: false });
 
   // In live mode, always connect WS.
   if (mode !== "replay") {

@@ -14,6 +14,10 @@
         <button id="btn-mode-live" class="mode-btn mode-active" data-mode="live">Live</button>
         <button id="btn-mode-replay" class="mode-btn" data-mode="replay">Replay</button>
       </div>
+      <div class="view-toggle">
+        <button id="btn-tab-core" class="mode-btn mode-active" data-tab="core">Core</button>
+        <button id="btn-tab-vision" class="mode-btn" data-tab="vision">Vision</button>
+      </div>
 
       <div id="live-controls" class="control-group">
         <select id="gate-select">
@@ -24,6 +28,7 @@
           <option value="XOR">XOR</option>
           <option value="XNOR">XNOR</option>
           <option value="MULTI">MULTI (All 6)</option>
+          <option value="LOGIC_BACKBONE_TINY">Logic Gates (Backbone Tiny)</option>
         </select>
         <input id="max-trials" type="number" value="5000" min="100" step="100" title="Max trials">
         <select id="device-select" title="Training device">
@@ -63,7 +68,7 @@
     <a id="run-info-replay-link" href="#" target="_blank" class="replay-link">Replay this run</a>
   </div>
 
-  <main id="grid">
+  <main id="grid-core" class="dashboard-grid dashboard-tab">
     <section class="panel" id="panel-config" style="display:none">
       <h2>Run Configuration</h2>
       <div id="config-grid" class="config-grid"></div>
@@ -295,6 +300,112 @@
       <section class="panel" id="panel-log">
         <h2>Training Log</h2>
         <div id="log-container"></div>
+      </section>
+    </div>
+  </main>
+
+  <main id="grid-vision" class="dashboard-grid dashboard-tab" style="display:none">
+    <div class="grid-col">
+      <section class="panel" id="panel-vision-samples">
+        <h2>Sample Grid</h2>
+        <div id="vision-sample-grid-empty" class="vision-note">
+          No sample grid yet.
+        </div>
+        <img id="vision-sample-grid" class="vision-sample-grid" alt="Vision sample grid" style="display:none">
+      </section>
+
+      <section class="panel" id="panel-vision-events">
+        <h2>Event Sample</h2>
+        <div class="vision-event-toolbar">
+          <label for="vision-event-mode">View</label>
+          <select id="vision-event-mode">
+            <option value="bins" selected>Per Bin</option>
+            <option value="sum">Summed</option>
+          </select>
+        </div>
+        <div id="vision-event-empty" class="vision-note">
+          No event sample artifacts found.
+        </div>
+        <img id="vision-event-image" class="vision-sample-grid" alt="Vision event sample" style="display:none">
+        <div class="vision-event-stats">
+          <div class="stat-card">
+            <div class="stat-label">Total Events</div>
+            <div id="vision-event-total" class="stat-value">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Polarity Balance</div>
+            <div id="vision-event-polarity" class="stat-value">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Duration</div>
+            <div id="vision-event-duration" class="stat-value">--</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-vision-confusion">
+        <h2>Confusion Matrix</h2>
+        <div id="vision-confusion-summary" class="vision-note">
+          No confusion matrix yet.
+        </div>
+        <canvas id="canvas-vision-confusion"></canvas>
+        <div class="vision-table-wrap">
+          <table id="vision-per-class-table">
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th>Accuracy</th>
+                <th>Support</th>
+              </tr>
+            </thead>
+            <tbody id="vision-per-class-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="grid-col">
+      <section class="panel" id="panel-vision-layer-stats">
+        <h2>Layer Stats</h2>
+        <div id="vision-layer-stats-note" class="vision-note">
+          No vision layer stats yet.
+        </div>
+        <div class="vision-layer-grid">
+          <div class="vision-layer-chart">
+            <h3>Spike Rate</h3>
+            <canvas id="canvas-vision-spike-rate"></canvas>
+          </div>
+          <div class="vision-layer-chart">
+            <h3>Mean Activation</h3>
+            <canvas id="canvas-vision-mean-activation"></canvas>
+          </div>
+          <div class="vision-layer-chart">
+            <h3>Max Activation</h3>
+            <canvas id="canvas-vision-max-activation"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-vision-throughput">
+        <h2>Throughput</h2>
+        <div class="vision-throughput-grid">
+          <div class="stat-card">
+            <div class="stat-label">Steps / Sec</div>
+            <div id="vision-throughput-steps" class="stat-value">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">ms / Step</div>
+            <div id="vision-throughput-ms" class="stat-value">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Wall ms</div>
+            <div id="vision-throughput-wall" class="stat-value">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Source</div>
+            <div id="vision-throughput-source" class="stat-value">--</div>
+          </div>
+        </div>
       </section>
     </div>
   </main>

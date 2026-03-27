@@ -16,6 +16,9 @@ from neuroforge.network.specs import (
     NetworkSpec,
     PopulationSpec,
     ProjectionSpec,
+    VisionBackboneSpec,
+    VisionBlockSpec,
+    VisionInputSpec,
 )
 from neuroforge.network.topology_builders import (
     build_block_sparse_topology,
@@ -32,6 +35,9 @@ __all__ = [
     "NetworkSpec",
     "PopulationSpec",
     "ProjectionSpec",
+    "VisionBackboneSpec",
+    "VisionBlockSpec",
+    "VisionInputSpec",
     "build_dale_signs",
     "build_gate_network",
     "build_block_sparse_topology",
