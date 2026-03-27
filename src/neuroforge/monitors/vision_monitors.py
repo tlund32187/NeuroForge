@@ -42,11 +42,14 @@ def _require_numpy() -> Any:
 
 def _require_pillow() -> tuple[Any, Any]:
     try:
-        from PIL import Image, ImageDraw
+        import importlib
+
+        _image = importlib.import_module("PIL.Image")
+        _draw = importlib.import_module("PIL.ImageDraw")
     except ImportError as exc:
         msg = "Pillow is required for vision sample grid export"
         raise ImportError(msg) from exc
-    return Image, ImageDraw
+    return _image, _draw
 
 
 def _as_int_list(value: Any) -> list[int]:
