@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neuroforge.core.torch_utils import require_torch
 from neuroforge.vision.backbones.state import VisionState
 
-torch = require_torch()
-nn = torch.nn
+if TYPE_CHECKING:
+    from torch import nn
+else:
+    torch = require_torch()
+    nn = torch.nn
 
 __all__ = ["NoBackbone"]
 
@@ -21,7 +24,7 @@ class NoBackbone(nn.Module):
         if channels <= 0 or height <= 0 or width <= 0:
             msg = "NoBackbone requires positive channels/height/width"
             raise ValueError(msg)
-        self.type = "none"
+        self.backbone_type = "none"
         self.input_channels = int(channels)
         self.input_height = int(height)
         self.input_width = int(width)

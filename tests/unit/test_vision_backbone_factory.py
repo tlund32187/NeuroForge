@@ -37,7 +37,7 @@ def test_vision_backbone_resolves_via_factory_hub() -> None:
     backbone = factory.build()
     assert isinstance(backbone, LifConvNetV1)
     assert isinstance(backbone, ResolvedVisionBackbone)
-    assert backbone.type == "lif_convnet_v1"
+    assert backbone.backbone_type == "lif_convnet_v1"
     assert backbone.input.channels == 3
     assert backbone.time_steps == 6
     assert backbone.encoding_mode == "rate"
@@ -63,7 +63,8 @@ def test_create_vision_backbone_helper() -> None:
     backbone = create_vision_backbone(spec)
     x = torch.rand(3, 1, 16, 16, dtype=torch.float32)
     features, state = backbone(x)
-    assert backbone.type == "lif_convnet_v1"
+    assert backbone.backbone_type == "lif_convnet_v1"
+    assert isinstance(backbone, LifConvNetV1)
     assert backbone.encoding_mode == "poisson"
     assert backbone.output_dim == 32
     assert features.shape == (3, 32)

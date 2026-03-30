@@ -8,11 +8,14 @@ from neuroforge.core.torch_utils import require_torch
 from neuroforge.vision.backbones.state import VisionState
 from neuroforge.vision.blocks import SpikingConvBlock, SpikingPool, SpikingResBlock
 
-if TYPE_CHECKING:
-    from neuroforge.network.specs import VisionBackboneSpec
-
 torch = require_torch()
-nn = torch.nn
+
+if TYPE_CHECKING:
+    from torch import nn
+
+    from neuroforge.network.specs import VisionBackboneSpec
+else:
+    nn = torch.nn
 
 __all__ = ["LifConvNetV1"]
 
@@ -41,7 +44,7 @@ class LifConvNetV1(nn.Module):
             msg = f"LifConvNetV1 requires spec.type='lif_convnet_v1', got {spec.type!r}"
             raise ValueError(msg)
 
-        self.type = spec.type
+        self.backbone_type = spec.type
         self.input = spec.input
         self.time_steps = spec.time_steps
         self.encoding_mode = spec.encoding_mode
@@ -53,6 +56,7 @@ class LifConvNetV1(nn.Module):
 
         for idx, block in enumerate(spec.blocks):
             params = dict(block.params)
+            layer: nn.Module
             if block.type == "conv":
                 out_channels = int(params["out_channels"])
                 norm_raw = params.get("norm")

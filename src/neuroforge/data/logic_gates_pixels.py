@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neuroforge.core.torch_utils import require_torch
 
 torch = require_torch()
+
+if TYPE_CHECKING:
+    from torch.utils.data import Dataset as _Dataset
+else:
+    _Dataset = torch.utils.data.Dataset
 
 __all__ = [
     "LOGIC_GATE_TABLES",
@@ -98,7 +103,7 @@ class LogicGatesPixelsConfig:
             raise ValueError(msg)
 
 
-class LogicGatesPixelsDataset(torch.utils.data.Dataset[Any]):
+class LogicGatesPixelsDataset(_Dataset[Any]):
     """In-memory tensor dataset yielding ``([1,H,W], label)`` pairs."""
 
     def __init__(

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neuroforge.core.torch_utils import require_torch
 from neuroforge.vision.blocks.conv import SpikingConvBlock, build_2d_norm
 from neuroforge.vision.blocks.spike import SurrogateSpike
 
-torch = require_torch()
-nn = torch.nn
+if TYPE_CHECKING:
+    from torch import nn
+else:
+    torch = require_torch()
+    nn = torch.nn
 
 __all__ = ["SpikingResBlock"]
 

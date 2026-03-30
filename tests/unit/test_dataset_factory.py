@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 
 torch = require_torch()
 
+if TYPE_CHECKING:
+    from torch.utils.data import Dataset as _Dataset
+else:
+    _Dataset = torch.utils.data.Dataset
+
 
 class _Compose:
     def __init__(self, transforms: list[Any]) -> None:
@@ -92,7 +97,7 @@ class _FakeTransforms:
     RandomHorizontalFlip = _RandomHorizontalFlip
 
 
-class _FakeMNIST(torch.utils.data.Dataset[Any]):
+class _FakeMNIST(_Dataset[Any]):
     def __init__(
         self,
         *,

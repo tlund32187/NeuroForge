@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neuroforge.core.surrogate import surrogate_spike
 from neuroforge.core.torch_utils import require_torch
 
-torch = require_torch()
-nn = torch.nn
+if TYPE_CHECKING:
+    from torch import nn
+else:
+    torch = require_torch()
+    nn = torch.nn
 
 __all__ = ["SurrogateSpike"]
 

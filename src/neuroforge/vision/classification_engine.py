@@ -7,13 +7,16 @@ from typing import TYPE_CHECKING, Any
 
 from neuroforge.core.torch_utils import require_torch
 
+torch = require_torch()
+
 if TYPE_CHECKING:
+    from torch import nn
+
     from neuroforge.contracts.encoding import IReadout, ReadoutResult
     from neuroforge.vision.backbones import VisionState
     from neuroforge.vision.factory import ResolvedVisionBackbone
-
-torch = require_torch()
-nn = torch.nn
+else:
+    nn = torch.nn
 
 __all__ = ["VisionClassificationEngine", "VisionStepResult"]
 

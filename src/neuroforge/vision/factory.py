@@ -21,7 +21,7 @@ __all__ = [
 class ResolvedVisionBackbone(Protocol):
     """Runtime vision backbone interface produced by factory build()."""
 
-    type: str
+    backbone_type: str
     output_dim: int
 
     def __call__(

@@ -125,10 +125,11 @@ def _extract_accuracy_fraction(run: dict[str, Any], *, split: str) -> float | No
     best = _as_mapping(run.get("best_metrics"))
     final = _as_mapping(run.get("final_metrics"))
 
+    keys: list[str]
     if split == "val":
-        keys = ("val_accuracy", "accuracy")
+        keys = ["val_accuracy", "accuracy"]
     elif split == "test":
-        keys = ("test_accuracy", "val_accuracy", "accuracy")
+        keys = ["test_accuracy", "val_accuracy", "accuracy"]
     else:
         msg = f"Unsupported split: {split!r}"
         raise ValueError(msg)

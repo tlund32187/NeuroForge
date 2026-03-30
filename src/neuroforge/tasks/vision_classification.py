@@ -733,20 +733,19 @@ class VisionClassificationTask:
                     step_out.features.abs().max().item()
                 ),
             }
-            if state is not None:
-                for name, counts in state.per_layer_spike_counts.items():
-                    scalar_data[f"spikes.{name}.mean"] = float(counts.mean().item())
-                    neurons = int(state.per_layer_neuron_count.get(name, 0))
-                    denom = float(max(1, neurons * max(1, state.time_steps)))
-                    scalar_data[f"vision.layer.{name}.spike_rate"] = float(
-                        counts.mean().item() / denom
-                    )
-                    scalar_data[f"vision.layer.{name}.mean_activation"] = float(
-                        counts.mean().item() / float(max(1, state.time_steps))
-                    )
-                    scalar_data[f"vision.layer.{name}.max_activation"] = float(
-                        counts.max().item() / float(max(1, state.time_steps))
-                    )
+            for name, counts in state.per_layer_spike_counts.items():
+                scalar_data[f"spikes.{name}.mean"] = float(counts.mean().item())
+                neurons = int(state.per_layer_neuron_count.get(name, 0))
+                denom = float(max(1, neurons * max(1, state.time_steps)))
+                scalar_data[f"vision.layer.{name}.spike_rate"] = float(
+                    counts.mean().item() / denom
+                )
+                scalar_data[f"vision.layer.{name}.mean_activation"] = float(
+                    counts.mean().item() / float(max(1, state.time_steps))
+                )
+                scalar_data[f"vision.layer.{name}.max_activation"] = float(
+                    counts.max().item() / float(max(1, state.time_steps))
+                )
             self._emit("scalar", step_idx, "VISION", scalar_data)
 
         self._sync_cuda_if_needed(dev)
