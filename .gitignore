@@ -21,6 +21,9 @@ venv/
 .vscode/
 *.code-workspace
 
+# Claude Code local state (memory, plans, local settings)
+.claude/
+
 # OS
 Thumbs.db
 Desktop.ini
