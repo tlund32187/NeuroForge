@@ -75,6 +75,32 @@ def smart_device(n_neurons: int) -> str:
     return "cpu"
 
 
+def cuda_maybe_sync(device: Any = None) -> None:
+    """Synchronise pending CUDA work — a no-op unless CUDA actually applies.
+
+    Returns immediately when CUDA is unavailable or *device* is not a CUDA
+    device. Call this around timing windows so wall-clock measurements account
+    for asynchronous GPU work, instead of scattering ``torch.cuda.synchronize``
+    (and its availability/device guards) across the codebase.
+
+    Parameters
+    ----------
+    device:
+        A torch device / device string to synchronise, or ``None`` to
+        synchronise the current default CUDA device.
+    """
+    torch = require_torch()
+    if not torch.cuda.is_available():
+        return
+    if device is not None:
+        device_type = str(getattr(device, "type", device))
+        if not device_type.startswith("cuda"):
+            return
+        torch.cuda.synchronize(device=device)
+        return
+    torch.cuda.synchronize()
+
+
 def resolve_device_dtype(
     device: str = "",
     dtype: str = "float32",

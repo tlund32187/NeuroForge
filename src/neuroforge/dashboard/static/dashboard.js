@@ -83,9 +83,10 @@ const state = {
   replayTimer: null,
   replayIntervalMs: 80,
   replayStaticTopologyStats: null, // { totals, projections } from topology-stats API
-  uiTab: "core",       // "core" | "vision"
+  uiTab: "core",       // "core" | "vision" | "params"
 
   // Vision tab state
+  visionClassNames: [],
   visionConfusionMatrix: [],
   visionPerClassAccuracy: {},
   visionLayerRows: [],
@@ -195,12 +196,16 @@ const btnModeLive    = $("#btn-mode-live");
 const btnModeReplay  = $("#btn-mode-replay");
 const btnTabCore = $("#btn-tab-core");
 const btnTabVision = $("#btn-tab-vision");
+const btnTabTopology = $("#btn-tab-topology");
+const btnTabParams = $("#btn-tab-params");
 const replayEventsControls = $("#replay-events-controls");
 const btnReplayPlay = $("#btn-replay-play");
 const replayScrubber = $("#replay-scrubber");
 const replayScrubberLabel = $("#replay-scrubber-label");
 const gridCore = $("#grid-core");
 const gridVision = $("#grid-vision");
+const gridTopology = $("#grid-topology");
+const gridParams = $("#grid-params");
 
 // Vision tab refs
 const visionSampleGridImg = $("#vision-sample-grid");
@@ -309,6 +314,12 @@ function handleMessage(msg) {
       if (state.mode === "live") {
         resetVisionState();
       }
+      // Capture class names from dataset metadata AFTER resetVisionState().
+      if (msg.data.dataset_meta && Array.isArray(msg.data.dataset_meta.class_names)) {
+        state.visionClassNames = msg.data.dataset_meta.class_names;
+      } else if (Array.isArray(msg.data.class_names)) {
+        state.visionClassNames = msg.data.class_names;
+      }
       if (state.mode === "live") {
         state.topologyStats = null;
         state.topologyProjections = [];
@@ -337,6 +348,10 @@ function handleMessage(msg) {
 
     case "topology":
       state.topology = msg.data;
+      // Vision topologies may carry class_names as a backup source.
+      if (state.visionClassNames.length === 0 && msg.data && Array.isArray(msg.data.class_names)) {
+        state.visionClassNames = msg.data.class_names;
+      }
       applyTopologyStats(
         msg.data ? msg.data.topology_stats : null,
         msg.data ? msg.data.projection_meta : null,
@@ -344,6 +359,8 @@ function handleMessage(msg) {
       );
       buildNetworkLayout();
       drawNetwork();
+      // Forward to dedicated Topology page.
+      if (window.TopologyPage) window.TopologyPage.onTopologyData(msg.data);
       break;
 
     case "training_trial":
@@ -358,8 +375,11 @@ function handleMessage(msg) {
         ingestVisionTrial(msg.data || {});
       }
 
-      updateTruthTableEntry(msg.data);
-      updateNeuronSpikes(msg.data);
+      // SNN-specific updates (skip for vision batch data).
+      if (msg.data.input !== undefined) {
+        updateTruthTableEntry(msg.data);
+        updateNeuronSpikes(msg.data);
+      }
       updateStats();
 
       // Append log line (keep last 200).
@@ -400,6 +420,7 @@ function handleMessage(msg) {
       break;
 
     case "training_end":
+    case "run_end":
       state.training = false;
       state.converged = msg.data.converged;
       if (msg.data.stopped) {
@@ -456,6 +477,8 @@ function applyTrainingSnapshot(snap) {
       state.totalTrials,
     );
     buildNetworkLayout();
+    // Forward to dedicated Topology page.
+    if (window.TopologyPage) window.TopologyPage.onTopologyData(snap.topology);
   }
   if (snap.topology_stats) {
     applyTopologyStats(snap.topology_stats.totals || snap.topology_stats, snap.topology_stats.projections, state.totalTrials);
@@ -1319,6 +1342,11 @@ function drawStabilityCharts() {
 }
 
 function resetVisionState() {
+  // Destroy Cytoscape graph and restore canvas.
+  _destroyCyGraph();
+  canvasNet.style.display = "";
+
+  state.visionClassNames = [];
   state.visionConfusionMatrix = [];
   state.visionPerClassAccuracy = {};
   state.visionLayerRows = [];
@@ -1377,6 +1405,12 @@ function resetVisionState() {
   drawVisionConfusionMatrix();
   drawVisionLayerCharts();
   updateVisionThroughputPanel();
+
+  // Reset architecture panels.
+  state._archWeightStats = {};
+  if (archSummary) archSummary.classList.add("hidden");
+  if (archDetailPanel) archDetailPanel.classList.add("hidden");
+  if (archSummaryTbody) archSummaryTbody.innerHTML = "";
 }
 
 function ensureVisionConfusionSize(size) {
@@ -1414,6 +1448,10 @@ function parseIntArray(value) {
       .map((v) => Number(v))
       .filter((v) => Number.isFinite(v))
       .map((v) => Math.trunc(v));
+  }
+  // Handle scalar int/number (e.g. from single-trial tasks like MULTI gate)
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return [Math.trunc(value)];
   }
   return [];
 }
@@ -1690,14 +1728,16 @@ function updateVisionConfusionSummary() {
     return;
   }
   let html = "";
+  const classNames = state.visionClassNames || [];
   for (const classId of classIds) {
     const idx = Number(classId);
+    const label = classNames[idx] || classId;
     const row = Array.isArray(matrix[idx]) ? matrix[idx] : [];
     const support = row.length > 0
       ? row.reduce((acc, v) => acc + (Number(v) || 0), 0)
       : null;
     const acc = Number(perClass[classId]);
-    html += `<tr><td>${classId}</td><td>${(acc * 100).toFixed(1)}%</td><td>${support === null ? "—" : support}</td></tr>`;
+    html += `<tr><td>${label}</td><td>${(acc * 100).toFixed(1)}%</td><td>${support === null ? "—" : support}</td></tr>`;
   }
   visionPerClassBody.innerHTML = html;
 }
@@ -1763,11 +1803,13 @@ function drawVisionConfusionMatrix() {
   ctx.fillStyle = "#8b949e";
   ctx.font = "10px monospace";
   ctx.textBaseline = "middle";
+  const classNames = state.visionClassNames || [];
   for (let i = 0; i < n; i++) {
+    const label = classNames[i] || String(i);
     ctx.textAlign = "center";
-    ctx.fillText(String(i), ox + i * cell + cell / 2, oy - 8);
+    ctx.fillText(label, ox + i * cell + cell / 2, oy - 8);
     ctx.textAlign = "right";
-    ctx.fillText(String(i), ox - 4, oy + i * cell + cell / 2);
+    ctx.fillText(label, ox - 4, oy + i * cell + cell / 2);
   }
 
   updateVisionConfusionSummary();
@@ -1939,6 +1981,25 @@ function ingestVisionTrial(data) {
     drawVisionConfusionMatrix();
   }
 
+  // Feed truth table for vision classification tasks.
+  if (state.visionClassNames.length > 0 && n > 0) {
+    for (let i = 0; i < n; i++) {
+      const gt = expected[i];
+      const pred = predicted[i];
+      if (gt < 0 || pred < 0) continue;
+      const className = state.visionClassNames[gt] || `Class ${gt}`;
+      const predName = state.visionClassNames[pred] || `Class ${pred}`;
+      updateTruthTableEntry({
+        gate: className,
+        input: [gt],
+        expected: className,
+        predicted: predName,
+        correct: gt === pred,
+      });
+    }
+    renderTruthTable();
+  }
+
   const rawImages = data ? data.images : null;
   if (rawImages !== null && rawImages !== undefined) {
     renderLiveVisionSampleGrid(rawImages, expected, predicted);
@@ -2015,6 +2076,7 @@ btnTrain.addEventListener("click", async () => {
     gate,
     max_trials: trials,
     device,
+    params: buildParamsPayload(gate),
     monitoring: {
       resource: {
         enabled: resourceEnabled,
@@ -2302,10 +2364,10 @@ function updateStats() {
 function updateTruthTableEntry(d) {
   // Normalise the input to a canonical key like "(0, 1)".
   const inp = Array.isArray(d.input) ? d.input : [d.input];
-  // For multi-gate, prefix with gate name so each gate×input combo
-  // gets its own row.
+  // For multi-gate or vision classification, prefix with gate name so
+  // each gate×input combo gets its own row.
   const gateName = d.gate || state.gate || "";
-  const isMulti = gateName === "MULTI" || (state.gate === "MULTI");
+  const isMulti = gateName === "MULTI" || (state.gate === "MULTI") || state.visionClassNames.length > 0;
   const rawKey = "(" + inp.join(", ") + ")";
   const key = isMulti && d.gate ? d.gate + " " + rawKey : rawKey;
 
@@ -2357,17 +2419,19 @@ function updateNeuronSpikes(d) {
 }
 
 function renderTruthTable() {
-  const isMulti = state.gate === "MULTI";
+  const isMulti = state.gate === "MULTI" || state.visionClassNames.length > 0;
 
   // Build sorted key list.
   let keys;
   if (isMulti) {
-    // Sort by gate name then input.
-    const gateOrder = ["AND", "OR", "NAND", "NOR", "XOR", "XNOR"];
+    // Sort by gate/class name then input.
+    const gateOrder = state.visionClassNames.length > 0
+      ? state.visionClassNames
+      : ["AND", "OR", "NAND", "NOR", "XOR", "XNOR"];
     keys = Object.keys(state.truthTable).sort((a, b) => {
       const ga = gateOrder.indexOf(a.split(" ")[0]);
       const gb = gateOrder.indexOf(b.split(" ")[0]);
-      if (ga !== gb) return ga - gb;
+      if (ga !== gb) return (ga < 0 ? 999 : ga) - (gb < 0 ? 999 : gb);
       return a.localeCompare(b);
     });
   } else {
@@ -2405,13 +2469,25 @@ function renderTruthTable() {
 
 function appendLog(msg) {
   const d = msg.data;
-  const cls = d.correct ? "log-correct" : "log-wrong";
   const line = document.createElement("div");
-  line.className = cls;
-  const gatePfx = d.gate && state.gate === "MULTI" ? `[${d.gate}] ` : "";
-  line.textContent = `#${msg.step} | ${gatePfx}in=${JSON.stringify(d.input)} ` +
-    `exp=${d.expected} pred=${d.predicted} ` +
-    `err=${d.error} acc=${(d.accuracy * 100).toFixed(1)}%`;
+
+  // Vision batch data has predicted/expected arrays but no single 'input'.
+  if (d.input === undefined && Array.isArray(d.predicted)) {
+    const acc = d.accuracy != null ? (d.accuracy * 100).toFixed(1) : "—";
+    const loss = d.loss != null ? Number(d.loss).toFixed(4) : "—";
+    const bs = d.batch_size || (Array.isArray(d.expected) ? d.expected.length : "?");
+    const ok = d.accuracy != null && d.accuracy >= 0.5;
+    line.className = ok ? "log-correct" : "log-wrong";
+    line.textContent = `#${msg.step} | batch=${bs} loss=${loss} acc=${acc}%`;
+  } else {
+    const cls = d.correct ? "log-correct" : "log-wrong";
+    line.className = cls;
+    const gatePfx = d.gate && state.gate === "MULTI" ? `[${d.gate}] ` : "";
+    line.textContent = `#${msg.step} | ${gatePfx}in=${JSON.stringify(d.input)} ` +
+      `exp=${d.expected} pred=${d.predicted} ` +
+      `err=${d.error} acc=${(d.accuracy * 100).toFixed(1)}%`;
+  }
+
   logContainer.appendChild(line);
   // Keep bounded.
   while (logContainer.children.length > 200) {
@@ -2426,15 +2502,19 @@ function parseLayerInfo(topology) {
   const layers = topology.layers || [];
   const popHints = topology.populations || {};
   return layers.map((layerLabel, layerIdx) => {
-    const m = layerLabel.match(/^([\w-]+)\((\d+)\)$/);
+    // Match both SNN format "name(123)" and vision format "name(1x8x8)" or "name(str)".
+    const m = layerLabel.match(/^([\w-]+)\((.+)\)$/);
     const name = m ? m[1] : String(layerLabel);
-    const count = m ? parseInt(m[2], 10) : 1;
+    const inner = m ? m[2] : "";
+    // Pure integer → neuron count; otherwise treat as 1-node block.
+    const count = /^\d+$/.test(inner) ? parseInt(inner, 10) : 1;
     const hintObj = Array.isArray(popHints)
       ? popHints.find((p) => p && p.name === name)
       : popHints[name];
     return {
       name,
       count,
+      detail: inner,   // e.g. "1x8x8", "lif_convnet_v1", "32"
       layerIdx,
       viz: (hintObj && hintObj.viz) ? hintObj.viz : {},
     };
@@ -2464,7 +2544,7 @@ function inferGridDims(layer) {
 function shouldCollapseLayer(layer) {
   if (layer.viz && layer.viz.collapsed === false) return false;
   if (state.detailedNodes) return false;
-  return layer.count > 32;
+  return layer.count > 48;
 }
 
 function makeNeuronLabel(layerName, idx, count, isAggregate) {
@@ -2659,11 +2739,534 @@ function refreshRenderedConnections() {
   state.connections = sampled;
 }
 
+// ── Vision network graph (Cytoscape.js) ──────────────────────────────
+
+const _BLOCK_COLORS = {
+  input:   { bg: "#1a3a5c", border: "#58a6ff", text: "#58a6ff" },
+  conv:    { bg: "#2d1f4e", border: "#bc8cff", text: "#d4b8ff" },
+  pool:    { bg: "#1a3344", border: "#58c4dc", text: "#7dd8ec" },
+  res:     { bg: "#3b1f3b", border: "#e07cff", text: "#f0b0ff" },
+  linear:  { bg: "#1a3d26", border: "#3fb950", text: "#6edc7e" },
+  output:  { bg: "#1a3d26", border: "#3fb950", text: "#6edc7e" },
+};
+
+function _blockColor(type) {
+  return _BLOCK_COLORS[type] || _BLOCK_COLORS.conv;
+}
+
+// Cytoscape instance (global, one at a time).
+let _cyInstance = null;
+const cyContainer = document.getElementById("cy-network");
+
+// Architecture summary table + click-to-detail elements.
+const archSummary = document.getElementById("arch-summary");
+const archSummaryTbody = document.getElementById("arch-summary-tbody");
+const archDetailPanel = document.getElementById("arch-detail-panel");
+const archDetailTitle = document.getElementById("arch-detail-title");
+const archDetailBody = document.getElementById("arch-detail-body");
+const archDetailClose = document.getElementById("arch-detail-close");
+if (archDetailClose) {
+  archDetailClose.addEventListener("click", () => {
+    if (archDetailPanel) archDetailPanel.classList.add("hidden");
+  });
+}
+
+function _renderArchSummaryTable(layerDetails) {
+  if (!archSummaryTbody || !archSummary) return;
+  archSummary.classList.remove("hidden");
+  archSummaryTbody.innerHTML = "";
+  const totalParams = layerDetails.reduce((s, d) => s + (d.params || 0), 0);
+
+  layerDetails.forEach((d, idx) => {
+    const tr = document.createElement("tr");
+    tr.addEventListener("click", () => _showLayerDetail(d, idx, layerDetails));
+
+    const typeCls = "type-" + (d.type || "conv");
+    const neurons = d.neurons || 0;
+    const params = d.params || 0;
+    const pct = totalParams > 0 ? ((params / totalParams) * 100).toFixed(1) : "0.0";
+    const shape = d.out_shape || "—";
+    const op = d.operation || "—";
+    const wsId = `arch-ws-${d.name}`;
+
+    tr.innerHTML = `
+      <td>${idx}</td>
+      <td><strong>${d.name}</strong></td>
+      <td><span class="type-badge ${typeCls}">${(d.type || "?").toUpperCase()}</span></td>
+      <td>${op}</td>
+      <td>${shape}</td>
+      <td>${neurons.toLocaleString()}</td>
+      <td>${params.toLocaleString()} <span style="color:var(--text-secondary)">(${pct}%)</span></td>
+      <td id="${wsId}"><span style="color:var(--text-secondary)">—</span></td>
+    `;
+    archSummaryTbody.appendChild(tr);
+  });
+
+  const noteRow = document.createElement("tr");
+  noteRow.innerHTML = `<td colspan="8" style="color:var(--text-secondary);font-style:italic;font-size:10px;padding:8px">
+    Block indices are sequential across all types (conv_0 → pool_1 → conv_2).
+    Click any row or graph node for full architectural details.
+  </td>`;
+  archSummaryTbody.appendChild(noteRow);
+}
+
+function _showLayerDetail(detail, idx, allDetails) {
+  if (!archDetailPanel || !archDetailTitle || !archDetailBody) return;
+  archDetailPanel.classList.remove("hidden");
+  archDetailTitle.textContent = `Layer #${idx}: ${detail.name.toUpperCase()}`;
+
+  let html = "";
+  const sec = (title) => `<div class="detail-section">${title}</div>`;
+  const row = (label, val) => `<div class="detail-row"><span class="detail-label">${label}</span><span class="detail-value">${val}</span></div>`;
+
+  html += sec("Identity");
+  html += row("Layer name", detail.name);
+  html += row("Sequential index", `#${idx} of ${allDetails.length}`);
+  html += row("Type", (detail.type || "unknown").toUpperCase());
+
+  html += sec("Operation");
+  html += row("Operation", detail.operation || "—");
+  if (detail.in_channels != null) html += row("Input channels", detail.in_channels);
+  if (detail.out_channels != null) html += row("Output channels", detail.out_channels);
+  if (detail.kernel_size) html += row("Kernel size", `${detail.kernel_size[0]}×${detail.kernel_size[1]}`);
+  if (detail.stride) html += row("Stride", `${detail.stride[0]}×${detail.stride[1]}`);
+  if (detail.padding) html += row("Padding", `${detail.padding[0]}×${detail.padding[1]}`);
+  if (detail.pool_mode) html += row("Pool mode", detail.pool_mode);
+  if (detail.norm) html += row("Normalization", detail.norm);
+  if (detail.activation) html += row("Activation", detail.activation);
+  if (detail.spike_threshold != null) html += row("Spike threshold", detail.spike_threshold);
+  if (detail.depth) html += row("Residual depth", `${detail.depth} conv layers`);
+  if (detail.in_features != null) html += row("Input features", detail.in_features);
+  if (detail.out_features != null) html += row("Output features", detail.out_features);
+
+  html += sec("Dimensions");
+  if (detail.out_shape) html += row("Output tensor shape", detail.out_shape);
+  if (detail.out_h != null) html += row("Spatial dimensions", `${detail.out_h}×${detail.out_w}`);
+  html += row("Total neurons (activations)", (detail.neurons || 0).toLocaleString());
+
+  html += sec("Parameters (Learned Weights)");
+  html += row("Trainable parameters", (detail.params || 0).toLocaleString());
+  if (detail.type === "pool") {
+    html += row("Note", "Pool layers have no learned weights — they perform spatial downsampling only.");
+  } else if (detail.type === "conv") {
+    const ks = detail.kernel_size || [3, 3];
+    const ic = detail.in_channels || "?";
+    const oc = detail.out_channels || "?";
+    html += row("Weight tensor shape", `${oc}×${ic}×${ks[0]}×${ks[1]}`);
+    html += row("Bias", detail.params > 0 ? "Yes (1 per output channel)" : "—");
+    html += row("Computation", `Each of ${oc} filters convolves a ${ks[0]}×${ks[1]} window over the ${ic}-channel input, producing one spatial feature map.`);
+  } else if (detail.type === "linear") {
+    const inf = detail.in_features || "?";
+    const outf = detail.out_features || "?";
+    html += row("Weight matrix shape", `${outf}×${inf}`);
+    html += row("Bias", `${outf} values`);
+  } else if (detail.type === "res") {
+    html += row("Structure", "skip connection + 2× (Conv→Norm→Spike)");
+  }
+
+  html += sec("Connections");
+  const prevLayer = idx > 0 ? allDetails[idx - 1] : null;
+  const nextLayer = idx < allDetails.length - 1 ? allDetails[idx + 1] : null;
+  if (prevLayer) html += row("Input from", `${prevLayer.name} (${(prevLayer.neurons || 0).toLocaleString()} neurons)`);
+  if (nextLayer) html += row("Output to", `${nextLayer.name} (${(nextLayer.neurons || 0).toLocaleString()} neurons)`);
+  if (detail.params > 0 && prevLayer) {
+    html += row("Connection density", "Dense (fully connected between channels)");
+  }
+
+  const wsKey = detail.name;
+  const ws = state._archWeightStats ? state._archWeightStats[wsKey] : null;
+  if (ws) {
+    html += sec("Live Weight Statistics");
+    html += row("Mean", ws.mean.toFixed(6));
+    html += row("Std dev", ws.std.toFixed(6));
+    html += row("Min", ws.min.toFixed(6));
+    html += row("Max", ws.max.toFixed(6));
+    html += row("Samples", ws.count.toLocaleString());
+  }
+
+  archDetailBody.innerHTML = html;
+}
+
+function _updateArchWeightStats(layerName, weights) {
+  if (!state._archWeightStats) state._archWeightStats = {};
+  const flat = flattenWeights(weights);
+  if (flat.length === 0) return;
+  const n = flat.length;
+  let sum = 0, sumSq = 0, mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const v = flat[i];
+    sum += v;
+    sumSq += v * v;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  const mean = sum / n;
+  const variance = Math.max(0, sumSq / n - mean * mean);
+  state._archWeightStats[layerName] = { mean, std: Math.sqrt(variance), min: mn, max: mx, count: n };
+
+  const cell = document.getElementById(`arch-ws-${layerName}`);
+  if (cell) {
+    cell.innerHTML = `<span title="mean=${mean.toFixed(4)} std=${Math.sqrt(variance).toFixed(4)} range=[${mn.toFixed(3)}, ${mx.toFixed(3)}]">` +
+      `μ=${mean.toFixed(3)} σ=${Math.sqrt(variance).toFixed(3)} [${mn.toFixed(2)}, ${mx.toFixed(2)}]</span>`;
+  }
+
+  // Update Cytoscape node label live.
+  if (_cyInstance) {
+    const node = _cyInstance.$(`#${layerName}`);
+    if (node.length) {
+      node.data("weightStats", `μ=${mean.toFixed(3)} σ=${Math.sqrt(variance).toFixed(3)}`);
+    }
+  }
+}
+
+// ── Build Cytoscape graph from vision topology ───────────────────────
+
+function _destroyCyGraph() {
+  if (_cyInstance) {
+    _cyInstance.destroy();
+    _cyInstance = null;
+  }
+  if (cyContainer) cyContainer.classList.add("hidden");
+}
+
+function _buildCyGraph(layerDetails, edges) {
+  if (!cyContainer || typeof cytoscape === "undefined") {
+    console.warn("[vision] Cytoscape.js not available, falling back to canvas");
+    return false;
+  }
+
+  const hasDagre = typeof cytoscape !== "undefined"
+    && cytoscape("layout", "dagre") !== undefined;
+
+  // Show Cytoscape container, hide canvas.
+  canvasNet.style.display = "none";
+  cyContainer.classList.remove("hidden");
+
+  // Destroy previous instance.
+  if (_cyInstance) _cyInstance.destroy();
+
+  // ── Build elements — one node per layer (module-level) ─────────────
+  const elements = [];
+  const maxNeurons = Math.max(1, ...layerDetails.map((d) => d.neurons || 1));
+  const maxParams = Math.max(1, ...layerDetails.map((d) => d.params || 0));
+
+  // Store layerDetails in state for click handler.
+  state._cyLayerDetails = layerDetails;
+
+  layerDetails.forEach((detail, idx) => {
+    const colors = _blockColor(detail.type);
+    const neurons = detail.neurons || 1;
+    const params = detail.params || 0;
+
+    // Scale node width by neuron count (log scale) for visual weight.
+    const logN = Math.log2(Math.max(2, neurons));
+    const logMax = Math.log2(Math.max(2, maxNeurons));
+    const sizeRatio = 0.4 + 0.6 * (logN / logMax);
+    const nodeW = Math.max(140, sizeRatio * 220);
+    const nodeH = Math.max(60, sizeRatio * 90);
+
+    // Build multi-line label.
+    const labelLines = [detail.name.toUpperCase()];
+    if (detail.operation) labelLines.push(detail.operation);
+    if (detail.out_shape) labelLines.push(`Out: ${detail.out_shape}`);
+    labelLines.push(`${neurons.toLocaleString()} neurons`);
+    if (params > 0) {
+      labelLines.push(`${params.toLocaleString()} params`);
+    } else if (detail.type === "pool") {
+      labelLines.push("no learned weights");
+    }
+    if (detail.activation) labelLines.push(`⚡ ${detail.activation}`);
+
+    elements.push({
+      group: "nodes",
+      data: {
+        id: detail.name,
+        label: labelLines.join("\n"),
+        type: detail.type || "conv",
+        idx: idx,
+        neuronCount: neurons,
+        paramCount: params,
+        bgColor: colors.bg,
+        borderColor: colors.border,
+        textColor: colors.text,
+        nodeW: nodeW,
+        nodeH: nodeH,
+      },
+    });
+  });
+
+  // ── Edges between layers ───────────────────────────────────────────
+  for (const edge of edges) {
+    const dstDetail = layerDetails.find((d) => d.name === edge.dst);
+    const dstParams = dstDetail ? (dstDetail.params || 0) : 0;
+    const edgeWidth = dstParams > 0
+      ? Math.min(10, 1.5 + Math.log10(Math.max(1, dstParams)) * 1.5)
+      : 1.5;
+    const edgeAlpha = dstParams > 0 ? 0.8 : 0.35;
+
+    elements.push({
+      group: "edges",
+      data: {
+        id: `e_${edge.src}_${edge.dst}`,
+        source: edge.src,
+        target: edge.dst,
+        label: dstParams > 0 ? `${dstParams.toLocaleString()} params` : "",
+        edgeWidth: edgeWidth,
+        edgeAlpha: edgeAlpha,
+        paramCount: dstParams,
+      },
+    });
+  }
+
+  // ── Initialize Cytoscape ───────────────────────────────────────────
+  _cyInstance = cytoscape({
+    container: cyContainer,
+    elements: elements,
+    userZoomingEnabled: true,
+    userPanningEnabled: true,
+    boxSelectionEnabled: false,
+
+    style: [
+      // ── Module nodes — one per layer ──
+      {
+        selector: "node",
+        style: {
+          "shape": "round-rectangle",
+          "width": "data(nodeW)",
+          "height": "data(nodeH)",
+          "background-color": "data(bgColor)",
+          "background-opacity": 0.88,
+          "border-color": "data(borderColor)",
+          "border-width": 2.5,
+          "border-opacity": 0.95,
+          "label": "data(label)",
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-wrap": "wrap",
+          "text-max-width": "data(nodeW)",
+          "font-family": "'JetBrains Mono', 'Fira Code', monospace",
+          "font-size": "10px",
+          "color": "data(textColor)",
+          "text-outline-color": "data(bgColor)",
+          "text-outline-width": 1,
+        },
+      },
+      // ── Hover / active state ──
+      {
+        selector: "node:active, node:selected",
+        style: {
+          "border-width": 3.5,
+          "border-color": "#ffffff",
+          "background-opacity": 1,
+          "z-index": 10,
+        },
+      },
+      // ── Edges ──
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "target-arrow-shape": "triangle",
+          "target-arrow-color": "rgba(88, 166, 255, 0.8)",
+          "line-color": "rgba(88, 166, 255, 0.55)",
+          "width": "data(edgeWidth)",
+          "opacity": "data(edgeAlpha)",
+          "label": "data(label)",
+          "font-family": "'JetBrains Mono', 'Fira Code', monospace",
+          "font-size": "9px",
+          "color": "rgba(230, 237, 243, 0.8)",
+          "text-rotation": "autorotate",
+          "text-margin-y": -12,
+          "text-background-color": "#0d1117",
+          "text-background-opacity": 0.85,
+          "text-background-padding": "3px",
+          "arrow-scale": 1.3,
+        },
+      },
+      // ── Edge with params → brighter ──
+      {
+        selector: "edge[paramCount > 0]",
+        style: {
+          "line-color": "rgba(88, 166, 255, 0.7)",
+          "target-arrow-color": "rgba(88, 166, 255, 0.9)",
+        },
+      },
+      // ── Edge without params → dimmer dashed ──
+      {
+        selector: "edge[paramCount = 0]",
+        style: {
+          "line-color": "rgba(88, 166, 255, 0.2)",
+          "target-arrow-color": "rgba(88, 166, 255, 0.3)",
+          "line-style": "dashed",
+        },
+      },
+      // ── Selected ──
+      {
+        selector: ":selected",
+        style: {
+          "border-width": 3.5,
+          "border-color": "#ffffff",
+        },
+      },
+    ],
+
+    layout: hasDagre
+      ? {
+          name: "dagre",
+          rankDir: "TB",
+          rankSep: 70,
+          nodeSep: 50,
+          edgeSep: 20,
+          fit: true,
+          padding: 30,
+          nodeDimensionsIncludeLabels: true,
+          animate: false,
+        }
+      : {
+          name: "breadthfirst",
+          directed: true,
+          spacingFactor: 1.6,
+          avoidOverlap: true,
+          nodeDimensionsIncludeLabels: true,
+          roots: layerDetails.length > 0
+            ? [`#${layerDetails[0].name}`]
+            : undefined,
+        },
+  });
+
+  // ── Click handler → detail panel ───────────────────────────────────
+  _cyInstance.on("tap", "node", (evt) => {
+    const nodeData = evt.target.data();
+    const detail = layerDetails[nodeData.idx];
+    if (detail) _showLayerDetail(detail, nodeData.idx, layerDetails);
+  });
+
+  // ── Hover tooltip ──────────────────────────────────────────────────
+  _cyInstance.on("mouseover", "node", (evt) => {
+    const d = layerDetails[evt.target.data().idx];
+    if (!d) return;
+    const lines = [
+      `${d.name.toUpperCase()} — ${(d.type || "?").toUpperCase()}`,
+      d.operation || "",
+      d.out_shape ? `Output: ${d.out_shape}` : "",
+      `${(d.neurons || 0).toLocaleString()} neurons`,
+      `${(d.params || 0).toLocaleString()} params`,
+      d.activation ? `Activation: ${d.activation}` : "",
+    ].filter(Boolean);
+
+    tooltip.classList.remove("hidden");
+    tooltip.textContent = lines.join("\n");
+    const pos = evt.renderedPosition || evt.target.renderedPosition();
+    const panelRect = canvasNet.closest(".panel").getBoundingClientRect();
+    const cyRect = cyContainer.getBoundingClientRect();
+    tooltip.style.left = (pos.x + cyRect.left - panelRect.left + 16) + "px";
+    tooltip.style.top = (pos.y + cyRect.top - panelRect.top + 16) + "px";
+  });
+
+  _cyInstance.on("mouseout", "node", () => {
+    tooltip.classList.add("hidden");
+  });
+
+  _cyInstance.on("mouseover", "edge", (evt) => {
+    const d = evt.target.data();
+    tooltip.classList.remove("hidden");
+    tooltip.textContent = `${d.source} → ${d.target}\nParams: ${(d.paramCount || 0).toLocaleString()}`;
+    const pos = evt.renderedPosition || evt.target.renderedMidpoint();
+    const panelRect = canvasNet.closest(".panel").getBoundingClientRect();
+    const cyRect = cyContainer.getBoundingClientRect();
+    tooltip.style.left = (pos.x + cyRect.left - panelRect.left + 16) + "px";
+    tooltip.style.top = (pos.y + cyRect.top - panelRect.top + 16) + "px";
+  });
+
+  _cyInstance.on("mouseout", "edge", () => {
+    tooltip.classList.add("hidden");
+  });
+
+  return true;
+}
+
+function _buildVisionBlockDiagram(layerDetails, edges) {
+  // Try Cytoscape first, fall back to legacy canvas if unavailable.
+  const cyOk = _buildCyGraph(layerDetails, edges);
+  if (cyOk) {
+    // Build the architecture summary table.
+    _renderArchSummaryTable(layerDetails);
+
+    // Still build neurons for any compatibility code that checks state.neurons.
+    let neuronId = 0;
+    for (const detail of layerDetails) {
+      const colors = _blockColor(detail.type);
+      state.neurons.push({
+        id: neuronId++,
+        layer: detail.name,
+        layerIdx: neuronId - 1,
+        idx: 0,
+        x: 0, y: 0, r: 10,
+        color: colors.border,
+        label: detail.name,
+        showLabel: false,
+        isAggregate: true,
+        memberCount: detail.neurons || 1,
+        totalSpikes: 0, lastSpikes: 0, trialCount: 0,
+        _isVisionBlock: true,
+      });
+    }
+
+    // Build allConnections for compatibility.
+    const layerInfo = parseLayerInfo(state.topology);
+    state.allConnections = buildAllConnections(layerInfo);
+    state.topologyVersion += 1;
+    state.edgeSampleCache = {};
+    refreshRenderedConnections();
+    return;
+  }
+
+  // ── Legacy canvas fallback (if Cytoscape CDN failed to load) ───────
+  canvasNet.style.display = "";
+  if (cyContainer) cyContainer.classList.add("hidden");
+  const { w, h } = setupCanvas(canvasNet);
+
+  const ctx = canvasNet.getContext("2d");
+  const padX = 30, padY = 30;
+  const usableW = Math.max(1, w - 2 * padX);
+  const usableH = Math.max(1, h - 2 * padY);
+  const nLayers = layerDetails.length;
+  const blockW = Math.max(80, Math.min(120, usableW / nLayers - 20));
+  const gap = Math.max(20, (usableW - nLayers * blockW) / Math.max(1, nLayers - 1));
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(139, 148, 158, 0.7)";
+  ctx.font = "11px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("Cytoscape.js not loaded — showing basic fallback", w / 2, h / 2);
+
+  _renderArchSummaryTable(layerDetails);
+}
+
+// Dummy draw function — Cytoscape self-renders, so this is a no-op
+// for vision mode. Kept for compatibility with drawNetwork().
+function _drawVisionBlockDiagram(_ctx) {
+  // Cytoscape handles its own rendering.
+}
+
 function buildNetworkLayout() {
   state.neurons = [];
   state.connections = [];
   state.allConnections = [];
+  state.visionBlocks = [];      // block-diagram rects for vision topologies
+  state.visionArrows = [];      // arrows between blocks
   if (!state.topology) return;
+
+  // ── Vision graph mode (Cytoscape.js) ───────────────────────────────
+  const layerDetails = state.topology.layer_details;
+  if (Array.isArray(layerDetails) && layerDetails.length > 0) {
+    _buildVisionBlockDiagram(layerDetails, state.topology.edges || []);
+    return;
+  }
+
+  // ── SNN neuron-dot mode — ensure canvas is visible ─────────────────
+  _destroyCyGraph();
+  canvasNet.style.display = "";
 
   const layerInfo = parseLayerInfo(state.topology);
   const colors = {
@@ -2683,11 +3286,22 @@ function buildNetworkLayout() {
   layerInfo.forEach((layer, li) => {
     const centerX = padX + (li / (nLayers - 1 || 1)) * usableW;
     const lower = layer.name.toLowerCase();
-    const layerColor = colors[lower] || "#8b949e";
+    // Assign colours: first layer input-blue, last layer output-green, rest hidden-purple.
+    let layerColor;
+    if (li === 0) layerColor = colors.input;
+    else if (li === nLayers - 1) layerColor = colors.output;
+    else layerColor = colors[lower] || "#bc8cff";
+    // For single-count vision blocks, show "name (detail)" as label.
+    const isVisionBlock = layer.count === 1 && layer.detail && !/^\d+$/.test(layer.detail);
+    const visionLabel = isVisionBlock
+      ? `${layer.name} (${layer.detail})`
+      : null;
     const collapsed = shouldCollapseLayer(layer);
     const grid = !collapsed ? inferGridDims(layer) : null;
 
     if (collapsed) {
+      // Scale the aggregate radius based on neuron count for visual weight.
+      const aggR = Math.max(14, Math.min(30, 10 + Math.log2(Math.max(2, layer.count)) * 3));
       state.neurons.push({
         id: id++,
         layer: layer.name,
@@ -2695,7 +3309,7 @@ function buildNetworkLayout() {
         idx: 0,
         x: centerX,
         y: padY + usableH / 2,
-        r: 11,
+        r: aggR,
         color: layerColor,
         label: makeNeuronLabel(layer.name, 0, layer.count, true),
         showLabel: true,
@@ -2742,6 +3356,9 @@ function buildNetworkLayout() {
     for (let ni = 0; ni < layer.count; ni++) {
       const y = padY + ((ni + 0.5) / Math.max(1, layer.count)) * usableH;
       const radius = Math.max(3.6, Math.min(10, 16 - layer.count * 0.2));
+      const lbl = (layer.count === 1 && visionLabel)
+        ? visionLabel
+        : makeNeuronLabel(layer.name, ni, layer.count, false);
       state.neurons.push({
         id: id++,
         layer: layer.name,
@@ -2749,11 +3366,11 @@ function buildNetworkLayout() {
         idx: ni,
         x: centerX,
         y,
-        r: radius,
+        r: (layer.count === 1) ? 11 : radius,
         color: layerColor,
-        label: makeNeuronLabel(layer.name, ni, layer.count, false),
-        showLabel: shouldShowNeuronLabel(layer.name, ni, layer.count, false),
-        isAggregate: false,
+        label: lbl,
+        showLabel: (layer.count === 1) ? true : shouldShowNeuronLabel(layer.name, ni, layer.count, false),
+        isAggregate: layer.count === 1,
         totalSpikes: 0,
         lastSpikes: 0,
         trialCount: 0,
@@ -2768,22 +3385,33 @@ function buildNetworkLayout() {
 }
 
 function drawNetwork() {
+  // ── Cytoscape active → it self-renders, skip canvas ────────────────
+  if (_cyInstance) return;
+
   const { ctx, w, h } = setupCanvas(canvasNet);
   ctx.clearRect(0, 0, w, h);
 
+  // ── SNN neuron-dot mode ────────────────────────────────────────────
   for (const c of state.connections) {
     const s = c.srcNeuron;
     const d = c.dstNeuron;
     const absW = Math.abs(Number(c.weight || 0));
-    const alpha = Math.min(0.05 + absW * 0.08, 0.2);
-    const lw = Math.max(0.4, Math.min(0.7 + absW * 1.2, 2.4));
+    // For edges without explicit weights (vision), use visible defaults.
+    const alpha = c.hasWeight
+      ? Math.min(0.05 + absW * 0.08, 0.2)
+      : 0.35;
+    const lw = c.hasWeight
+      ? Math.max(0.4, Math.min(0.7 + absW * 1.2, 2.4))
+      : 1.6;
 
     ctx.beginPath();
     ctx.moveTo(s.x, s.y);
     ctx.lineTo(d.x, d.y);
-    ctx.strokeStyle = c.weight >= 0
-      ? `rgba(63, 185, 80, ${alpha})`
-      : `rgba(248, 81, 73, ${alpha})`;
+    ctx.strokeStyle = c.hasWeight
+      ? (c.weight >= 0
+        ? `rgba(63, 185, 80, ${alpha})`
+        : `rgba(248, 81, 73, ${alpha})`)
+      : `rgba(88, 166, 255, ${alpha})`;
     ctx.lineWidth = lw;
     ctx.stroke();
   }
@@ -2798,13 +3426,29 @@ function drawNetwork() {
       ctx.fill();
     }
 
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-    ctx.fillStyle = n.color;
-    ctx.fill();
-    ctx.strokeStyle = "#e6edf3";
-    ctx.lineWidth = n.isAggregate ? 1.8 : 1.2;
-    ctx.stroke();
+    if (n.isAggregate && n.memberCount > 1) {
+      // Draw concentric rings to indicate a cluster of neurons.
+      const rings = Math.min(3, Math.max(1, Math.floor(Math.log10(n.memberCount))));
+      for (let ri = rings; ri >= 0; ri--) {
+        const rr = n.r - ri * 3;
+        if (rr <= 0) continue;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, rr, 0, Math.PI * 2);
+        ctx.fillStyle = ri === 0 ? n.color : (n.color + "44");
+        ctx.fill();
+        ctx.strokeStyle = "#e6edf3";
+        ctx.lineWidth = ri === 0 ? 1.8 : 0.6;
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+      ctx.strokeStyle = "#e6edf3";
+      ctx.lineWidth = n.isAggregate ? 1.8 : 1.2;
+      ctx.stroke();
+    }
 
     if (!n.showLabel) continue;
     ctx.fillStyle = "#e6edf3";
@@ -2817,10 +3461,17 @@ function drawNetwork() {
 // ── Network tooltip on hover ─────────────────────────────────────────
 
 canvasNet.addEventListener("mousemove", (ev) => {
+  // When Cytoscape is active, it handles its own hover events.
+  if (_cyInstance) return;
+
   const rect = canvasNet.getBoundingClientRect();
   const mx = ev.clientX - rect.left;
   const my = ev.clientY - rect.top;
+  const panelRect = canvasNet.closest(".panel").getBoundingClientRect();
+  const tipX = (ev.clientX - panelRect.left + 12) + "px";
+  const tipY = (ev.clientY - panelRect.top  + 12) + "px";
 
+  // ── SNN neuron-dot hover ─────────────────────────────────────────
   // Check neurons.
   for (const n of state.neurons) {
     const dx = mx - n.x, dy = my - n.y;
@@ -2951,6 +3602,12 @@ function recordWeight(msg) {
     rec.steps.shift();
     rec.weights.shift();
   }
+  // Update architecture summary weight stats for vision mode.
+  if (typeof _updateArchWeightStats === "function") {
+    // Strip "VISION/" prefix to match layer detail names.
+    const shortName = name.replace(/^VISION\//, "");
+    _updateArchWeightStats(shortName, msg.data.weights);
+  }
 }
 
 function drawWeightChart() {
@@ -3039,18 +3696,23 @@ window.addEventListener("resize", () => {
 // ── Mode switching ───────────────────────────────────────────────────
 
 function setActiveTab(tab, opts = {}) {
-  const next = tab === "vision" ? "vision" : "core";
+  const allowed = ["core", "vision", "topology", "params"];
+  const next = allowed.includes(tab) ? tab : "core";
   const updateUrl = opts.updateUrl !== false;
   state.uiTab = next;
 
   if (btnTabCore) btnTabCore.classList.toggle("mode-active", next === "core");
   if (btnTabVision) btnTabVision.classList.toggle("mode-active", next === "vision");
+  if (btnTabTopology) btnTabTopology.classList.toggle("mode-active", next === "topology");
+  if (btnTabParams) btnTabParams.classList.toggle("mode-active", next === "params");
   if (gridCore) gridCore.style.display = next === "core" ? "" : "none";
   if (gridVision) gridVision.style.display = next === "vision" ? "" : "none";
+  if (gridTopology) gridTopology.style.display = next === "topology" ? "" : "none";
+  if (gridParams) gridParams.style.display = next === "params" ? "" : "none";
 
   if (updateUrl) {
     const url = new URL(window.location);
-    if (next === "vision") url.searchParams.set("tab", "vision");
+    if (next !== "core") url.searchParams.set("tab", next);
     else url.searchParams.delete("tab");
     window.history.replaceState(null, "", url);
   }
@@ -3060,10 +3722,15 @@ function setActiveTab(tab, opts = {}) {
     drawVisionLayerCharts();
     updateVisionThroughputPanel();
   }
+  if (next === "params") {
+    syncParamVisibility();
+  }
 }
 
 if (btnTabCore) btnTabCore.addEventListener("click", () => setActiveTab("core"));
 if (btnTabVision) btnTabVision.addEventListener("click", () => setActiveTab("vision"));
+if (btnTabTopology) btnTabTopology.addEventListener("click", () => setActiveTab("topology"));
+if (btnTabParams) btnTabParams.addEventListener("click", () => setActiveTab("params"));
 if (visionEventModeSel) {
   visionEventModeSel.addEventListener("change", () => {
     state.visionEvent.mode = visionEventModeSel.value === "sum" ? "sum" : "bins";
@@ -3265,6 +3932,8 @@ async function loadRun(runId) {
       );
       buildNetworkLayout();
       drawNetwork();
+      // Forward to dedicated Topology page.
+      if (window.TopologyPage) window.TopologyPage.onTopologyData(topo);
     }
     if (state.replayStaticTopologyStats) {
       applyTopologyStats(
@@ -3339,6 +4008,8 @@ function resetDashboardState(opts = {}) {
   state.topology = null;
   state.topologyStats = null;
   state.topologyProjections = [];
+  // Forward reset to dedicated Topology page.
+  if (window.TopologyPage) window.TopologyPage.onTopologyData(null);
   state.neurons = [];
   state.connections = [];
   state.allConnections = [];
@@ -3504,7 +4175,7 @@ function showRunInfoBanner(runId) {
   if (!runInfoBanner || !runId) return;
   state.activeRunId = runId;
   runInfoText.textContent = `Recording to: artifacts/${runId}`;
-  const tab = state.uiTab === "vision" ? "&tab=vision" : "";
+  const tab = state.uiTab !== "core" ? `&tab=${state.uiTab}` : "";
   runInfoReplayLink.href = `/?mode=replay&run=${runId}${tab}`;
   runInfoBanner.style.display = "";
 }
@@ -3512,6 +4183,256 @@ function showRunInfoBanner(runId) {
 function hideRunInfoBanner() {
   if (runInfoBanner) runInfoBanner.style.display = "none";
 }
+
+// ── Parameters tab ───────────────────────────────────────────────────
+
+const PARAM_STORAGE_KEY = "neuroforge_params_v1";
+
+const SNN_DEFAULTS = {
+  seed: 42,
+  windowSteps: 50,
+  dt: 0.001,
+  nHidden: 6,
+  nInhibitory: 2,
+  amplitude: 50,
+  spikeThreshold: 3,
+  lr: 0.005,
+  wMin: -2.0,
+  wMax: 2.0,
+  convergenceStreak: 20,
+  perPatternStreak: 5,
+  lossFn: "mse_count",
+};
+
+const MULTI_DEFAULTS = {
+  seed: 42,
+  windowSteps: 25,
+  dt: 0.001,
+  nHidden: 24,
+  nInhibitory: 6,
+  amplitude: 50,
+  spikeThreshold: 3,
+  lr: 0.01,
+  wMin: -2.0,
+  wMax: 2.0,
+  convergenceStreak: 50,
+  perPatternStreak: 5,
+  lossFn: "mse_count",
+};
+
+const VISION_DEFAULTS = {
+  seed: 42,
+  batchSize: 16,
+  visionLr: 0.001,
+  visionLoss: "bce_logits",
+  backboneType: "lif_convnet_v1",
+  encodingMode: "rate",
+  backboneTimesteps: 8,
+  backboneOutputDim: 32,
+  samplesPerGate: 256,
+  visionGates: ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"],
+};
+
+const paramEls = {
+  seed: $("#param-seed"),
+  device: $("#param-device"),
+  windowSteps: $("#param-window-steps"),
+  dt: $("#param-dt"),
+  nHidden: $("#param-n-hidden"),
+  nInhibitory: $("#param-n-inhibitory"),
+  amplitude: $("#param-amplitude"),
+  spikeThreshold: $("#param-spike-threshold"),
+  lr: $("#param-lr"),
+  wMin: $("#param-w-min"),
+  wMax: $("#param-w-max"),
+  convergenceStreak: $("#param-convergence-streak"),
+  perPatternStreak: $("#param-per-pattern-streak"),
+  lossFn: $("#param-loss-fn"),
+  batchSize: $("#param-batch-size"),
+  visionLr: $("#param-vision-lr"),
+  visionLoss: $("#param-vision-loss"),
+  backboneType: $("#param-backbone-type"),
+  encodingMode: $("#param-encoding-mode"),
+  backboneTimesteps: $("#param-backbone-timesteps"),
+  backboneOutputDim: $("#param-backbone-output-dim"),
+  samplesPerGate: $("#param-samples-per-gate"),
+};
+const paramVisionGatesContainer = $("#param-vision-gates");
+const paramStatus = $("#params-status");
+
+function getSelectedVisionGates() {
+  if (!paramVisionGatesContainer) return VISION_DEFAULTS.visionGates;
+  const checks = paramVisionGatesContainer.querySelectorAll("input[type=checkbox]");
+  const gates = [];
+  for (const cb of checks) { if (cb.checked) gates.push(cb.value); }
+  return gates.length > 0 ? gates : VISION_DEFAULTS.visionGates;
+}
+
+function setSelectedVisionGates(gates) {
+  if (!paramVisionGatesContainer) return;
+  const gateSet = new Set(Array.isArray(gates) ? gates : VISION_DEFAULTS.visionGates);
+  const checks = paramVisionGatesContainer.querySelectorAll("input[type=checkbox]");
+  for (const cb of checks) { cb.checked = gateSet.has(cb.value); }
+}
+
+function readAllParams() {
+  return {
+    seed: parseInt(paramEls.seed?.value, 10) || 42,
+    device: paramEls.device?.value || "auto",
+    windowSteps: parseInt(paramEls.windowSteps?.value, 10) || 50,
+    dt: parseFloat(paramEls.dt?.value) || 0.001,
+    nHidden: parseInt(paramEls.nHidden?.value, 10) || 6,
+    nInhibitory: parseInt(paramEls.nInhibitory?.value, 10) || 2,
+    amplitude: parseFloat(paramEls.amplitude?.value) || 50,
+    spikeThreshold: parseInt(paramEls.spikeThreshold?.value, 10) || 3,
+    lr: parseFloat(paramEls.lr?.value) || 0.005,
+    wMin: parseFloat(paramEls.wMin?.value),
+    wMax: parseFloat(paramEls.wMax?.value),
+    convergenceStreak: parseInt(paramEls.convergenceStreak?.value, 10) || 20,
+    perPatternStreak: parseInt(paramEls.perPatternStreak?.value, 10) || 5,
+    lossFn: paramEls.lossFn?.value || "mse_count",
+    batchSize: parseInt(paramEls.batchSize?.value, 10) || 16,
+    visionLr: parseFloat(paramEls.visionLr?.value) || 0.001,
+    visionLoss: paramEls.visionLoss?.value || "bce_logits",
+    backboneType: paramEls.backboneType?.value || "lif_convnet_v1",
+    encodingMode: paramEls.encodingMode?.value || "rate",
+    backboneTimesteps: parseInt(paramEls.backboneTimesteps?.value, 10) || 8,
+    backboneOutputDim: parseInt(paramEls.backboneOutputDim?.value, 10) || 32,
+    samplesPerGate: parseInt(paramEls.samplesPerGate?.value, 10) || 256,
+    visionGates: getSelectedVisionGates(),
+  };
+}
+
+function writeAllParams(p) {
+  if (paramEls.seed) paramEls.seed.value = p.seed ?? 42;
+  if (paramEls.device) paramEls.device.value = p.device ?? "auto";
+  if (paramEls.windowSteps) paramEls.windowSteps.value = p.windowSteps ?? 50;
+  if (paramEls.dt) paramEls.dt.value = p.dt ?? 0.001;
+  if (paramEls.nHidden) paramEls.nHidden.value = p.nHidden ?? 6;
+  if (paramEls.nInhibitory) paramEls.nInhibitory.value = p.nInhibitory ?? 2;
+  if (paramEls.amplitude) paramEls.amplitude.value = p.amplitude ?? 50;
+  if (paramEls.spikeThreshold) paramEls.spikeThreshold.value = p.spikeThreshold ?? 3;
+  if (paramEls.lr) paramEls.lr.value = p.lr ?? 0.005;
+  if (paramEls.wMin) paramEls.wMin.value = p.wMin ?? -2.0;
+  if (paramEls.wMax) paramEls.wMax.value = p.wMax ?? 2.0;
+  if (paramEls.convergenceStreak) paramEls.convergenceStreak.value = p.convergenceStreak ?? 20;
+  if (paramEls.perPatternStreak) paramEls.perPatternStreak.value = p.perPatternStreak ?? 5;
+  if (paramEls.lossFn) paramEls.lossFn.value = p.lossFn ?? "mse_count";
+  if (paramEls.batchSize) paramEls.batchSize.value = p.batchSize ?? 16;
+  if (paramEls.visionLr) paramEls.visionLr.value = p.visionLr ?? 0.001;
+  if (paramEls.visionLoss) paramEls.visionLoss.value = p.visionLoss ?? "bce_logits";
+  if (paramEls.backboneType) paramEls.backboneType.value = p.backboneType ?? "lif_convnet_v1";
+  if (paramEls.encodingMode) paramEls.encodingMode.value = p.encodingMode ?? "rate";
+  if (paramEls.backboneTimesteps) paramEls.backboneTimesteps.value = p.backboneTimesteps ?? 8;
+  if (paramEls.backboneOutputDim) paramEls.backboneOutputDim.value = p.backboneOutputDim ?? 32;
+  if (paramEls.samplesPerGate) paramEls.samplesPerGate.value = p.samplesPerGate ?? 256;
+  setSelectedVisionGates(p.visionGates);
+}
+
+function getDefaultsForGate(gate) {
+  if (gate === "MULTI") return { ...SNN_DEFAULTS, ...MULTI_DEFAULTS };
+  if (gate === "LOGIC_BACKBONE_TINY") return { ...VISION_DEFAULTS, seed: 42 };
+  return { ...SNN_DEFAULTS };
+}
+
+function resetParamsToDefaults() {
+  const gate = gateSelect ? gateSelect.value : "OR";
+  const defs = getDefaultsForGate(gate);
+  writeAllParams(defs);
+  flashParamStatus("Reset to defaults");
+}
+
+function saveParamsToStorage() {
+  try {
+    localStorage.setItem(PARAM_STORAGE_KEY, JSON.stringify(readAllParams()));
+    flashParamStatus("Saved!");
+  } catch { flashParamStatus("Save failed"); }
+}
+
+function loadParamsFromStorage() {
+  try {
+    const raw = localStorage.getItem(PARAM_STORAGE_KEY);
+    if (!raw) { flashParamStatus("No saved params found"); return; }
+    writeAllParams(JSON.parse(raw));
+    flashParamStatus("Loaded saved params");
+  } catch { flashParamStatus("Load failed"); }
+}
+
+function flashParamStatus(text) {
+  if (!paramStatus) return;
+  paramStatus.textContent = text;
+  setTimeout(() => { if (paramStatus) paramStatus.textContent = ""; }, 3000);
+}
+
+function syncParamVisibility() {
+  const gate = gateSelect ? gateSelect.value : "OR";
+  const isSnn = gate !== "LOGIC_BACKBONE_TINY";
+  const isVision = gate === "LOGIC_BACKBONE_TINY";
+  for (const el of document.querySelectorAll(".params-section-snn")) {
+    el.style.display = isSnn ? "" : "none";
+  }
+  for (const el of document.querySelectorAll(".params-section-vision")) {
+    el.style.display = isVision ? "" : "none";
+  }
+}
+
+// Apply defaults for current gate and sync visibility on gate change.
+if (gateSelect) {
+  gateSelect.addEventListener("change", () => {
+    syncParamVisibility();
+    // Load defaults for newly selected gate type.
+    const gate = gateSelect.value;
+    const defs = getDefaultsForGate(gate);
+    writeAllParams(defs);
+  });
+}
+
+const btnParamsReset = $("#btn-params-reset");
+const btnParamsSave = $("#btn-params-save");
+const btnParamsLoad = $("#btn-params-load");
+if (btnParamsReset) btnParamsReset.addEventListener("click", resetParamsToDefaults);
+if (btnParamsSave) btnParamsSave.addEventListener("click", saveParamsToStorage);
+if (btnParamsLoad) btnParamsLoad.addEventListener("click", loadParamsFromStorage);
+
+// Build params payload for the train request.
+function buildParamsPayload(gate) {
+  const p = readAllParams();
+  if (gate === "LOGIC_BACKBONE_TINY") {
+    return {
+      seed: p.seed,
+      device: p.device,
+      batch_size: p.batchSize,
+      lr: p.visionLr,
+      loss_fn: p.visionLoss,
+      backbone_type: p.backboneType,
+      encoding_mode: p.encodingMode,
+      backbone_time_steps: p.backboneTimesteps,
+      backbone_output_dim: p.backboneOutputDim,
+      samples_per_gate: p.samplesPerGate,
+      gates: p.visionGates,
+    };
+  }
+  // SNN params (single gate + MULTI)
+  return {
+    seed: p.seed,
+    device: p.device,
+    window_steps: p.windowSteps,
+    dt: p.dt,
+    n_hidden: p.nHidden,
+    n_inhibitory: p.nInhibitory,
+    amplitude: p.amplitude,
+    spike_threshold: p.spikeThreshold,
+    lr: p.lr,
+    w_min: p.wMin,
+    w_max: p.wMax,
+    convergence_streak: p.convergenceStreak,
+    per_pattern_streak: p.perPatternStreak,
+    loss_fn: p.lossFn,
+  };
+}
+
+// Init param visibility.
+syncParamVisibility();
 
 // ── Init ─────────────────────────────────────────────────────────────
 
@@ -3547,7 +4468,8 @@ function hideRunInfoBanner() {
     setMode("live");
   }
 
-  setActiveTab(tab === "vision" ? "vision" : "core", { updateUrl: false });
+  const allowedTabs = ["core", "vision", "topology", "params"];
+  setActiveTab(allowedTabs.includes(tab) ? tab : "core", { updateUrl: false });
 
   // In live mode, always connect WS.
   if (mode !== "replay") {

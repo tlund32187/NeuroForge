@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.core.torch_utils import smart_device
 from neuroforge.learning.stats import grad_stats, tensor_stats
+from neuroforge.tasks.base import BaseTask
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -221,7 +222,7 @@ def _param_grad_stats(
     }
 
 
-class LogicGateTask:
+class LogicGateTask(BaseTask):
     """Trains an SNN on a single logic gate.
 
     Uses :func:`build_gate_network` for network construction,
@@ -241,37 +242,13 @@ class LogicGateTask:
         event_bus: IEventBus | None = None,
         *,
         stop_check: Callable[[], bool] | None = None,
+        hub: Any | None = None,
     ) -> None:
+        super().__init__(event_bus, stop_check)
         self.config = config or LogicGateConfig()
         self._truth_table = GATE_TABLES[self.config.gate]
-        self._bus = event_bus
-        self._stop_check = stop_check
-
-    # ── Event helpers ───────────────────────────────────────────────
-
-    def _emit(
-        self,
-        topic: str,
-        step: int,
-        source: str,
-        data: dict[str, Any],
-        *,
-        t: float = 0.0,
-    ) -> None:
-        """Publish an event if the bus is connected."""
-        if self._bus is None:
-            return
-        from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-
-        self._bus.publish(
-            MonitorEvent(
-                topic=EventTopic(topic),
-                step=step,
-                t=t,
-                source=source,
-                data=data,
-            )
-        )
+        # Resolved against DEFAULT_HUB lazily in run() to keep import cost low.
+        self._hub = hub
 
     # ── Forward pass ────────────────────────────────────────────────
 
@@ -400,6 +377,7 @@ class LogicGateTask:
 
         torch = require_torch()
         cfg = self.config
+        hub = self._hub or DEFAULT_HUB
         random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
 
@@ -416,16 +394,16 @@ class LogicGateTask:
             neuron_model="lif_surr",
             synapse_model="static_dales",
         )
-        gn = build_gate_network(spec)
+        gn = build_gate_network(spec, hub=hub)
 
         # ── Encoder / readout / loss from factories ─────────────────
-        encoder = cast("RateEncoder", DEFAULT_HUB.encoders.create(
+        encoder = cast("RateEncoder", hub.encoders.create(
             "rate", params=RateEncoderParams(amplitude=cfg.amplitude),
         ))
-        readout = cast("IReadout", DEFAULT_HUB.readouts.create(
+        readout = cast("IReadout", hub.readouts.create(
             "spike_count", threshold=float(cfg.spike_threshold),
         ))
-        loss_fn = cast("ILoss", DEFAULT_HUB.losses.create(cfg.loss_fn))
+        loss_fn = cast("ILoss", hub.losses.create(cfg.loss_fn))
 
         # ── Optimizer ───────────────────────────────────────────────
         params_list = list(gn.trainables.values())
@@ -505,7 +483,7 @@ class LogicGateTask:
         for trial in range(cfg.max_trials):
             trial_t0 = perf_counter()
             # Check for external cancellation.
-            if self._stop_check is not None and self._stop_check():
+            if self._should_stop():
                 self._emit(
                     "training_end", trial, cfg.gate,
                     {"converged": False, "trials": trial, "stopped": True},

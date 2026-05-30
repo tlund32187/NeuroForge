@@ -11,6 +11,8 @@ from neuroforge.tasks.vision_classification import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from neuroforge.contracts.monitors import IEventBus
 
 __all__ = ["VisionRunnerConfig", "run_vision_classification"]
@@ -72,6 +74,7 @@ def run_vision_classification(
     cfg: VisionRunnerConfig,
     *,
     event_bus: IEventBus | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Run a vision classification task and return a summary dict."""
     task_kwargs: dict[str, Any] = {
@@ -124,7 +127,7 @@ def run_vision_classification(
     if cfg.backbone_blocks is not None:
         task_kwargs["backbone_blocks"] = tuple(cfg.backbone_blocks)
     task_cfg = VisionClassificationConfig(**task_kwargs)
-    task = VisionClassificationTask(task_cfg, event_bus=event_bus)
+    task = VisionClassificationTask(task_cfg, event_bus=event_bus, stop_check=stop_check)
     result = task.run()
     return {
         "task": "vision_classification",

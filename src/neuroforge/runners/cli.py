@@ -18,13 +18,66 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.api.version import __version__
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # Subcommand: run
 # ---------------------------------------------------------------------------
+
+
+def _run_task(
+    *,
+    cfg: Any,
+    task_cls: Any,
+    bus: Any,
+    ctx: Any,
+    writer: Any,
+    log: Callable[[str], None],
+    emit: Callable[[str, dict[str, Any]], None],
+    config_dict: Callable[[Any], dict[str, Any]],
+    summarize: Callable[[Any], tuple[list[str], dict[str, Any]]],
+) -> int:
+    """Run one task end-to-end and return a process exit code.
+
+    Houses the scaffolding shared by every task: emit ``run_start``, train
+    with timing + ``RuntimeError`` handling, log a summary, emit ``run_end``.
+    Per-task differences (config, summary lines, run_end payload) are supplied
+    by the caller via *cfg* and *summarize*.
+    """
+    emit("run_start", {"run_meta": ctx.to_dict(), "config": config_dict(cfg)})
+    task = task_cls(cfg, event_bus=bus)
+
+    log("Training started…")
+    t0 = time.perf_counter()
+    try:
+        result = task.run()
+    except RuntimeError as exc:
+        wall_ms = (time.perf_counter() - t0) * 1_000
+        log(f"Run aborted: {exc}")
+        log(f"Wall time: {wall_ms:,.0f} ms")
+        log(f"Artifacts: {ctx.run_dir}")
+        emit("run_end", {
+            "converged": False,
+            "failed": True,
+            "error": str(exc),
+            "wall_ms": round(wall_ms, 1),
+        })
+        writer.flush()
+        return 2
+
+    wall_ms = (time.perf_counter() - t0) * 1_000
+    lines, run_end = summarize(result)
+    for line in lines:
+        log(line)
+    log(f"Wall time: {wall_ms:,.0f} ms")
+    log(f"Artifacts: {ctx.run_dir}")
+    emit("run_end", {**run_end, "wall_ms": round(wall_ms, 1)})
+    return 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -117,106 +170,59 @@ def _cmd_run(args: argparse.Namespace) -> int:
     _log(f"stability_N  : {max(1, int(args.stability_every))}")
     _log(f"fail_fast    : {bool(args.fail_fast)}")
 
+    from neuroforge.tasks.registry import get_task_spec
+
+    spec = get_task_spec(task_name)
+    if spec is None:
+        print(f"Unknown task: {task_name!r}", file=sys.stderr)  # noqa: T201
+        return 1
+    config_cls, task_cls = spec.load()
+
     if task_name == "multi_gate":
-        from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+        cfg: Any = config_cls(seed=seed, max_epochs=args.max_epochs, device=device)
+        _log(f"epochs   : {cfg.max_epochs}")
 
-        cfg_multi = MultiGateConfig(seed=seed, max_epochs=args.max_epochs, device=device)
-        _log(f"epochs   : {cfg_multi.max_epochs}")
-
-        _emit("run_start", {
-            "run_meta": ctx.to_dict(),
-            "config": _config_dict(cfg_multi),
-        })
-
-        bus_any: Any = bus
-        task_multi = MultiGateTask(cfg_multi, event_bus=bus_any)
-
-        _log("Training started\u2026")
-        t0 = time.perf_counter()
-        try:
-            result_multi = task_multi.run()
-        except RuntimeError as exc:
-            wall_ms = (time.perf_counter() - t0) * 1_000
-            _log(f"Run aborted: {exc}")
-            _log(f"Wall time: {wall_ms:,.0f} ms")
-            _log(f"Artifacts: {ctx.run_dir}")
-            _emit("run_end", {
-                "converged": False,
-                "failed": True,
-                "error": str(exc),
-                "wall_ms": round(wall_ms, 1),
-            })
-            writer.flush()
-            return 2
-        wall_ms = (time.perf_counter() - t0) * 1_000
-
-        _log(f"Converged: {result_multi.converged}")
-        _log(f"Trials   : {result_multi.trials}")
-        _log(f"Epochs   : {result_multi.epochs}")
-        for g, ok in result_multi.per_gate_converged.items():
-            _log(f"  {g:5s}  : {'OK' if ok else 'FAIL'}")
-        _log(f"Wall time: {wall_ms:,.0f} ms")
-        _log(f"Artifacts: {ctx.run_dir}")
-
-        _emit("run_end", {
-            "converged": result_multi.converged,
-            "trials": result_multi.trials,
-            "epochs": result_multi.epochs,
-            "wall_ms": round(wall_ms, 1),
-        })
-        return 0
-
-    if task_name == "logic_gate":
-        from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
-
+        def _summarize(result: Any) -> tuple[list[str], dict[str, Any]]:
+            lines = [
+                f"Converged: {result.converged}",
+                f"Trials   : {result.trials}",
+                f"Epochs   : {result.epochs}",
+            ]
+            lines += [
+                f"  {g:5s}  : {'OK' if ok else 'FAIL'}"
+                for g, ok in result.per_gate_converged.items()
+            ]
+            return lines, {
+                "converged": result.converged,
+                "trials": result.trials,
+                "epochs": result.epochs,
+            }
+    else:  # logic_gate
         gate: str = args.gate.upper()
-        cfg_single = LogicGateConfig(
+        cfg = config_cls(
             gate=gate, seed=seed, max_trials=args.max_trials, device=device,
         )
         _log(f"gate     : {gate}")
-        _log(f"trials   : {cfg_single.max_trials}")
+        _log(f"trials   : {cfg.max_trials}")
 
-        _emit("run_start", {
-            "run_meta": ctx.to_dict(),
-            "config": _config_dict(cfg_single),
-        })
+        def _summarize(result: Any) -> tuple[list[str], dict[str, Any]]:
+            return (
+                [f"Converged: {result.converged}", f"Trials   : {result.trials}"],
+                {"converged": result.converged, "trials": result.trials},
+            )
 
-        bus_any2: Any = bus
-        task_single = LogicGateTask(cfg_single, event_bus=bus_any2)
-
-        _log("Training started\u2026")
-        t0 = time.perf_counter()
-        try:
-            result_single = task_single.run()
-        except RuntimeError as exc:
-            wall_ms = (time.perf_counter() - t0) * 1_000
-            _log(f"Run aborted: {exc}")
-            _log(f"Wall time: {wall_ms:,.0f} ms")
-            _log(f"Artifacts: {ctx.run_dir}")
-            _emit("run_end", {
-                "converged": False,
-                "failed": True,
-                "error": str(exc),
-                "wall_ms": round(wall_ms, 1),
-            })
-            writer.flush()
-            return 2
-        wall_ms = (time.perf_counter() - t0) * 1_000
-
-        _log(f"Converged: {result_single.converged}")
-        _log(f"Trials   : {result_single.trials}")
-        _log(f"Wall time: {wall_ms:,.0f} ms")
-        _log(f"Artifacts: {ctx.run_dir}")
-
-        _emit("run_end", {
-            "converged": result_single.converged,
-            "trials": result_single.trials,
-            "wall_ms": round(wall_ms, 1),
-        })
-        return 0
-
-    print(f"Unknown task: {task_name!r}", file=sys.stderr)  # noqa: T201
-    return 1
+    bus_any: Any = bus
+    return _run_task(
+        cfg=cfg,
+        task_cls=task_cls,
+        bus=bus_any,
+        ctx=ctx,
+        writer=writer,
+        log=_log,
+        emit=_emit,
+        config_dict=_config_dict,
+        summarize=_summarize,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -805,11 +811,6 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    from neuroforge.runners.bench import (
-        SUPPORTED_BENCH_SYNAPSES,
-        SUPPORTED_BENCH_TOPOLOGIES,
-    )
-
     parser = argparse.ArgumentParser(
         prog="neuroforge",
         description="NeuroForge — spiking neural network toolkit",
@@ -819,7 +820,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    # ── neuroforge run ──────────────────────────────────────────────
+    _add_run_parser(sub)
+    _add_stability_parser(sub)
+    _add_bench_parser(sub)
+    _add_vision_parser(sub)
+    _add_ui_parser(sub)
+    _add_list_runs_parser(sub)
+
+    return parser
+
+
+# ── Per-subcommand parser builders ──────────────────────────────────
+# One function per subcommand so _build_parser stays a short orchestrator.
+
+
+def _add_run_parser(sub: Any) -> None:
     p_run = sub.add_parser("run", help="Run a training task and write artifacts")
     p_run.add_argument(
         "--task",
@@ -921,7 +936,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Torch device: auto, cpu, or cuda (default: auto)",
     )
 
-    # ── neuroforge ui ───────────────────────────────────────────────
+
+def _add_stability_parser(sub: Any) -> None:
     p_stability = sub.add_parser("stability", help="Run multi-seed stability harness")
     p_stability.add_argument(
         "--task",
@@ -982,6 +998,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--device",
         default="auto",
         help="Torch device: auto, cpu, or cuda (default: auto)",
+    )
+
+
+def _add_bench_parser(sub: Any) -> None:
+    from neuroforge.runners.bench import (
+        SUPPORTED_BENCH_SYNAPSES,
+        SUPPORTED_BENCH_TOPOLOGIES,
     )
 
     p_bench = sub.add_parser("bench", help="Run synthetic performance benchmark")
@@ -1109,6 +1132,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Base dir for run artifacts (default: artifacts)",
     )
 
+
+def _add_vision_parser(sub: Any) -> None:  # noqa: PLR0915
     p_vision = sub.add_parser(
         "vision",
         help="Run vision classification task",
@@ -1404,19 +1429,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Base dir for run artifacts (default: artifacts)",
     )
 
+
+def _add_ui_parser(sub: Any) -> None:
     p_ui = sub.add_parser("ui", help="Launch the dashboard web server")
     p_ui.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     p_ui.add_argument("--port", type=int, default=8050, help="Bind port (default: 8050)")
     p_ui.add_argument("--live", action="store_true", help="Enable live training mode")
 
-    # ── neuroforge list-runs ────────────────────────────────────────
+
+def _add_list_runs_parser(sub: Any) -> None:
     p_list = sub.add_parser("list-runs", help="List artifacts runs")
     p_list.add_argument(
         "--artifacts", default="artifacts",
         help="Base dir for run artifacts (default: artifacts)",
     )
-
-    return parser
 
 
 # ---------------------------------------------------------------------------

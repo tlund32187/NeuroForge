@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NeuroForge Dashboard</title>
   <link rel="stylesheet" href="/static/style.css?v=__CACHE_BUST__">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"
+          integrity="sha512-xpXUCbrkyJCwC5noJXZqec9rSXdRgFfDoL7Q9/pCPe54Y04OlqwPobMcNuA5NPJ7DRR51OIr6xcOH2wUspyKDQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"
+          integrity="sha512-psLUZfcgPmi012lcpVHkWoOqyztollwCGu4w/mXijFMK/YcdUdP06voJNVOJ7f/dUIlO2tGlDLuypRyXX2lcvQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"
+          integrity="sha512-17zwwzytpW8ZMn1Fg2DAtUCSOTmJd1GXWfatjWrUGmmOcBGj+dF/yYKo5mqeiBkyYnbnuXZ3ulvHA4MwIxzHlA=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
   <header id="header">
@@ -17,6 +26,8 @@
       <div class="view-toggle">
         <button id="btn-tab-core" class="mode-btn mode-active" data-tab="core">Core</button>
         <button id="btn-tab-vision" class="mode-btn" data-tab="vision">Vision</button>
+        <button id="btn-tab-topology" class="mode-btn" data-tab="topology">Topology</button>
+        <button id="btn-tab-params" class="mode-btn" data-tab="params">Params</button>
       </div>
 
       <div id="live-controls" class="control-group">
@@ -102,6 +113,26 @@
         </div>
         <div id="topology-stats-summary" class="topology-stats-summary">No topology stats yet.</div>
         <canvas id="canvas-network"></canvas>
+        <div id="cy-network" class="hidden"></div>
+        <div id="arch-detail-panel" class="arch-detail-panel hidden">
+          <div class="arch-detail-header">
+            <h3 id="arch-detail-title">Architecture Detail</h3>
+            <button id="arch-detail-close" class="arch-close-btn" title="Close">&times;</button>
+          </div>
+          <div id="arch-detail-body" class="arch-detail-body"></div>
+        </div>
+        <div id="arch-summary" class="arch-summary hidden">
+          <table id="arch-summary-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Layer</th><th>Type</th><th>Operation</th>
+                <th>Output Shape</th><th>Neurons</th><th>Parameters</th>
+                <th>Weight Stats</th>
+              </tr>
+            </thead>
+            <tbody id="arch-summary-tbody"></tbody>
+          </table>
+        </div>
         <div id="tooltip" class="tooltip hidden"></div>
       </section>
 
@@ -410,6 +441,193 @@
     </div>
   </main>
 
+  <!-- ── Parameters Tab ──────────────────────────────────────────── -->
+  <main id="grid-params" class="dashboard-grid dashboard-tab" style="display:none">
+    <div class="params-layout">
+      <section class="panel" id="panel-params-actions">
+        <div class="params-actions">
+          <button id="btn-params-reset" class="btn-secondary" title="Reset all parameters to built-in defaults">Reset Defaults</button>
+          <button id="btn-params-save" class="btn-primary" title="Save current parameters as your defaults (persists in browser)">Save as Default</button>
+          <button id="btn-params-load" class="btn-secondary" title="Load previously saved defaults">Load Saved</button>
+          <span id="params-status" class="params-status"></span>
+        </div>
+      </section>
+
+      <!-- General -->
+      <section class="panel" id="panel-params-general">
+        <h2>General</h2>
+        <div class="params-grid">
+          <label class="param-row">
+            <span class="param-label">Seed</span>
+            <input id="param-seed" type="number" value="42" min="0" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Device</span>
+            <select id="param-device" class="param-input">
+              <option value="auto" selected>Auto</option>
+              <option value="cuda">CUDA</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <!-- SNN Parameters (single gate + MULTI) -->
+      <section class="panel params-section-snn" id="panel-params-snn">
+        <h2>SNN Parameters</h2>
+        <div class="params-grid">
+          <label class="param-row">
+            <span class="param-label">Window Steps</span>
+            <input id="param-window-steps" type="number" value="50" min="1" step="5" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">dt (time step)</span>
+            <input id="param-dt" type="number" value="0.001" min="0.0001" step="0.0001" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Hidden Neurons</span>
+            <input id="param-n-hidden" type="number" value="6" min="1" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Inhibitory Neurons</span>
+            <input id="param-n-inhibitory" type="number" value="2" min="0" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Amplitude</span>
+            <input id="param-amplitude" type="number" value="50" min="1" step="5" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Spike Threshold</span>
+            <input id="param-spike-threshold" type="number" value="3" min="1" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Learning Rate</span>
+            <input id="param-lr" type="number" value="0.005" min="0.0001" step="0.001" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Weight Min</span>
+            <input id="param-w-min" type="number" value="-2.0" step="0.1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Weight Max</span>
+            <input id="param-w-max" type="number" value="2.0" step="0.1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Convergence Streak</span>
+            <input id="param-convergence-streak" type="number" value="20" min="1" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Per-Pattern Streak</span>
+            <input id="param-per-pattern-streak" type="number" value="5" min="1" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Loss Function</span>
+            <select id="param-loss-fn" class="param-input">
+              <option value="mse_count" selected>MSE Count</option>
+              <option value="bce_logits">BCE Logits</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <!-- Vision Parameters (Backbone Tiny) -->
+      <section class="panel params-section-vision" id="panel-params-vision">
+        <h2>Vision / Backbone</h2>
+        <div class="params-grid">
+          <label class="param-row">
+            <span class="param-label">Batch Size</span>
+            <input id="param-batch-size" type="number" value="16" min="1" step="4" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Learning Rate</span>
+            <input id="param-vision-lr" type="number" value="0.001" min="0.00001" step="0.0005" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Loss Function</span>
+            <select id="param-vision-loss" class="param-input">
+              <option value="bce_logits" selected>BCE Logits</option>
+              <option value="mse_count">MSE Count</option>
+            </select>
+          </label>
+          <label class="param-row">
+            <span class="param-label">Backbone Type</span>
+            <select id="param-backbone-type" class="param-input">
+              <option value="lif_convnet_v1" selected>LIF ConvNet v1</option>
+              <option value="none">None (identity)</option>
+            </select>
+          </label>
+          <label class="param-row">
+            <span class="param-label">Encoding Mode</span>
+            <select id="param-encoding-mode" class="param-input">
+              <option value="rate" selected>Rate</option>
+              <option value="latency">Latency</option>
+              <option value="direct">Direct</option>
+            </select>
+          </label>
+          <label class="param-row">
+            <span class="param-label">Backbone Time Steps</span>
+            <input id="param-backbone-timesteps" type="number" value="8" min="1" step="1" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Backbone Output Dim</span>
+            <input id="param-backbone-output-dim" type="number" value="32" min="4" step="4" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Samples Per Gate</span>
+            <input id="param-samples-per-gate" type="number" value="256" min="16" step="32" class="param-input">
+          </label>
+          <label class="param-row">
+            <span class="param-label">Gates</span>
+            <div class="param-checkbox-group" id="param-vision-gates">
+              <label><input type="checkbox" value="AND" checked> AND</label>
+              <label><input type="checkbox" value="OR" checked> OR</label>
+              <label><input type="checkbox" value="XOR" checked> XOR</label>
+              <label><input type="checkbox" value="NAND" checked> NAND</label>
+              <label><input type="checkbox" value="NOR" checked> NOR</label>
+              <label><input type="checkbox" value="XNOR" checked> XNOR</label>
+            </div>
+          </label>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ═══ Topology tab ═══════════════════════════════════════════════ -->
+  <main id="grid-topology" class="dashboard-tab topo-layout" style="display:none">
+    <!-- Left: Filter panel -->
+    <aside id="topo-filters" class="topo-panel topo-filters">
+      <h3 class="topo-panel-title">Filters</h3>
+      <div id="topo-filter-body" class="topo-filter-body"></div>
+      <button id="topo-clear-filters-btn" class="btn-secondary topo-clear-btn">Clear Filters</button>
+    </aside>
+
+    <!-- Center: Cytoscape canvas -->
+    <div id="topo-center" class="topo-center">
+      <div class="topo-toolbar">
+        <label class="topo-toolbar-label">
+          Layout:
+          <select id="topo-layout-select" class="topo-select"></select>
+        </label>
+        <button id="topo-fit-btn" class="btn-secondary topo-toolbar-btn" title="Fit to viewport">Fit</button>
+        <span id="topo-meta" class="topo-meta"></span>
+      </div>
+      <div id="topo-cy-container" class="topo-cy-container">
+        <div id="topo-status" class="topo-status topo-status-empty">Start a training run or load a replay to view topology.</div>
+      </div>
+    </div>
+
+    <!-- Right: Inspector panel -->
+    <aside id="topo-inspector" class="topo-panel topo-inspector">
+      <h3 id="topo-inspector-title" class="topo-panel-title">Inspector</h3>
+      <div id="topo-inspector-body" class="topo-inspector-body">
+        <p class="topo-inspector-empty">Click a node or edge to inspect.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/topology-mapper.js?v=__CACHE_BUST__"></script>
+  <script src="/static/cytoscape-graph.js?v=__CACHE_BUST__"></script>
+  <script src="/static/topology-page.js?v=__CACHE_BUST__"></script>
   <script src="/static/dashboard.js?v=__CACHE_BUST__"></script>
 </body>
 </html>

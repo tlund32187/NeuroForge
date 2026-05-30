@@ -35,7 +35,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web  # pyright: ignore[reportMissingImports]
 
@@ -49,6 +49,9 @@ from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
 from neuroforge.monitors.weight_monitor import WeightMonitor
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = ["start_server"]
 
@@ -259,7 +262,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     }
     if _current_config is not None:
         snap_data["config"] = _current_config
-    await ws.send_str(json.dumps(snap_data))
+    await ws.send_str(json.dumps(_make_json_safe(snap_data)))
 
     async for _msg in ws:
         pass  # keep alive; client doesn't send data
@@ -282,6 +285,7 @@ async def _handle_train(request: web.Request) -> web.Response:
     max_trials = int(body.get("max_trials", 5000))
     device: str = str(body.get("device", ""))
     resource_cfg = _parse_resource_monitor_cfg(body)
+    ui_params: dict[str, Any] = body.get("params", {})
 
     # Resolve device: explicit "cpu"/"cuda" is honoured.  Anything else
     # (including "auto" and empty) becomes "auto" so the config's
@@ -289,9 +293,10 @@ async def _handle_train(request: web.Request) -> web.Response:
     if device not in ("cpu", "cuda"):
         device = "auto"
 
-    # Weights are always initialised on CPU so the same seed gives
-    # identical starting values regardless of the target device.
-    seed = 42
+    # UI params can override seed and device.
+    seed = int(ui_params.get("seed", 42))
+    if str(ui_params.get("device", "")) in ("cpu", "cuda", "auto"):
+        device = str(ui_params["device"])
 
     _setup_monitors()
     _stop_event.clear()
@@ -343,166 +348,208 @@ async def _handle_train(request: web.Request) -> web.Response:
             return asdict(config)
         return dict(vars(config))
 
-    def _run() -> None:
+    def _publish_run_start(config: dict[str, Any]) -> None:
+        _bus.publish(MonitorEvent(
+            topic=EventTopic.RUN_START, step=0, t=0.0,
+            source="dashboard",
+            data={"run_meta": ctx.to_dict(), "config": config},
+        ))
+
+    def _run_vision_backbone() -> None:
         global _current_config
+        from neuroforge.monitors.vision_monitors import (
+            ConfusionMatrixExporter,
+            ConfusionMatrixMonitor,
+            VisionLayerStatsExporter,
+            VisionLayerStatsMonitor,
+            VisionSampleGridExporter,
+            VisionSampleGridMonitor,
+        )
+        from neuroforge.runners.vision import (
+            VisionRunnerConfig,
+            run_vision_classification,
+        )
 
+        layer_stats = VisionLayerStatsMonitor(interval_steps=1, enabled=True)
+        confusion = ConfusionMatrixMonitor(enabled=True)
+        samples = VisionSampleGridMonitor(max_samples=16, enabled=True)
+        _bus.subscribe_all(layer_stats)
+        _bus.subscribe_all(confusion)
+        _bus.subscribe_all(samples)
+        _bus.subscribe_all(
+            VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True)
+        )
+        _bus.subscribe_all(
+            ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True)
+        )
+        _bus.subscribe_all(VisionSampleGridExporter(ctx.run_dir, samples, enabled=True))
+
+        # Read UI params with sensible defaults.
+        v_gates = ui_params.get("gates", ("AND", "OR", "XOR", "NAND", "NOR", "XNOR"))
+        if isinstance(v_gates, list):
+            v_gates = tuple(v_gates)
+        v_n_classes = len(v_gates)
+        v_batch_size = int(ui_params.get("batch_size", 16))
+        v_lr = float(ui_params.get("lr", 1e-3))
+        v_loss = str(ui_params.get("loss_fn", "bce_logits"))
+        v_backbone = str(ui_params.get("backbone_type", "lif_convnet_v1"))
+        v_encoding = str(ui_params.get("encoding_mode", "rate"))
+        v_timesteps = int(ui_params.get("backbone_time_steps", 8))
+        v_output_dim = int(ui_params.get("backbone_output_dim", 32))
+        v_spg = int(ui_params.get("samples_per_gate", 256))
+
+        vision_cfg = VisionRunnerConfig(
+            seed=seed,
+            device=device,
+            dtype="float32",
+            deterministic=True,
+            benchmark=False,
+            warn_only=True,
+            steps=max(1, max_trials),
+            batch_size=v_batch_size,
+            n_classes=v_n_classes,
+            image_channels=1,
+            image_h=8,
+            image_w=8,
+            dataset="logic_gates_pixels",
+            dataset_root=".cache/logic_gates_pixels",
+            dataset_download=False,
+            dataset_num_workers=0,
+            dataset_pin_memory=False,
+            dataset_logic_image_size=8,
+            dataset_logic_gates=v_gates,
+            dataset_logic_mode="multiclass",
+            dataset_logic_samples_per_gate=v_spg,
+            dataset_logic_train_ratio=0.7,
+            dataset_logic_val_ratio=0.15,
+            dataset_logic_test_ratio=0.15,
+            lr=v_lr,
+            loss_fn=v_loss,
+            readout="spike_count",
+            readout_threshold=0.0,
+            backbone_type=v_backbone,
+            backbone_time_steps=v_timesteps,
+            backbone_encoding_mode=v_encoding,
+            backbone_output_dim=v_output_dim,
+            backbone_blocks=(
+                {"type": "conv", "params": {"out_channels": 8, "kernel_size": 3}},
+                {"type": "pool", "params": {"kernel_size": 2, "mode": "avg"}},
+                {"type": "conv", "params": {"out_channels": 12, "kernel_size": 3}},
+            ),
+        )
+        _current_config = _attach_monitoring_cfg(
+            _make_config_dict(vision_cfg),
+            resource_cfg,
+        )
+        _publish_run_start(_current_config)
+        summary = run_vision_classification(
+            vision_cfg,
+            event_bus=_bus,
+            stop_check=_stop_event.is_set,
+        )
+        result = summary.get("result", {})
+        steps = int(result.get("steps", max_trials))
+        stopped = _stop_event.is_set()
+        _bus.publish(MonitorEvent(
+            topic=EventTopic.RUN_END, step=steps, t=0.0,
+            source="dashboard",
+            data={
+                "converged": not stopped,
+                "stopped": stopped,
+                "trials": steps,
+                "steps": steps,
+                "final_loss": float(result.get("final_loss", 0.0)),
+                "final_accuracy": float(result.get("final_accuracy", 0.0)),
+            },
+        ))
+
+    def _run_multi_gate() -> None:
+        global _current_config
+        from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+
+        multi_cfg = MultiGateConfig(
+            max_epochs=max_trials,  # UI field doubles as max_epochs
+            device=device,
+            seed=seed,
+            window_steps=int(ui_params.get("window_steps", 25)),
+            dt=float(ui_params.get("dt", 1e-3)),
+            n_hidden=int(ui_params.get("n_hidden", 24)),
+            n_inhibitory=int(ui_params.get("n_inhibitory", 6)),
+            amplitude=float(ui_params.get("amplitude", 50.0)),
+            spike_threshold=int(ui_params.get("spike_threshold", 3)),
+            lr=float(ui_params.get("lr", 1e-2)),
+            w_min=float(ui_params.get("w_min", -2.0)),
+            w_max=float(ui_params.get("w_max", 2.0)),
+            convergence_streak=int(ui_params.get("convergence_streak", 50)),
+            per_pattern_streak=int(ui_params.get("per_pattern_streak", 5)),
+            loss_fn=str(ui_params.get("loss_fn", "mse_count")),
+        )
+        _current_config = _attach_monitoring_cfg(
+            _make_config_dict(multi_cfg),
+            resource_cfg,
+        )
+        _publish_run_start(_current_config)
+        multi_result = MultiGateTask(
+            multi_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
+        ).run()
+        _bus.publish(MonitorEvent(
+            topic=EventTopic.RUN_END, step=0, t=0.0,
+            source="dashboard",
+            data={
+                "converged": multi_result.converged,
+                "trials": multi_result.trials,
+                "epochs": multi_result.epochs,
+            },
+        ))
+
+    def _run_single_gate() -> None:
+        global _current_config
+        from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+
+        single_cfg = LogicGateConfig(
+            gate=gate, max_trials=max_trials,
+            device=device,
+            seed=seed,
+            window_steps=int(ui_params.get("window_steps", 50)),
+            dt=float(ui_params.get("dt", 1e-3)),
+            n_hidden=int(ui_params.get("n_hidden", 6)),
+            n_inhibitory=int(ui_params.get("n_inhibitory", 2)),
+            amplitude=float(ui_params.get("amplitude", 50.0)),
+            spike_threshold=int(ui_params.get("spike_threshold", 3)),
+            lr=float(ui_params.get("lr", 5e-3)),
+            w_min=float(ui_params.get("w_min", -2.0)),
+            w_max=float(ui_params.get("w_max", 2.0)),
+            convergence_streak=int(ui_params.get("convergence_streak", 20)),
+            per_pattern_streak=int(ui_params.get("per_pattern_streak", 5)),
+            loss_fn=str(ui_params.get("loss_fn", "mse_count")),
+        )
+        _current_config = _attach_monitoring_cfg(
+            _make_config_dict(single_cfg),
+            resource_cfg,
+        )
+        _publish_run_start(_current_config)
+        single_result = LogicGateTask(
+            single_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
+        ).run()
+        _bus.publish(MonitorEvent(
+            topic=EventTopic.RUN_END, step=0, t=0.0,
+            source="dashboard",
+            data={
+                "converged": single_result.converged,
+                "trials": single_result.trials,
+            },
+        ))
+
+    # Dispatch table — replaces the former if/elif chain. Any gate not listed
+    # here (i.e. a concrete gate name like "AND"/"XOR") trains a single gate.
+    _train_handlers: dict[str, Callable[[], None]] = {
+        "LOGIC_BACKBONE_TINY": _run_vision_backbone,
+        "MULTI": _run_multi_gate,
+    }
+
+    def _run() -> None:
         try:
-            if gate == "LOGIC_BACKBONE_TINY":
-                from neuroforge.monitors.vision_monitors import (
-                    ConfusionMatrixExporter,
-                    ConfusionMatrixMonitor,
-                    VisionLayerStatsExporter,
-                    VisionLayerStatsMonitor,
-                    VisionSampleGridExporter,
-                    VisionSampleGridMonitor,
-                )
-                from neuroforge.runners.vision import (
-                    VisionRunnerConfig,
-                    run_vision_classification,
-                )
-
-                layer_stats = VisionLayerStatsMonitor(interval_steps=1, enabled=True)
-                confusion = ConfusionMatrixMonitor(enabled=True)
-                samples = VisionSampleGridMonitor(max_samples=16, enabled=True)
-                _bus.subscribe_all(layer_stats)
-                _bus.subscribe_all(confusion)
-                _bus.subscribe_all(samples)
-                _bus.subscribe_all(
-                    VisionLayerStatsExporter(ctx.run_dir, layer_stats, enabled=True)
-                )
-                _bus.subscribe_all(
-                    ConfusionMatrixExporter(ctx.run_dir, confusion, enabled=True)
-                )
-                _bus.subscribe_all(VisionSampleGridExporter(ctx.run_dir, samples, enabled=True))
-
-                vision_cfg = VisionRunnerConfig(
-                    seed=seed,
-                    device=device,
-                    dtype="float32",
-                    deterministic=True,
-                    benchmark=False,
-                    warn_only=True,
-                    steps=max(1, max_trials),
-                    batch_size=16,
-                    n_classes=4,
-                    image_channels=1,
-                    image_h=8,
-                    image_w=8,
-                    dataset="logic_gates_pixels",
-                    dataset_root=".cache/logic_gates_pixels",
-                    dataset_download=False,
-                    dataset_num_workers=0,
-                    dataset_pin_memory=False,
-                    dataset_logic_image_size=8,
-                    dataset_logic_gates=("AND", "OR", "NAND", "NOR"),
-                    dataset_logic_mode="multiclass",
-                    dataset_logic_samples_per_gate=256,
-                    dataset_logic_train_ratio=0.7,
-                    dataset_logic_val_ratio=0.15,
-                    dataset_logic_test_ratio=0.15,
-                    lr=1e-3,
-                    loss_fn="bce_logits",
-                    readout="spike_count",
-                    readout_threshold=0.0,
-                    backbone_type="lif_convnet_v1",
-                    backbone_time_steps=8,
-                    backbone_encoding_mode="rate",
-                    backbone_output_dim=32,
-                    backbone_blocks=(
-                        {"type": "conv", "params": {"out_channels": 8, "kernel_size": 3}},
-                        {"type": "pool", "params": {"kernel_size": 2, "mode": "avg"}},
-                        {"type": "conv", "params": {"out_channels": 12, "kernel_size": 3}},
-                    ),
-                )
-                _current_config = _attach_monitoring_cfg(
-                    _make_config_dict(vision_cfg),
-                    resource_cfg,
-                )
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_START, step=0, t=0.0,
-                    source="dashboard",
-                    data={
-                        "run_meta": ctx.to_dict(),
-                        "config": _current_config,
-                    },
-                ))
-                summary = run_vision_classification(vision_cfg, event_bus=_bus)
-                result = summary.get("result", {})
-                steps = int(result.get("steps", max_trials))
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_END, step=steps, t=0.0,
-                    source="dashboard",
-                    data={
-                        "converged": True,
-                        "trials": steps,
-                        "steps": steps,
-                        "final_loss": float(result.get("final_loss", 0.0)),
-                        "final_accuracy": float(result.get("final_accuracy", 0.0)),
-                    },
-                ))
-            elif gate == "MULTI":
-                from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
-
-                multi_cfg = MultiGateConfig(
-                    max_epochs=max_trials,  # UI field doubles as max_epochs
-                    device=device,
-                    seed=seed,
-                )
-                _current_config = _attach_monitoring_cfg(
-                    _make_config_dict(multi_cfg),
-                    resource_cfg,
-                )
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_START, step=0, t=0.0,
-                    source="dashboard",
-                    data={
-                        "run_meta": ctx.to_dict(),
-                        "config": _current_config,
-                    },
-                ))
-                multi_result = MultiGateTask(
-                    multi_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
-                ).run()
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_END, step=0, t=0.0,
-                    source="dashboard",
-                    data={
-                        "converged": multi_result.converged,
-                        "trials": multi_result.trials,
-                        "epochs": multi_result.epochs,
-                    },
-                ))
-            else:
-                from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
-
-                single_cfg = LogicGateConfig(
-                    gate=gate, max_trials=max_trials,
-                    device=device,
-                    seed=seed,
-                )
-                _current_config = _attach_monitoring_cfg(
-                    _make_config_dict(single_cfg),
-                    resource_cfg,
-                )
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_START, step=0, t=0.0,
-                    source="dashboard",
-                    data={
-                        "run_meta": ctx.to_dict(),
-                        "config": _current_config,
-                    },
-                ))
-                single_result = LogicGateTask(
-                    single_cfg, event_bus=_bus, stop_check=_stop_event.is_set,
-                ).run()
-                _bus.publish(MonitorEvent(
-                    topic=EventTopic.RUN_END, step=0, t=0.0,
-                    source="dashboard",
-                    data={
-                        "converged": single_result.converged,
-                        "trials": single_result.trials,
-                    },
-                ))
+            _train_handlers.get(gate, _run_single_gate)()
         finally:
             event_recorder.close()
             if resource_monitor is not None:
@@ -531,7 +578,9 @@ async def _handle_status(_request: web.Request) -> web.Response:
     }
     if _current_config is not None:
         snap["config"] = _current_config
-    return web.json_response(snap)
+    # Monitor snapshots may embed raw tensors (e.g. topology edge weights);
+    # coerce them to JSON-safe values so /api/status never 500s mid-run.
+    return web.json_response(_make_json_safe(snap))
 
 
 # ── Replay API (artifact-driven, read-only) ────────────────────────

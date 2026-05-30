@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 from neuroforge.core.determinism.mode import DeterminismConfig, apply_determinism
-from neuroforge.core.torch_utils import require_torch
+from neuroforge.core.torch_utils import cuda_maybe_sync, require_torch
 from neuroforge.monitors.artifact_writer import ArtifactWriter
 from neuroforge.monitors.bus import EventBus
 from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
@@ -233,7 +233,7 @@ def _reset_cuda_peak_memory(device: str) -> None:
     if cuda_device is None:
         return
     torch = require_torch()
-    torch.cuda.synchronize(device=cuda_device)
+    cuda_maybe_sync(cuda_device)
     torch.cuda.reset_peak_memory_stats(device=cuda_device)
 
 
@@ -242,7 +242,7 @@ def _capture_cuda_peak_memory(device: str) -> dict[str, Any] | None:
     if cuda_device is None:
         return None
     torch = require_torch()
-    torch.cuda.synchronize(device=cuda_device)
+    cuda_maybe_sync(cuda_device)
     max_allocated = int(torch.cuda.max_memory_allocated(device=cuda_device))
     max_reserved = int(torch.cuda.max_memory_reserved(device=cuda_device))
     return {

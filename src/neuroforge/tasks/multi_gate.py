@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
 from neuroforge.contracts.neurons import NeuronInputs, StepContext
 from neuroforge.contracts.synapses import SynapseInputs, SynapseTopology
 from neuroforge.contracts.types import Compartment
@@ -29,6 +28,7 @@ from neuroforge.factories.hub import DEFAULT_HUB
 from neuroforge.learning.stats import grad_stats, tensor_stats
 from neuroforge.network.factory import NetworkFactory, to_topology_json
 from neuroforge.network.specs import NetworkSpec, PopulationSpec, ProjectionSpec
+from neuroforge.tasks.base import BaseTask
 from neuroforge.tasks.logic_gates import GATE_TABLES
 
 if TYPE_CHECKING:
@@ -118,6 +118,7 @@ class _TrialOutcome:
     out_count: int
     input_counts: Tensor
     hidden_counts: Tensor
+    image: Tensor
     wall_ms: float
     param_grad_stats: dict[str, float]
 
@@ -245,8 +246,13 @@ def build_gate_network(
     *,
     dev: torch.device,
     tdt: torch.dtype,
+    hub: Any | None = None,
 ) -> tuple[CoreEngine, _Trainables]:
-    """Build the shared multi-gate CoreEngine via NetworkFactory."""
+    """Build the shared multi-gate CoreEngine via NetworkFactory.
+
+    *hub* defaults to :data:`~neuroforge.factories.hub.DEFAULT_HUB`; pass a
+    custom :class:`FactoryHub` to substitute neuron/synapse implementations.
+    """
     torch = require_torch()
 
     input_size = cfg.image_h * cfg.image_w
@@ -262,16 +268,16 @@ def build_gate_network(
 
     spec = NetworkSpec(
         populations=[
-            PopulationSpec("input", input_size, "lif"),
-            PopulationSpec("hidden", hidden_size, "lif_surr"),
-            PopulationSpec("output", 1, "lif_surr"),
+            PopulationSpec(name="input", n=input_size, neuron_model="lif"),
+            PopulationSpec(name="hidden", n=hidden_size, neuron_model="lif_surr"),
+            PopulationSpec(name="output", n=1, neuron_model="lif_surr"),
         ],
         projections=[
             ProjectionSpec(
-                "input_hidden",
-                "input",
-                "hidden",
-                "static_dales",
+                name="input_hidden",
+                source="input",
+                target="hidden",
+                synapse_model="static_dales",
                 synapse_params={"sign_pre": sign_input},
                 topology={
                     "type": "dense",
@@ -282,10 +288,10 @@ def build_gate_network(
                 },
             ),
             ProjectionSpec(
-                "hidden_output",
-                "hidden",
-                "output",
-                "static_dales",
+                name="hidden_output",
+                source="hidden",
+                target="output",
+                synapse_model="static_dales",
                 synapse_params={"sign_pre": sign_hidden},
                 topology={
                     "type": "dense",
@@ -299,7 +305,8 @@ def build_gate_network(
         metadata={"task": "multi_gate", "gates": list(cfg.gates)},
     )
 
-    factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
+    _hub = hub or DEFAULT_HUB
+    factory = NetworkFactory(_hub.neurons, _hub.synapses)
     engine = factory.build(spec, device=cfg.device, dtype=cfg.dtype, seed=cfg.seed)
 
     proj_ih = engine.projections["input_hidden"]
@@ -326,7 +333,7 @@ def _rebind_projection_weights(proj: Projection, weight_matrix: Tensor) -> None:
     )
 
 
-class MultiGateTask:
+class MultiGateTask(BaseTask):
     """Train one shared network on all configured logic gates."""
 
     def __init__(
@@ -335,11 +342,16 @@ class MultiGateTask:
         event_bus: IEventBus | None = None,
         *,
         stop_check: Callable[[], bool] | None = None,
+        hub: Any | None = None,
     ) -> None:
-        """Create a multi-gate trainer with optional event bus/stop hook."""
+        """Create a multi-gate trainer with optional event bus/stop hook.
+
+        *hub* defaults to :data:`~neuroforge.factories.hub.DEFAULT_HUB`; inject
+        a custom :class:`FactoryHub` to swap component implementations (tests).
+        """
+        super().__init__(event_bus, stop_check)
         self.config = config or MultiGateConfig()
-        self._bus = event_bus
-        self._stop_check = stop_check
+        self._hub = hub or DEFAULT_HUB
 
     @staticmethod
     def _pattern_gate_to_image(
@@ -353,27 +365,6 @@ class MultiGateTask:
         """Backward-compatible wrapper for image encoding helper."""
         return _pattern_gate_to_image(bits, gate_idx, n_gates, h=h, w=w)
 
-    def _emit(
-        self,
-        topic: str,
-        step: int,
-        source: str,
-        data: dict[str, Any],
-        *,
-        t: float = 0.0,
-    ) -> None:
-        if self._bus is None:
-            return
-        self._bus.publish(
-            MonitorEvent(
-                topic=EventTopic(topic),
-                step=step,
-                t=t,
-                source=source,
-                data=data,
-            ),
-        )
-
     def _prepare_runtime(self) -> _Runtime:
         cfg = self.config
         torch = require_torch()
@@ -381,7 +372,7 @@ class MultiGateTask:
         torch.manual_seed(cfg.seed)
         dev, tdt = resolve_device_dtype(cfg.device, cfg.dtype)
 
-        engine, trainables = build_gate_network(cfg, dev=dev, tdt=tdt)
+        engine, trainables = build_gate_network(cfg, dev=dev, tdt=tdt, hub=self._hub)
         params = (trainables.w_ih, trainables.b_h, trainables.w_ho, trainables.b_o)
         for param in params:
             param.requires_grad = True
@@ -392,19 +383,19 @@ class MultiGateTask:
         optimizer = torch.optim.Adam([*params], lr=cfg.lr)
         encoder = cast(
             "RateEncoder",
-            DEFAULT_HUB.encoders.create(
+            self._hub.encoders.create(
                 "rate",
                 params=RateEncoderParams(amplitude=cfg.amplitude),
             ),
         )
         readout = cast(
             "IReadout",
-            DEFAULT_HUB.readouts.create(
+            self._hub.readouts.create(
                 "spike_count",
                 threshold=float(cfg.spike_threshold),
             ),
         )
-        loss_fn = cast("ILoss", DEFAULT_HUB.losses.create(cfg.loss_fn))
+        loss_fn = cast("ILoss", self._hub.losses.create(cfg.loss_fn))
 
         gates = list(cfg.gates)
         all_combos = [(gate, pattern) for gate in gates for pattern in PATTERNS]
@@ -631,6 +622,7 @@ class MultiGateTask:
             out_count=out_count,
             input_counts=signals.input_counts.detach(),
             hidden_counts=signals.hidden_counts.detach(),
+            image=img.detach(),
             wall_ms=(perf_counter() - trial_t0) * 1_000.0,
             param_grad_stats=param_grad,
         )
@@ -660,9 +652,12 @@ class MultiGateTask:
                 "input_spikes": input_spikes,
                 "hidden_spikes": hidden_spikes,
                 "output_spikes": [outcome.out_count],
+                "images": outcome.image.unsqueeze(0).unsqueeze(0),
             },
         )
 
+        hidden = outcome.hidden_counts.float()
+        h_total = hidden.numel()
         scalar_payload: dict[str, Any] = {
             "trial": state.trial,
             "epoch": state.epoch,
@@ -673,6 +668,16 @@ class MultiGateTask:
             "wall_ms": outcome.wall_ms,
             "correct": outcome.correct,
         }
+        if h_total > 0:
+            scalar_payload["vision.layer.hidden.spike_rate"] = (
+                float((hidden > 0).sum().item()) / h_total
+            )
+            scalar_payload["vision.layer.hidden.mean_activation"] = float(
+                hidden.mean().item()
+            )
+            scalar_payload["vision.layer.hidden.max_activation"] = float(
+                hidden.max().item()
+            )
         scalar_payload.update(outcome.param_grad_stats)
         self._emit("scalar", state.trial, "MULTI", scalar_payload)
 
@@ -776,7 +781,7 @@ class MultiGateTask:
         for epoch in range(runtime.cfg.max_epochs):
             state.epoch = epoch
             for combo in self._shuffled_combos(runtime):
-                if self._stop_check is not None and self._stop_check():
+                if self._should_stop():
                     return self._build_result(
                         runtime,
                         state,

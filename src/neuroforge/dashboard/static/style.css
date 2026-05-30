@@ -238,8 +238,6 @@ input[type="number"] { width: 90px; }
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   padding: 16px 24px;
-  max-width: 1600px;
-  margin: 0 auto;
 }
 
 #panel-config     { grid-column: 1 / -1; }
@@ -323,6 +321,141 @@ canvas {
   height: 240px;
   display: block;
   border-radius: 4px;
+}
+
+/* ── Cytoscape.js graph container ──────────────────────────────────── */
+#cy-network {
+  width: 100%;
+  height: 600px;
+  min-height: 400px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0d1117;
+}
+#cy-network.hidden { display: none; }
+
+/* ── Architecture detail panel ─────────────────────────────────────── */
+.arch-detail-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-top: 10px;
+  position: relative;
+}
+.arch-detail-panel.hidden { display: none; }
+.arch-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.arch-detail-header h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+.arch-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.arch-close-btn:hover { color: var(--text-primary); }
+.arch-detail-body {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+.arch-detail-body .detail-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+}
+.arch-detail-body .detail-label {
+  color: var(--text-secondary);
+  min-width: 140px;
+  flex-shrink: 0;
+}
+.arch-detail-body .detail-value {
+  color: var(--text-primary);
+}
+.arch-detail-body .detail-section {
+  color: var(--accent);
+  font-weight: 600;
+  margin-top: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Architecture summary table ────────────────────────────────────── */
+.arch-summary {
+  margin-top: 10px;
+}
+.arch-summary.hidden { display: none; }
+#arch-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+#arch-summary-table th {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+}
+#arch-summary-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+#arch-summary-table tr:hover {
+  background: rgba(88, 166, 255, 0.08);
+  cursor: pointer;
+}
+#arch-summary-table .type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+#arch-summary-table .type-input   { background: #1a3a5c; color: #58a6ff; }
+#arch-summary-table .type-conv    { background: #2d1f4e; color: #d4b8ff; }
+#arch-summary-table .type-pool    { background: #1a3344; color: #7dd8ec; }
+#arch-summary-table .type-res     { background: #3b1f3b; color: #f0b0ff; }
+#arch-summary-table .type-linear  { background: #1a3d26; color: #6edc7e; }
+.weight-stats-bar {
+  display: inline-block;
+  width: 60px;
+  height: 8px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.weight-stats-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
 }
 
 .performance-note {
@@ -855,4 +988,277 @@ canvas {
   .vision-event-stats {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Parameters Tab ───────────────────────────────────────────────── */
+
+.params-layout {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.params-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.params-status {
+  color: var(--green);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  min-height: 1.2em;
+}
+
+.params-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 24px;
+}
+
+.param-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.param-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.param-input {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  width: 100%;
+}
+
+.param-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 4px 0;
+}
+
+.param-checkbox-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+
+@media (max-width: 580px) {
+  .params-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Topology Page
+   ══════════════════════════════════════════════════════════════════════ */
+
+.topo-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 260px;
+  grid-template-rows: 1fr;
+  gap: 0;
+  padding: 0;
+  height: calc(100vh - 60px);       /* viewport minus header */
+  overflow: hidden;
+}
+
+/* ── Side panels (filters + inspector) ────────────────────────────── */
+.topo-panel {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px;
+}
+.topo-inspector {
+  border-right: none;
+  border-left: 1px solid var(--border);
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+.topo-inspector.active {
+  opacity: 1;
+}
+
+.topo-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: var(--font-mono);
+}
+
+/* ── Filter body ──────────────────────────────────────────────────── */
+.topo-filter-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.topo-filter-section {
+  margin-bottom: 14px;
+}
+.topo-filter-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 6px 0;
+  font-family: var(--font-mono);
+}
+.topo-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.topo-filter-item input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.topo-clear-btn {
+  margin-top: 8px;
+  width: 100%;
+  font-size: 11px;
+}
+
+/* ── Center: toolbar + Cytoscape container ────────────────────────── */
+.topo-center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+.topo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topo-toolbar-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.topo-select {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.topo-toolbar-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.topo-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  margin-left: auto;
+}
+
+/* ── Cytoscape canvas container ───────────────────────────────────── */
+.topo-cy-container {
+  flex: 1;
+  position: relative;
+  background: #0d1117;
+  border-radius: 0;
+}
+
+/* ── Status overlay (empty / loading / error) ─────────────────────── */
+.topo-status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  text-align: center;
+  padding: 16px 24px;
+  border-radius: 6px;
+  z-index: 5;
+  pointer-events: none;
+}
+.topo-status-empty {
+  color: var(--text-secondary);
+}
+.topo-status-loading {
+  color: var(--accent);
+}
+.topo-status-error {
+  color: var(--red);
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+/* ── Inspector internals ──────────────────────────────────────────── */
+.topo-inspector-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+.topo-inspector-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.topo-inspector-table td {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+}
+.topo-inspector-key {
+  color: var(--text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+  padding-right: 12px;
+}
+.topo-inspector-val {
+  color: var(--text-primary);
+}
+
+/* ── Responsive: collapse side panels on small screens ────────────── */
+@media (max-width: 900px) {
+  .topo-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .topo-filters { display: none; }
+  .topo-inspector { display: none; }
 }

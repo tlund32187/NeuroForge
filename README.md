@@ -2,6 +2,9 @@
 
 A biologically inspired spiking **liquid brain** simulation toolkit.
 
+> New to the codebase? Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
+> event-driven design, a module map, and how to add a task or monitor.
+
 ## Goals
 
 - SOLID-friendly modular architecture (contracts + implementations)
@@ -24,11 +27,35 @@ pip install -e .
 # With PyTorch
 pip install -e ".[torch]"
 
+# Dashboard UI + training
+pip install -e ".[torch,dashboard]"
+
 # Development
 pip install -e ".[dev,torch]"
 
 # Optional resource monitoring (CPU/RAM/GPU)
 pip install -e ".[monitoring]"
+```
+
+## One-Step UI Launch (Windows)
+
+If `neuroforge` is not recognized yet, start the dashboard from the repo root with:
+
+```powershell
+.\start_ui.bat
+```
+
+This launcher will:
+
+- create `.venv` if needed
+- install missing UI/training dependencies (`torch` + `dashboard`)
+- start the dashboard on `http://127.0.0.1:8050`
+
+Optional flags:
+
+```powershell
+.\start_ui.ps1 -Port 8060
+.\start_ui.ps1 -WithMonitoring
 ```
 
 ## Quick Start
