@@ -50,9 +50,25 @@ def _load_multi_gate() -> tuple[type, type]:
     return MultiGateConfig, MultiGateTask
 
 
+def _load_game_training() -> tuple[type, type]:
+    from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+
+    return GameTrainingConfig, GameTrainingTask
+
+
+def _load_evolution() -> tuple[type, type]:
+    from neuroforge.tasks.evolution import EvolutionConfig, EvolutionTask
+
+    return EvolutionConfig, EvolutionTask
+
+
 TASK_REGISTRY: dict[str, TaskSpec] = {
+    "evolution": TaskSpec("evolution", "Policy neuroevolution", _load_evolution),
     "logic_gate": TaskSpec("logic_gate", "Single logic gate", _load_logic_gate),
     "multi_gate": TaskSpec("multi_gate", "Multi-gate shared brain", _load_multi_gate),
+    "game_training": TaskSpec(
+        "game_training", "Vision SNN game playing (online R-STDP)", _load_game_training,
+    ),
 }
 
 

@@ -14,6 +14,8 @@
   <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"
           integrity="sha512-17zwwzytpW8ZMn1Fg2DAtUCSOTmJd1GXWfatjWrUGmmOcBGj+dF/yYKo5mqeiBkyYnbnuXZ3ulvHA4MwIxzHlA=="
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
   <header id="header">
@@ -605,13 +607,38 @@
     <div id="topo-center" class="topo-center">
       <div class="topo-toolbar">
         <label class="topo-toolbar-label">
+          View:
+          <select id="topo-view-select" class="topo-select">
+            <option value="graph" selected>Graph</option>
+            <option value="stack">Layer Stack</option>
+            <option value="matrix">Matrix</option>
+            <option value="three">3D</option>
+            <option value="trace">Trace</option>
+          </select>
+        </label>
+        <label class="topo-toolbar-label">
           Layout:
           <select id="topo-layout-select" class="topo-select"></select>
         </label>
+        <label id="topo-projection-wrap" class="topo-toolbar-label topo-toolbar-projection">
+          Projection:
+          <select id="topo-projection-select" class="topo-select"></select>
+        </label>
+        <label class="topo-toolbar-label topo-sample-wrap">
+          Samples:
+          <input id="topo-sample-size" type="range" min="16" max="256" step="16" value="64">
+          <span id="topo-sample-size-value">64</span>
+        </label>
+        <button id="topo-trace-play-btn" class="btn-secondary topo-toolbar-btn" title="Play trace frames">Play</button>
         <button id="topo-fit-btn" class="btn-secondary topo-toolbar-btn" title="Fit to viewport">Fit</button>
         <span id="topo-meta" class="topo-meta"></span>
       </div>
       <div id="topo-cy-container" class="topo-cy-container">
+        <div id="topo-view-graph" class="topo-view-pane topo-view-active"></div>
+        <canvas id="topo-view-stack" class="topo-view-pane"></canvas>
+        <canvas id="topo-view-matrix" class="topo-view-pane"></canvas>
+        <div id="topo-view-three" class="topo-view-pane topo-three-pane"></div>
+        <canvas id="topo-view-trace" class="topo-view-pane"></canvas>
         <div id="topo-status" class="topo-status topo-status-empty">Start a training run or load a replay to view topology.</div>
       </div>
     </div>
@@ -626,6 +653,7 @@
   </main>
 
   <script src="/static/topology-mapper.js?v=__CACHE_BUST__"></script>
+  <script src="/static/topology-views.js?v=__CACHE_BUST__"></script>
   <script src="/static/cytoscape-graph.js?v=__CACHE_BUST__"></script>
   <script src="/static/topology-page.js?v=__CACHE_BUST__"></script>
   <script src="/static/dashboard.js?v=__CACHE_BUST__"></script>

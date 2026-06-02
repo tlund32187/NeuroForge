@@ -61,6 +61,7 @@ stay decoupled.
 | `encoding/`, `readout/`, `losses/` | Rate encoders, readout decoders, loss functions. |
 | `tasks/` | Trainable tasks: `LogicGateTask`, `MultiGateTask`, `VisionClassificationTask`. See the registry below. |
 | `vision/` | Spiking conv/pool/res blocks, `lif_convnet_v1` backbone, vision engine + factory. |
+| `game/` | Vision-only game episode helpers: emulator clients expose screen frames + controller actions; HUD metrics and rewards are derived from pixels, not game memory. |
 | `monitors/` | The observer side of the event bus (see §2). |
 | `runners/` | `cli.py` (the `neuroforge` command), training/stability/benchmark harnesses, the vision runner. |
 | `dashboard/` | aiohttp + WebSocket server and the static front-end (Core / Vision / Topology / Params tabs). |
@@ -82,7 +83,9 @@ key instead of hard-coding `if/elif`.
    reference.
 3. **Register it.** Add a one-line entry to `TASK_REGISTRY` with a lazy loader
    returning `(ConfigCls, TaskCls)`. The CLI (`runners/cli.py:_cmd_run`) then
-   runs it generically via `_run_task`.
+   runs it generically via `_run_task`. Tasks that need injected collaborators
+   should pass them through `_run_task(..., task_kwargs={...})` rather than
+   duplicating the runner scaffolding.
 4. **Expose it where needed.** The dashboard dispatches by a `gate` key via the
    `_train_handlers` table in
    [`dashboard/server.py`](../src/neuroforge/dashboard/server.py); add a handler
@@ -107,6 +110,7 @@ Monitors need no registry — that is the payoff of the pub/sub design.
 ```bash
 pip install -e ".[torch,dashboard,dev]"
 neuroforge run --task multi_gate          # train; writes artifacts/<run_id>/
+neuroforge run --task evolution           # fast policy-genome proxy smoke run
 neuroforge ui                             # dashboard at http://127.0.0.1:8050
 pytest                                    # ~470 tests
 ```

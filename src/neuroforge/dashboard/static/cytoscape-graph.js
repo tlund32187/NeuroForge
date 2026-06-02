@@ -120,6 +120,18 @@ const CY_STYLE = [
       "z-index": 10,
     },
   },
+  // Runtime activity overlay.
+  {
+    selector: "node[activity > 0]",
+    style: {
+      "border-width": "mapData(activity, 0, 1, 2.5, 7)",
+      "border-color": "#f2cc60",
+      "background-opacity": "mapData(activity, 0, 1, 0.72, 1)",
+      "shadow-blur": "mapData(activity, 0, 1, 2, 22)",
+      "shadow-color": "#f2cc60",
+      "shadow-opacity": "mapData(activity, 0, 1, 0.05, 0.65)",
+    },
+  },
   // ── Hidden nodes (filtered out) ──
   {
     selector: "node.hidden",
@@ -182,6 +194,15 @@ const CY_STYLE = [
       "target-arrow-color": "#ffffff",
       "opacity": 1,
       "width": 4,
+    },
+  },
+  {
+    selector: "edge[traceSignal > 0]",
+    style: {
+      "line-color": "#f2cc60",
+      "target-arrow-color": "#f2cc60",
+      "opacity": "mapData(traceSignal, 0, 1, 0.35, 1)",
+      "width": "mapData(traceSignal, 0, 1, 1.5, 7)",
     },
   },
   // ── Box-selection highlight ──
@@ -334,6 +355,51 @@ class CyGraph {
     return sel.length > 0 ? sel[0].data() : null;
   }
 
+  /**
+   * Apply runtime activity/trace data to the rendered graph.
+   * @param {object|null} trace
+   */
+  updateTrace(trace) {
+    if (!this._cy || !trace) return;
+    const layers = {};
+    const projections = {};
+    for (const layer of trace.layers || []) {
+      if (layer && layer.name) layers[String(layer.name)] = layer;
+    }
+    for (const proj of trace.projections || []) {
+      if (proj && proj.name) projections[String(proj.name).replace(/[- ]/g, "_")] = proj;
+    }
+
+    this._cy.batch(() => {
+      this._cy.nodes().forEach((node) => {
+        const data = node.data();
+        const layer = layers[data.id] || layers[data.population] || null;
+        const activity = layer ? Number(layer.activity || 0) : 0;
+        node.data("activity", Number.isFinite(activity) ? activity : 0);
+        node.data("latestSpikes", layer ? Number(layer.latest_spikes || 0) : 0);
+      });
+      this._cy.edges().forEach((edge) => {
+        const data = edge.data();
+        const names = [
+          data.projectionName,
+          data.id,
+          data.source + "_" + data.target,
+          data.source + "->" + data.target,
+        ].map((v) => String(v || "").replace(/[- ]/g, "_"));
+        let proj = null;
+        for (const name of names) {
+          if (projections[name]) {
+            proj = projections[name];
+            break;
+          }
+        }
+        const signal = proj ? _projectionSignal(proj) : 0;
+        edge.data("traceSignal", signal);
+        edge.data("activeEdgeCount", proj ? Number(proj.active_edge_count || 0) : 0);
+      });
+    });
+  }
+
   /** Destroy the Cytoscape instance. */
   destroy() {
     if (this._cy) {
@@ -379,3 +445,14 @@ class CyGraph {
 // ── Exports ──────────────────────────────────────────────────────────
 window.CyGraph = CyGraph;
 window.CyGraph.LAYOUTS = LAYOUTS;
+
+function _projectionSignal(proj) {
+  const active = Number(proj.active_edge_count || 0);
+  const delta = Math.abs(Number(proj.weight_delta_mean || 0));
+  const weight = Math.abs(Number(proj.weight_abs_mean || 0));
+  const sampleMax = Math.max(
+    0,
+    ...(proj.sample_edges || []).map((edge) => Number(edge.signal || 0)),
+  );
+  return Math.max(0, Math.min(1, sampleMax || (active > 0 ? 0.6 : 0) || delta || weight * 0.25));
+}

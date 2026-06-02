@@ -78,6 +78,31 @@ class TestContractsImportable:
             cls is not None for cls in [ISimulationEngine, SimulationConfig, StepResult]
         )
 
+    def test_import_game(self) -> None:
+        from neuroforge.contracts.game import (
+            ControllerAction,
+            GameObservation,
+            IGameClient,
+            ScreenFrame,
+            VisionGameMetrics,
+        )
+
+        assert all(
+            cls is not None
+            for cls in [
+                ControllerAction,
+                GameObservation,
+                IGameClient,
+                ScreenFrame,
+                VisionGameMetrics,
+            ]
+        )
+
+    def test_import_evolution(self) -> None:
+        from neuroforge.contracts.evolution import FitnessResult, IFitnessEvaluator, IGenome
+
+        assert all(cls is not None for cls in [FitnessResult, IFitnessEvaluator, IGenome])
+
 
 @pytest.mark.unit
 class TestProtocolsAreRuntimeCheckable:
@@ -116,6 +141,20 @@ class TestProtocolsAreRuntimeCheckable:
 
         assert hasattr(IRegistry, "__protocol_attrs__") or hasattr(
             IRegistry, "_is_runtime_protocol"
+        )
+
+    def test_igame_client(self) -> None:
+        from neuroforge.contracts.game import IGameClient
+
+        assert hasattr(IGameClient, "__protocol_attrs__") or hasattr(
+            IGameClient, "_is_runtime_protocol"
+        )
+
+    def test_igenome(self) -> None:
+        from neuroforge.contracts.evolution import IGenome
+
+        assert hasattr(IGenome, "__protocol_attrs__") or hasattr(
+            IGenome, "_is_runtime_protocol"
         )
 
 
@@ -158,6 +197,20 @@ class TestProtocolsHaveExpectedMethods:
         expected = {"register", "create", "list_keys", "has"}
         for method in expected:
             assert hasattr(IRegistry, method), f"Missing method: {method}"
+
+    def test_igame_client_methods(self) -> None:
+        from neuroforge.contracts.game import IGameClient
+
+        expected = {"reset", "step", "close"}
+        for method in expected:
+            assert hasattr(IGameClient, method), f"Missing method: {method}"
+
+    def test_igenome_methods(self) -> None:
+        from neuroforge.contracts.evolution import IGenome
+
+        expected = {"to_dict"}
+        for method in expected:
+            assert hasattr(IGenome, method), f"Missing method: {method}"
 
 
 @pytest.mark.unit

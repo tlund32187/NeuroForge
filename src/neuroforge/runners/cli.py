@@ -34,6 +34,7 @@ def _run_task(
     *,
     cfg: Any,
     task_cls: Any,
+    task_kwargs: dict[str, Any] | None = None,
     bus: Any,
     ctx: Any,
     writer: Any,
@@ -50,7 +51,7 @@ def _run_task(
     by the caller via *cfg* and *summarize*.
     """
     emit("run_start", {"run_meta": ctx.to_dict(), "config": config_dict(cfg)})
-    task = task_cls(cfg, event_bus=bus)
+    task = task_cls(cfg, event_bus=bus, **(task_kwargs or {}))
 
     log("Training started…")
     t0 = time.perf_counter()
@@ -78,6 +79,24 @@ def _run_task(
     log(f"Artifacts: {ctx.run_dir}")
     emit("run_end", {**run_end, "wall_ms": round(wall_ms, 1)})
     return 0
+
+
+def _resolve_evolution_checkpoint(*, raw: str | None, run_dir: Path) -> str | None:
+    """Resolve the evolution checkpoint path for ``neuroforge run``."""
+    if raw is None:
+        return str(run_dir / "evolution" / "checkpoint.json")
+    value = raw.strip()
+    if value.lower() in {"", "none", "off", "disabled"}:
+        return None
+    return str(Path(value))
+
+
+def _resolve_torch_device(device: str) -> str:
+    if device != "auto":
+        return device
+    from neuroforge.core.torch_utils import default_device
+
+    return default_device()
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -178,8 +197,90 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     config_cls, task_cls = spec.load()
 
-    if task_name == "multi_gate":
-        cfg: Any = config_cls(seed=seed, max_epochs=args.max_epochs, device=device)
+    task_kwargs: dict[str, Any] = {}
+    if task_name == "evolution":
+        from neuroforge.evolution import (
+            CallableFitnessEvaluator,
+            ScriptedGameFitnessConfig,
+            build_scripted_progress_fitness_evaluator,
+            get_policy_objective,
+        )
+
+        checkpoint_path = _resolve_evolution_checkpoint(
+            raw=args.evolution_checkpoint,
+            run_dir=ctx.run_dir,
+        )
+        cfg = config_cls(
+            population_size=args.population_size,
+            generations=args.generations,
+            elite_count=args.elite_count,
+            mutation_rate=args.mutation_rate,
+            mutation_power=args.mutation_power,
+            crossover_rate=args.crossover_rate,
+            species_threshold=args.species_threshold,
+            seed=seed,
+            checkpoint_path=checkpoint_path,
+            resume=bool(args.resume_evolution),
+            max_workers=args.evolution_workers,
+        )
+        backend = str(args.evolution_backend)
+        if backend == "scripted-game":
+            eval_device = _resolve_torch_device(device)
+            task_kwargs["evaluator"] = build_scripted_progress_fitness_evaluator(
+                ScriptedGameFitnessConfig(
+                    max_episodes=args.evolution_eval_episodes,
+                    frames_per_episode=args.evolution_eval_frames,
+                    telemetry_every=0,
+                    device=eval_device,
+                    dtype="float32",
+                )
+            )
+        else:
+            try:
+                objective = get_policy_objective(str(args.evolution_objective))
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)  # noqa: T201
+                writer.flush()
+                return 1
+            task_kwargs["evaluator"] = CallableFitnessEvaluator(objective)
+        _log(f"backend  : {backend}")
+        if backend == "proxy":
+            _log(f"objective : {args.evolution_objective}")
+        else:
+            _log(
+                "eval     : "
+                f"{args.evolution_eval_episodes} episode(s) x "
+                f"{args.evolution_eval_frames} frame(s)",
+            )
+            _log(f"eval_device: {_resolve_torch_device(device)}")
+        _log(f"population: {cfg.population_size}")
+        _log(f"generations: {cfg.generations}")
+        _log(f"workers  : {cfg.max_workers}")
+        _log(f"checkpoint: {checkpoint_path or 'disabled'}")
+        _log(f"resume   : {cfg.resume}")
+
+        def _summarize(result: Any) -> tuple[list[str], dict[str, Any]]:
+            best = result.best_genome
+            best_id = best.id if best is not None else ""
+            return (
+                [
+                    f"Best fitness: {result.best_fitness:.3f}",
+                    f"Generations : {result.generations}",
+                    f"Evaluations : {result.evaluations}",
+                    f"Best genome : {best_id}",
+                ],
+                {
+                    "converged": False,
+                    "best_fitness": result.best_fitness,
+                    "generations": result.generations,
+                    "evaluations": result.evaluations,
+                    "best_genome_id": best_id,
+                    "stopped": result.stopped,
+                },
+            )
+
+    elif task_name == "multi_gate":
+        cfg = config_cls(seed=seed, max_epochs=args.max_epochs, device=device)
         _log(f"epochs   : {cfg.max_epochs}")
 
         def _summarize(result: Any) -> tuple[list[str], dict[str, Any]]:
@@ -215,6 +316,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return _run_task(
         cfg=cfg,
         task_cls=task_cls,
+        task_kwargs=task_kwargs,
         bus=bus_any,
         ctx=ctx,
         writer=writer,
@@ -838,7 +940,7 @@ def _add_run_parser(sub: Any) -> None:
     p_run = sub.add_parser("run", help="Run a training task and write artifacts")
     p_run.add_argument(
         "--task",
-        choices=["logic_gate", "multi_gate"],
+        choices=["logic_gate", "multi_gate", "evolution"],
         default="multi_gate",
         help="Task to run (default: multi_gate)",
     )
@@ -926,6 +1028,89 @@ def _add_run_parser(sub: Any) -> None:
     p_run.add_argument(
         "--max-trials", type=int, default=5000,
         help="Max trials for logic_gate (default: 5000)",
+    )
+    p_run.add_argument(
+        "--population-size",
+        type=int,
+        default=16,
+        help="Population size for evolution (default: 16)",
+    )
+    p_run.add_argument(
+        "--generations",
+        type=int,
+        default=10,
+        help="Generation count for evolution (default: 10)",
+    )
+    p_run.add_argument(
+        "--elite-count",
+        type=int,
+        default=2,
+        help="Elite genomes retained per evolution generation (default: 2)",
+    )
+    p_run.add_argument(
+        "--mutation-rate",
+        type=float,
+        default=0.25,
+        help="Per-gene mutation probability for evolution (default: 0.25)",
+    )
+    p_run.add_argument(
+        "--mutation-power",
+        type=float,
+        default=1.0,
+        help="Mutation step scale for evolution (default: 1.0)",
+    )
+    p_run.add_argument(
+        "--crossover-rate",
+        type=float,
+        default=0.7,
+        help="Crossover probability for evolution (default: 0.7)",
+    )
+    p_run.add_argument(
+        "--species-threshold",
+        type=float,
+        default=0.18,
+        help="Compatibility threshold for evolution speciation (default: 0.18)",
+    )
+    p_run.add_argument(
+        "--evolution-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Parallel evaluator workers for evolution; use >1 only with thread-safe evaluators",
+    )
+    p_run.add_argument(
+        "--evolution-backend",
+        choices=["proxy", "scripted-game"],
+        default="proxy",
+        help="Evolution evaluator backend (default: proxy)",
+    )
+    p_run.add_argument(
+        "--evolution-objective",
+        default="proxy_policy_gene_target",
+        help="Evolution fitness objective (default: proxy_policy_gene_target)",
+    )
+    p_run.add_argument(
+        "--evolution-eval-episodes",
+        type=int,
+        default=1,
+        help="Episodes per genome for game-backed evolution evaluators (default: 1)",
+    )
+    p_run.add_argument(
+        "--evolution-eval-frames",
+        type=int,
+        default=120,
+        help="Frame budget per episode for game-backed evolution evaluators (default: 120)",
+    )
+    p_run.add_argument(
+        "--evolution-checkpoint",
+        default=None,
+        help="Evolution checkpoint path; use 'off' to disable (default: run-local checkpoint)",
+    )
+    p_run.add_argument(
+        "--resume-evolution",
+        action="store_true",
+        default=False,
+        help="Resume evolution from --evolution-checkpoint when it exists",
     )
     p_run.add_argument(
         "--artifacts", default="artifacts",

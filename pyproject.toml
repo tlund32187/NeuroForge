@@ -63,7 +63,7 @@ mypy_path = "src"
 packages = ["neuroforge", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["torch", "torch.*"]
+module = ["torch", "torch.*", "torchvision.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

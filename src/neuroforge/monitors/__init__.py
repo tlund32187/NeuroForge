@@ -20,6 +20,7 @@ from neuroforge.monitors.event_recorder import EventRecorderMonitor
 from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
 from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
+from neuroforge.monitors.topology_activity_monitor import TopologyActivityMonitor
 from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
@@ -47,6 +48,7 @@ __all__ = [
     "SpikeMonitor",
     "StabilityConfig",
     "StabilityMonitor",
+    "TopologyActivityMonitor",
     "TopologyStatsMonitor",
     "TrialStatsMonitor",
     "TrainingMonitor",

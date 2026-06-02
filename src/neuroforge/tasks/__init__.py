@@ -1,5 +1,6 @@
 """NeuroForge task runners."""
 
+from neuroforge.tasks.evolution import EvolutionConfig, EvolutionResult, EvolutionTask
 from neuroforge.tasks.logic_gates import (
     GATE_TABLES,
     LogicGateConfig,
@@ -23,6 +24,9 @@ from neuroforge.tasks.vision_classification import (
 
 __all__ = [
     "ALL_GATES",
+    "EvolutionConfig",
+    "EvolutionResult",
+    "EvolutionTask",
     "GATE_INDEX",
     "GATE_TABLES",
     "LogicGateConfig",

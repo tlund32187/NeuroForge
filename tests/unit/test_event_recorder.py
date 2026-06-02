@@ -40,6 +40,23 @@ def test_event_recorder_writes_ndjson(tmp_path: Path) -> None:
     recorder.on_event(_event(EventTopic.TOPOLOGY, data={"layers": ["input(2)", "output(1)"]}))
     recorder.on_event(_event(EventTopic.TOPOLOGY, data={"layers": ["ignored"]}))
     recorder.on_event(_event(EventTopic.TOPOLOGY_STATS, data={"totals": {"edges_total": 2}}))
+    recorder.on_event(
+        _event(
+            EventTopic.TOPOLOGY_TRACE,
+            step=1,
+            data={
+                "step": 1,
+                "mode": "activity",
+                "layers": [{"name": "input", "activity": 0.5}],
+                "projections": [
+                    {
+                        "name": "input_hidden",
+                        "sample_edges": [{"pre": 0, "post": 1, "signal": 0.8}],
+                    }
+                ],
+            },
+        )
+    )
     recorder.on_event(_event(EventTopic.SCALAR, step=1, data={"accuracy": 0.75}))
     recorder.on_event(_event(EventTopic.WEIGHT, step=1, data={"weights": [1, 2, 3, 4]}))
     recorder.on_event(_event(EventTopic.WEIGHT, step=2, data={"weights": [1, 2, 3, 4]}))
@@ -57,8 +74,11 @@ def test_event_recorder_writes_ndjson(tmp_path: Path) -> None:
     topics = [row["topic"] for row in rows]
     assert topics.count("topology") == 1
     assert "topology_stats" in topics
+    assert "topology_trace" in topics
     assert "scalar" in topics
     assert "weight" in topics
+    trace_rows = [r for r in rows if r["topic"] == "topology_trace"]
+    assert trace_rows[0]["data"]["layers"][0]["name"] == "input"
 
     weight_rows = [r for r in rows if r["topic"] == "weight"]
     assert len(weight_rows) == 1

@@ -33,7 +33,9 @@ import csv
 import hashlib
 import json
 import re
+import socket
 import threading
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +47,7 @@ from neuroforge.monitors.event_recorder import EventRecorderMonitor
 from neuroforge.monitors.resource_monitor import ResourceMonitor
 from neuroforge.monitors.spike_monitor import SpikeMonitor
 from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
+from neuroforge.monitors.topology_activity_monitor import TopologyActivityMonitor
 from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
 from neuroforge.monitors.training_monitor import TrainingMonitor
 from neuroforge.monitors.trial_stats_monitor import TrialStatsMonitor
@@ -56,6 +59,12 @@ if TYPE_CHECKING:
 __all__ = ["start_server"]
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Minimum eval accuracy for the vision/backbone task to count as "converged".
+# Below this the run is reported as finished-but-not-converged rather than a
+# misleading success (the old behaviour reported converged whenever the run
+# simply reached the end without being stopped).
+_VISION_CONVERGENCE_ACCURACY = 0.9
 
 
 def _compute_asset_hash() -> str:
@@ -69,12 +78,119 @@ def _compute_asset_hash() -> str:
 
 _ASSET_HASH = _compute_asset_hash()
 
+
+def _is_bind_available(host: str, port: int) -> bool:
+    """Return whether ``host:port`` can be bound right now."""
+    family = socket.AF_INET6 if ":" in host and host != "0.0.0.0" else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, int(port)))
+        except OSError:
+            return False
+    return True
+
+
+def _resolve_dashboard_port(host: str, port: int, *, attempts: int = 10) -> int:
+    """Use ``port`` if free, otherwise return the next available port."""
+    start = int(port)
+    for candidate in range(start, start + max(1, int(attempts)) + 1):
+        if _is_bind_available(host, candidate):
+            return candidate
+    msg = (
+        f"Could not bind NeuroForge dashboard on {host}:{start}; "
+        f"ports {start}-{start + max(1, int(attempts))} are in use."
+    )
+    raise OSError(msg)
+
+
+class _DashboardMetricSeriesMonitor:
+    """Keep compact Core chart series for websocket snapshots."""
+
+    _KEYS = {
+        "accuracy",
+        "out_spike_count",
+        "rate_out_hz",
+        "w_maxabs_ih",
+        "w_maxabs_ho",
+        "g_norm_ih",
+        "g_norm_ho",
+        "stab_nan_inf",
+        "stab_weight_explode",
+        "stab_rate_saturation",
+        "stab_oscillation",
+        "stab_stagnation",
+        "ms_per_step",
+        "steps_per_sec",
+        "wall_ms",
+        "torch_cuda_allocated_mb",
+        "torch_cuda_reserved_mb",
+        "torch_cuda_max_allocated_mb",
+        "cuda_mem_allocated",
+        "cuda_mem_reserved",
+        "cuda_mem_peak",
+    }
+    _PREFIXES = ("resource.", "perf.")
+
+    def __init__(self, *, max_rows: int = 1500) -> None:
+        self.enabled = True
+        self._rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_rows)))
+
+    def on_event(self, event: MonitorEvent) -> None:
+        if not self.enabled:
+            return
+        if event.topic == EventTopic.TRAINING_START:
+            self.reset()
+            return
+        if event.topic not in (EventTopic.TRAINING_TRIAL, EventTopic.SCALAR):
+            return
+
+        data: dict[str, Any] = {}
+        for raw_key, value in event.data.items():
+            key = str(raw_key)
+            if key not in self._KEYS and not key.startswith(self._PREFIXES):
+                continue
+            scalar = self._to_scalar(value)
+            if scalar is not None:
+                data[key] = scalar
+        if not data:
+            return
+
+        self._rows.append({
+            "step": int(event.step),
+            "t": float(event.t),
+            "data": data,
+        })
+
+    def reset(self) -> None:
+        self._rows.clear()
+
+    def snapshot(self) -> dict[str, Any]:
+        return {"rows": list(self._rows)}
+
+    @staticmethod
+    def _to_scalar(value: Any) -> Any:
+        if isinstance(value, (bool, int, float, str)):
+            return value
+        if value is None:
+            return None
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                scalar = item()
+            except Exception:
+                return None
+            if isinstance(scalar, (bool, int, float, str)):
+                return scalar
+        return None
+
 # ── Shared state ────────────────────────────────────────────────────
 
 _bus = EventBus()
 _training_monitor = TrainingMonitor()
 _spike_monitor = SpikeMonitor()
 _weight_monitor = WeightMonitor()
+_metric_series_monitor = _DashboardMetricSeriesMonitor()
 
 _ws_clients: list[web.WebSocketResponse] = []
 _training_thread: threading.Thread | None = None
@@ -89,6 +205,7 @@ def _setup_monitors() -> None:
     _training_monitor.reset()
     _spike_monitor.reset()
     _weight_monitor.reset()
+    _metric_series_monitor.reset()
 
     for topic in EventTopic:
         _bus.subscribe(topic, _training_monitor)
@@ -259,6 +376,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
         "training": _training_monitor.snapshot(),
         "weights": _weight_monitor.snapshot(),
         "spikes": _spike_monitor.snapshot(),
+        "metrics": _metric_series_monitor.snapshot(),
     }
     if _current_config is not None:
         snap_data["config"] = _current_config
@@ -307,9 +425,16 @@ async def _handle_train(request: web.Request) -> web.Response:
         StabilityConfig(enabled=True, check_every_n_trials=5, fail_fast=False),
     )
     topology_stats_monitor = TopologyStatsMonitor(event_bus=_bus, enabled=True)
+    topology_activity_monitor = TopologyActivityMonitor(
+        event_bus=_bus,
+        enabled=True,
+        trace_every_n_steps=5,
+        max_edge_samples=64,
+    )
     _bus.subscribe_all(trial_stats_monitor)
     _bus.subscribe_all(stability_monitor)
     _bus.subscribe_all(topology_stats_monitor)
+    _bus.subscribe_all(topology_activity_monitor)
 
     # Optional resource monitor: enriches SCALAR payloads.
     resource_monitor: ResourceMonitor | None = None
@@ -324,6 +449,8 @@ async def _handle_train(request: web.Request) -> web.Response:
         )
         _bus.subscribe_all(resource_monitor)
 
+    _bus.subscribe_all(_metric_series_monitor)
+
     # Subscribe the WS broadcaster.
     loop = asyncio.get_running_loop()
     ws_mon = _WsBroadcastMonitor(loop)
@@ -337,7 +464,10 @@ async def _handle_train(request: web.Request) -> web.Response:
     from neuroforge.runners.run_context import create_run_dir
 
     ctx = create_run_dir(base_dir="artifacts", seed=seed)
-    artifact_writer = ArtifactWriter(ctx.run_dir)
+    artifact_writer = ArtifactWriter(
+        ctx.run_dir,
+        include_resource_fields=bool(resource_cfg["enabled"]),
+    )
     event_recorder = EventRecorderMonitor(ctx.run_dir)
     _bus.subscribe_all(artifact_writer)
     _bus.subscribe_all(event_recorder)
@@ -450,16 +580,27 @@ async def _handle_train(request: web.Request) -> web.Response:
         result = summary.get("result", {})
         steps = int(result.get("steps", max_trials))
         stopped = _stop_event.is_set()
+        # Prefer eval accuracy; fall back to final (train) accuracy.
+        eval_acc = float(result.get("eval_accuracy", 0.0) or 0.0)
+        final_acc = float(result.get("final_accuracy", 0.0) or 0.0)
+        accuracy = eval_acc if eval_acc > 0.0 else final_acc
+        # Honest convergence: the run must finish (not stopped) AND clear the
+        # accuracy bar. A run that merely reaches the last step is "done",
+        # not "converged".
+        converged = (not stopped) and accuracy >= _VISION_CONVERGENCE_ACCURACY
         _bus.publish(MonitorEvent(
             topic=EventTopic.RUN_END, step=steps, t=0.0,
             source="dashboard",
             data={
-                "converged": not stopped,
+                "converged": converged,
                 "stopped": stopped,
                 "trials": steps,
                 "steps": steps,
                 "final_loss": float(result.get("final_loss", 0.0)),
-                "final_accuracy": float(result.get("final_accuracy", 0.0)),
+                "final_accuracy": final_acc,
+                "eval_accuracy": eval_acc,
+                "accuracy": accuracy,
+                "convergence_threshold": _VISION_CONVERGENCE_ACCURACY,
             },
         ))
 
@@ -575,6 +716,7 @@ async def _handle_status(_request: web.Request) -> web.Response:
         "training": _training_monitor.snapshot(),
         "weights": _weight_monitor.snapshot(),
         "spikes": _spike_monitor.snapshot(),
+        "metrics": _metric_series_monitor.snapshot(),
     }
     if _current_config is not None:
         snap["config"] = _current_config
@@ -1200,6 +1342,8 @@ async def _handle_run_events_index(request: web.Request) -> web.Response:
 
 def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     """Create and run the aiohttp application."""
+    requested_port = int(port)
+    port = _resolve_dashboard_port(host, requested_port)
 
     @web.middleware
     async def _no_cache(
@@ -1237,5 +1381,9 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
 
     app.router.add_static("/static", STATIC_DIR, show_index=False)
 
+    if port != requested_port:
+        print(  # noqa: T201
+            f"\n  Port {requested_port} is busy; using {port} instead."
+        )
     print(f"\n  NeuroForge Dashboard -> http://{host}:{port}\n")
     web.run_app(app, host=host, port=port, print=None)

@@ -89,6 +89,31 @@ Example:
 neuroforge run --task multi_gate --seed 1234 --deterministic --stability --fail-fast
 ```
 
+### Evolution Smoke Runs
+
+The evolution task runs through the same artifact writer and monitor pub/sub
+path as supervised tasks. The built-in `proxy_policy_gene_target` objective is a
+fast deterministic bring-up score over SMB3 policy genes, not a live gameplay
+score.
+
+```bash
+neuroforge run --task evolution --population-size 16 --generations 10
+```
+
+To exercise the real `GameTrainingTask` evaluator without BizHawk, use the
+action-dependent scripted side-scroller backend:
+
+```bash
+neuroforge run --task evolution --evolution-backend scripted-game --population-size 4 --generations 2
+```
+
+Use `--evolution-workers N` for evaluators that are safe to call in parallel.
+Live emulator evaluators should keep this at `1` unless each worker owns its own
+client/emulator instance.
+
+For live SMB3 fitness, edit the paths at the top of `scripts/evolve_smb3.py`
+and start with the tiny defaults before scaling population or episode length.
+
 ### Trial Stats Monitor
 
 `TrialStatsMonitor` enriches `TRAINING_TRIAL` events (and therefore `scalars.csv`)

@@ -208,6 +208,8 @@ function mapTopologyToElements(topology) {
         module: _inferModule(info),
         population: info.name,
         neuronType: _inferNeuronType(info),
+        activity: 0,
+        latestSpikes: 0,
       },
     });
   });
@@ -227,6 +229,7 @@ function mapTopologyToElements(topology) {
       group: "edges",
       data: {
         id: "e_" + edge.src + "_" + edge.dst,
+        projectionName: edge.name || edge.projection || (edge.src + "_" + edge.dst),
         source: edge.src,
         target: edge.dst,
         label: dstParams > 0
@@ -243,6 +246,8 @@ function mapTopologyToElements(topology) {
         // Delay/plasticity not yet in payload — set defaults.
         delayBucket: "default",
         plasticity: "unknown",
+        traceSignal: 0,
+        activeEdgeCount: 0,
       },
     });
   }

@@ -172,6 +172,10 @@ class RSTDPRule:
             new_eligibility=e_new,
         )
 
+    def state_tensors(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Return the rule's persistable state tensors (the eligibility trace)."""
+        return {"eligibility": state["eligibility"]}
+
     def apply_dw(
         self,
         weights: Any,

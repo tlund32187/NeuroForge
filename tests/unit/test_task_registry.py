@@ -6,7 +6,27 @@ from neuroforge.tasks.registry import TASK_REGISTRY, get_task_spec
 
 
 def test_known_keys_present() -> None:
-    assert set(TASK_REGISTRY) == {"logic_gate", "multi_gate"}
+    assert set(TASK_REGISTRY) == {"evolution", "logic_gate", "multi_gate", "game_training"}
+
+
+def test_game_training_spec_loads_classes() -> None:
+    from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+
+    spec = get_task_spec("game_training")
+    assert spec is not None
+    config_cls, task_cls = spec.load()
+    assert config_cls is GameTrainingConfig
+    assert task_cls is GameTrainingTask
+
+
+def test_evolution_spec_loads_classes() -> None:
+    from neuroforge.tasks.evolution import EvolutionConfig, EvolutionTask
+
+    spec = get_task_spec("evolution")
+    assert spec is not None
+    config_cls, task_cls = spec.load()
+    assert config_cls is EvolutionConfig
+    assert task_cls is EvolutionTask
 
 
 def test_get_task_spec_unknown_returns_none() -> None:

@@ -21,6 +21,8 @@ const state = {
   topology: null,       // { layers: [...], edges: [...] }
   topologyStats: null,  // { edges_total, bytes_total_est, projection_count, ... }
   topologyProjections: [], // [{name, src, dst, n_edges, bytes_total_est, ...}]
+  topologyTrace: null,
+  topologyTraceHistory: [],
   accuracyHistory: [],
   truthTable: {},
   weightHistory: {},    // { projName: { steps:[], weights:[] } }
@@ -269,6 +271,7 @@ function handleMessage(msg) {
   if (msg.topic === "snapshot") {
     // Full state snapshot on connect.
     if (msg.training) applyTrainingSnapshot(msg.training);
+    if (msg.metrics)  applyMetricSnapshot(msg.metrics);
     if (msg.weights)  applyWeightSnapshot(msg.weights);
     if (msg.config)   { state.runConfig = msg.config; renderConfigPanel(); }
     return;
@@ -414,6 +417,10 @@ function handleMessage(msg) {
       );
       break;
 
+    case "topology_trace":
+      applyTopologyTrace(msg.data || null);
+      break;
+
     case "weight":
       recordWeight(msg);
       drawWeightChart();
@@ -448,6 +455,8 @@ function handleMessage(msg) {
       updateStats();
       drawAccuracyChart();
       drawWeightChart();
+      updateResourceNote();
+      drawResourceCharts();
       renderTruthTable();
       drawNetwork();
       drawStabilityCharts();
@@ -459,9 +468,21 @@ function handleMessage(msg) {
 // ── Training snapshot (on WS connect) ────────────────────────────────
 
 function applyTrainingSnapshot(snap) {
+  const priorTrials = state.totalTrials || 0;
+  const snapshotTrials = snap.total_trials || 0;
+  const isDifferentRun =
+    snapshotTrials < priorTrials ||
+    (state.gate && snap.gate && state.gate !== snap.gate && priorTrials > 0);
+
+  if (isDifferentRun) {
+    resetResourceSeries();
+    resetStabilitySeries();
+    resetPerformanceSeries();
+  }
+
   state.gate = snap.gate || "";
   state.converged = snap.converged;
-  state.totalTrials = snap.total_trials || 0;
+  state.totalTrials = snapshotTrials;
   state.accuracyHistory = snap.accuracy_history || [];
   state.lastAccuracy = state.accuracyHistory.length
     ? state.accuracyHistory[state.accuracyHistory.length - 1] : 0;
@@ -483,21 +504,15 @@ function applyTrainingSnapshot(snap) {
   if (snap.topology_stats) {
     applyTopologyStats(snap.topology_stats.totals || snap.topology_stats, snap.topology_stats.projections, state.totalTrials);
   }
-  resetPerformanceSeries();
-  resetStabilitySeries();
-  state.accuracyHistory.forEach((value, idx) => {
-    const parsed = parseMetricNumber(value);
-    if (parsed === null) return;
-    pushStabilityPoint("accuracy", idx, parsed);
-  });
-  state.stabilitySamples = state.stabilitySeries.accuracy.length;
-  state.stabilityLastStep = state.stabilitySamples > 0 ? state.stabilitySamples - 1 : -1;
+  rebuildStabilityAccuracyFromHistory();
 
   statGate.textContent = state.gate || "—";
   if (snap.epoch) state.epoch = snap.epoch;
   updateStats();
   renderTruthTable();
   drawAccuracyChart();
+  updateResourceNote();
+  drawResourceCharts();
   drawStabilityCharts();
   drawPerformanceCharts();
   drawNetwork();
@@ -510,6 +525,46 @@ function applyWeightSnapshot(snap) {
     }
     drawWeightChart();
   }
+}
+
+function applyMetricSnapshot(snap) {
+  const rows = Array.isArray(snap && snap.rows) ? snap.rows : [];
+  if (rows.length === 0) return;
+
+  const latestSnapshotStep = rows.reduce((latest, row) => {
+    const step = parseMetricNumber(row ? row.step : null);
+    return step === null ? latest : Math.max(latest, step);
+  }, -1);
+  const latestLocalStep = Math.max(
+    state.resourceLastStep,
+    hasNonAccuracyStabilityData() ? state.stabilityLastStep : -1,
+    state.performanceLastStep,
+  );
+  const hasLocalMetrics =
+    hasAnySeriesData(state.resourceSeries) ||
+    hasNonAccuracyStabilityData() ||
+    hasAnySeriesData(state.performanceSeries);
+  if (hasLocalMetrics && latestLocalStep >= latestSnapshotStep) {
+    return;
+  }
+
+  resetResourceSeries();
+  resetStabilitySeries();
+  resetPerformanceSeries();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const data = row.data && typeof row.data === "object" ? row.data : {};
+    const parsedStep = parseMetricNumber(row.step);
+    const step = parsedStep === null ? undefined : parsedStep;
+    ingestResourceMetrics(data, step, { deferDraw: true });
+    ingestStabilityMetrics(data, step, { deferDraw: true });
+    ingestPerformanceMetrics(data, step, { deferDraw: true });
+  }
+  rebuildStabilityAccuracyFromHistory();
+  updateResourceNote();
+  drawResourceCharts();
+  drawStabilityCharts();
+  drawPerformanceCharts();
 }
 
 function resetResourceSeries() {
@@ -557,6 +612,61 @@ function parseMetricNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function hasAnySeriesData(seriesGroup) {
+  return Object.values(seriesGroup || {}).some(
+    (series) => Array.isArray(series) && series.length > 0,
+  );
+}
+
+function hasNonAccuracyStabilityData() {
+  return Object.entries(state.stabilitySeries || {}).some(
+    ([name, series]) => name !== "accuracy" && Array.isArray(series) && series.length > 0,
+  );
+}
+
+function rebuildStabilityAccuracyFromHistory() {
+  if (state.stabilitySeries.accuracy.length > 0) return;
+  state.accuracyHistory.forEach((value, idx) => {
+    const parsed = parseMetricNumber(value);
+    if (parsed === null) return;
+    pushStabilityPoint("accuracy", idx, parsed);
+  });
+  const accPoints = state.stabilitySeries.accuracy;
+  if (accPoints.length > 0) {
+    const lastStep = Number(accPoints[accPoints.length - 1][0]);
+    state.stabilitySamples = Math.max(state.stabilitySamples, accPoints.length);
+    if (Number.isFinite(lastStep)) {
+      state.stabilityLastStep = Math.max(state.stabilityLastStep, lastStep);
+    }
+  }
+}
+
+function applyTopologyTrace(trace) {
+  if (!trace || typeof trace !== "object") return;
+  state.topologyTrace = trace;
+  state.topologyTraceHistory.push(trace);
+  if (state.topologyTraceHistory.length > 240) {
+    state.topologyTraceHistory.shift();
+  }
+  if (window.TopologyPage && typeof window.TopologyPage.onTopologyTrace === "function") {
+    window.TopologyPage.onTopologyTrace(trace);
+  }
+}
+
+function applyTopologyTraceHistory(frames) {
+  const traces = Array.isArray(frames) ? frames.filter(Boolean) : [];
+  state.topologyTraceHistory = traces.slice(-240);
+  if (!state.topologyTrace && state.topologyTraceHistory.length > 0) {
+    state.topologyTrace = state.topologyTraceHistory[state.topologyTraceHistory.length - 1];
+  }
+  if (
+    window.TopologyPage
+    && typeof window.TopologyPage.onTopologyTraceHistory === "function"
+  ) {
+    window.TopologyPage.onTopologyTraceHistory(state.topologyTraceHistory);
+  }
 }
 
 function parseFlagValue(value) {
@@ -2211,11 +2321,13 @@ function replaySeek(targetIdx) {
     const replayEvents = state.replayEvents;
     const replayIndex = state.replayIndex;
     const replayStaticTopo = state.replayStaticTopologyStats;
+    const replayTraceHistory = state.topologyTraceHistory;
     resetDashboardState({ preserveReplay: true, preserveVision: true });
     state.activeRunId = runId;
     state.replayEvents = replayEvents;
     state.replayIndex = replayIndex;
     state.replayStaticTopologyStats = replayStaticTopo;
+    applyTopologyTraceHistory(replayTraceHistory);
     if (replayStaticTopo) {
       applyTopologyStats(replayStaticTopo.totals, replayStaticTopo.projections, 0);
     }
@@ -3837,6 +3949,11 @@ async function loadReplayEvents(runId) {
     state.replayEvents = events;
     state.replayIndex = indexRows;
     state.replayCursor = -1;
+    applyTopologyTraceHistory(
+      events
+        .filter((rec) => String(rec.topic || "").toLowerCase() === "topology_trace")
+        .map((rec) => rec.data || null),
+    );
     setReplayControlsVisible(true);
     replaySeek(0);
     return true;
@@ -4008,6 +4125,8 @@ function resetDashboardState(opts = {}) {
   state.topology = null;
   state.topologyStats = null;
   state.topologyProjections = [];
+  state.topologyTrace = null;
+  state.topologyTraceHistory = [];
   // Forward reset to dedicated Topology page.
   if (window.TopologyPage) window.TopologyPage.onTopologyData(null);
   state.neurons = [];
