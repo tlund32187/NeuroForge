@@ -38,9 +38,12 @@ class PolicyNetworkConfig:
     n_input: int
     n_hidden: int = 128
     n_inhibitory_hidden: int = -1       # -1 => auto (~20% of hidden are inhibitory, Dale)
+    n_hidden_layers: int = 1
     motor_per_button: int = 4           # motor neurons per button (assembly size)
     input_fanin: int = 64               # sparse fan-in for input->hidden (0 = dense)
+    hidden_fanin: int = 0               # sparse fan-in between hidden layers (0 = dense)
     recurrent_hidden: bool = False
+    input_to_motor_skip: bool = False   # direct sensorimotor shortcut / reflex pathway
     init_scale: float = 0.5
     tau_mem: float = 5e-3       # fast membrane so the cascade fires within the tick window
     v_thresh: float = 1.0
@@ -53,8 +56,14 @@ class PolicyNetworkConfig:
         if self.n_input <= 0 or self.n_hidden <= 0:
             msg = "PolicyNetworkConfig n_input/n_hidden must be > 0"
             raise ValueError(msg)
+        if self.n_hidden_layers < 1:
+            msg = "PolicyNetworkConfig.n_hidden_layers must be >= 1"
+            raise ValueError(msg)
         if self.motor_per_button < 1:
             msg = "PolicyNetworkConfig.motor_per_button must be >= 1"
+            raise ValueError(msg)
+        if self.input_fanin < 0 or self.hidden_fanin < 0:
+            msg = "PolicyNetworkConfig fan-in values must be >= 0"
             raise ValueError(msg)
         if self.n_inhibitory_hidden < 0:  # auto: ~20% inhibitory
             object.__setattr__(self, "n_inhibitory_hidden", round(0.2 * self.n_hidden))
@@ -103,8 +112,10 @@ def build_policy_network(
             "lif", params=LIFParams(tau_mem=cfg.tau_mem, v_thresh=cfg.v_thresh),
         )
 
+    hidden_names = _hidden_population_names(cfg.n_hidden_layers)
     engine.add_population(Population("input", _lif(), cfg.n_input))
-    engine.add_population(Population("hidden", _lif(), cfg.n_hidden))
+    for hidden_name in hidden_names:
+        engine.add_population(Population(hidden_name, _lif(), cfg.n_hidden))
     engine.add_population(Population("motor", _lif(), n_motor))
 
     signs = build_dale_signs(
@@ -136,18 +147,39 @@ def build_policy_network(
             Projection(name=name, model=syn, source=src, target=tgt, topology=topo),
         )
 
+    first_hidden = hidden_names[0]
+    last_hidden = hidden_names[-1]
     _add_proj(
-        "in_to_hidden", "input", "hidden",
+        "in_to_hidden", "input", first_hidden,
         cfg.n_input, cfg.n_hidden, sign_input, cfg.input_fanin,
     )
-    _add_proj("hidden_to_motor", "hidden", "motor", cfg.n_hidden, n_motor, sign_hidden, 0)
-    plastic = ["in_to_hidden", "hidden_to_motor"]
-    if cfg.recurrent_hidden:
+    for prev_hidden, next_hidden in zip(hidden_names, hidden_names[1:], strict=False):
         _add_proj(
-            "hidden_to_hidden", "hidden", "hidden",
-            cfg.n_hidden, cfg.n_hidden, sign_hidden, 0,
+            f"{prev_hidden}_to_{next_hidden}", prev_hidden, next_hidden,
+            cfg.n_hidden, cfg.n_hidden, sign_hidden, cfg.hidden_fanin,
         )
-        plastic.append("hidden_to_hidden")
+    _add_proj("hidden_to_motor", last_hidden, "motor", cfg.n_hidden, n_motor, sign_hidden, 0)
+    plastic = ["in_to_hidden", "hidden_to_motor"]
+    if cfg.n_hidden_layers > 1:
+        plastic.extend(
+            f"{prev_hidden}_to_{next_hidden}"
+            for prev_hidden, next_hidden in zip(hidden_names, hidden_names[1:], strict=False)
+        )
+    if cfg.input_to_motor_skip:
+        _add_proj(
+            "input_to_motor", "input", "motor",
+            cfg.n_input, n_motor, sign_input, cfg.input_fanin,
+        )
+        plastic.append("input_to_motor")
+    if cfg.recurrent_hidden:
+        recurrent_name = (
+            "hidden_to_hidden" if cfg.n_hidden_layers == 1 else f"{last_hidden}_to_{last_hidden}"
+        )
+        _add_proj(
+            recurrent_name, last_hidden, last_hidden,
+            cfg.n_hidden, cfg.n_hidden, sign_hidden, cfg.hidden_fanin,
+        )
+        plastic.append(recurrent_name)
 
     engine.build()
     return PolicyNetwork(
@@ -161,3 +193,10 @@ def build_policy_network(
         n_buttons=N_BUTTONS,
         plastic_projections=tuple(plastic),
     )
+
+
+def _hidden_population_names(n_hidden_layers: int) -> tuple[str, ...]:
+    """Return stable hidden population names for one or many hidden layers."""
+    if n_hidden_layers == 1:
+        return ("hidden",)
+    return tuple(f"hidden_{idx}" for idx in range(n_hidden_layers))

@@ -62,8 +62,10 @@ class IFitnessEvaluator(Protocol):
 class IReproduction(Protocol):
     """Create a next generation from evaluated genomes."""
 
-    def next_generation(self, evaluated: list[Any]) -> list[IGenome]:
-        """Return the child population."""
+    def next_generation(
+        self, evaluated: list[Any], *, generation: int, rng: Any,
+    ) -> list[IGenome]:
+        """Return the child population for *generation* using *rng* for variation."""
         ...
 
 

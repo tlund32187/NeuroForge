@@ -28,6 +28,7 @@ from neuroforge.game.policies import (
     build_policy_network,
     build_snn_game_policy,
 )
+from neuroforge.game.policies.commitment import TemporalCommitment, TemporalCommitmentConfig
 
 
 def _frame(fill: int, *, w: int = 64, h: int = 56, c: int = 3) -> ScreenFrame:
@@ -87,6 +88,35 @@ def test_build_policy_network_recurrent_adds_projection() -> None:
     assert "hidden_to_hidden" in net.engine.projections
 
 
+@pytest.mark.unit
+def test_build_policy_network_supports_deep_and_skip_pathways() -> None:
+    net = build_policy_network(
+        PolicyNetworkConfig(
+            n_input=12,
+            n_hidden=10,
+            n_hidden_layers=3,
+            motor_per_button=1,
+            input_fanin=4,
+            hidden_fanin=5,
+            input_to_motor_skip=True,
+        ),
+    )
+
+    assert set(net.engine.populations) == {"input", "hidden_0", "hidden_1", "hidden_2", "motor"}
+    assert "in_to_hidden" in net.engine.projections
+    assert "hidden_0_to_hidden_1" in net.engine.projections
+    assert "hidden_1_to_hidden_2" in net.engine.projections
+    assert "hidden_to_motor" in net.engine.projections
+    assert "input_to_motor" in net.engine.projections
+    assert set(net.plastic_projections) >= {
+        "in_to_hidden",
+        "hidden_0_to_hidden_1",
+        "hidden_1_to_hidden_2",
+        "hidden_to_motor",
+        "input_to_motor",
+    }
+
+
 # ── stateful inference ───────────────────────────────────────────────────
 
 
@@ -140,6 +170,20 @@ def test_decoder_allows_start_when_configured() -> None:
 
 
 @pytest.mark.unit
+def test_decoder_button_budget_keeps_strongest_chord() -> None:
+    decoder = ActionDecoder(
+        ActionDecodeConfig(mode="threshold", threshold=0.2, max_pressed=3),
+    )
+    rates = torch.tensor([0.7, 0.1, 0.8, 0.9, 0.6, 0.5, 0.95, 0.95])
+    action = decoder.decode(rates)
+    assert action.right and not action.left
+    assert action.up and action.a
+    assert not action.b
+    assert not action.start and not action.select
+    assert len(action.pressed()) == 3
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("mode", ["threshold", "bernoulli", "epsilon"])
 def test_decoder_modes_produce_valid_actions(mode: str) -> None:
     decoder = ActionDecoder(ActionDecodeConfig(mode=mode, epsilon=0.5), seed=3)
@@ -171,6 +215,20 @@ def test_stochastic_dpad_tiebreak_escapes_a_fixed_bias() -> None:
     rates = torch.tensor([0.0, 0.0, 0.9, 0.2, 0.0, 0.0, 0.0, 0.0])  # strong Left bias
     rights = sum(decoder.decode(rates).right for _ in range(400))
     assert rights > 0  # Right is reachable despite the Left bias
+
+
+@pytest.mark.unit
+def test_temporal_commitment_can_hold_full_action() -> None:
+    commitment = TemporalCommitment(
+        TemporalCommitmentConfig(commit_frames=3, commit_all_buttons=True),
+    )
+    first = ControllerAction(right=True, a=True, b=True)
+    second = ControllerAction(left=True, down=True)
+
+    assert commitment.apply(first) == first
+    assert commitment.apply(second) == first
+    assert commitment.apply(second) == first
+    assert commitment.apply(second) == second
 
 
 # ── full policy through the loop ─────────────────────────────────────────

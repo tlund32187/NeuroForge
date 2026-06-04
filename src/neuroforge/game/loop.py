@@ -51,12 +51,14 @@ class VisionOnlyGameLoop:
         metric_extractor: IFrameMetricExtractor | None = None,
         reward_model: IRewardModel | None = None,
         episode_manager: IEpisodeManager | None = None,
+        close_client: bool = True,
     ) -> None:
         self._client = client
         self._policy = policy
         self._metric_extractor = metric_extractor
         self._reward_model = reward_model
         self._episode_manager = episode_manager
+        self._close_client = close_client
 
     def reset(self) -> GameObservation:
         """Reset per-episode state, reset the client, and return the first frame.
@@ -112,8 +114,9 @@ class VisionOnlyGameLoop:
                 break
 
     def close(self) -> None:
-        """Release client resources."""
-        self._client.close()
+        """Release client resources, unless the client is borrowed (shared)."""
+        if self._close_client:
+            self._client.close()
 
     def _with_frame_metrics(self, observation: GameObservation) -> GameObservation:
         if self._metric_extractor is None:

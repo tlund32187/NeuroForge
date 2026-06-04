@@ -1,5 +1,6 @@
 """Game-playing helpers for vision-only emulator integration."""
 
+from neuroforge.game.action_energy import ActionEnergyConfig, ActionEnergyModel, ActionEnergyStep
 from neuroforge.game.clients import (
     ActionProgressGameClient,
     BizHawkClient,
@@ -14,6 +15,9 @@ from neuroforge.game.rewards import VisionMetricRewardConfig, VisionMetricReward
 from neuroforge.game.rewards_smb3 import SMB3RewardConfig, SMB3RewardModel
 
 __all__ = [
+    "ActionEnergyConfig",
+    "ActionEnergyModel",
+    "ActionEnergyStep",
     "ActionProgressGameClient",
     "BizHawkClient",
     "BizHawkClientConfig",

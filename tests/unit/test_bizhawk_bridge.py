@@ -421,6 +421,30 @@ def test_file_transport_times_out_when_no_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_screenshot_socket_receiver_reads_length_prefixed_payload() -> None:
+    from neuroforge.game.clients.screenshot_socket import ScreenshotSocketReceiver
+
+    receiver = ScreenshotSocketReceiver.serve("127.0.0.1", 0)
+    errors: list[BaseException] = []
+
+    def fake_bizhawk() -> None:
+        try:
+            with socket.create_connection((receiver.host, receiver.port), timeout=5.0) as sock:
+                sock.sendall(b"5 hello")
+        except BaseException as exc:  # noqa: BLE001 - surfaced via assert below
+            errors.append(exc)
+
+    thread = threading.Thread(target=fake_bizhawk)
+    thread.start()
+    try:
+        assert receiver.recv_screenshot(timeout=5.0) == b"hello"
+    finally:
+        receiver.close()
+        thread.join(timeout=5.0)
+    assert not errors, errors
+
+
+@pytest.mark.unit
 def test_png_frame_decoded_by_client() -> None:
     torch = pytest.importorskip("torch")
     torchvision_io = pytest.importorskip("torchvision.io")
@@ -544,6 +568,22 @@ def test_lua_bridge_reads_speed_percent_env() -> None:
 
 
 @pytest.mark.unit
+def test_lua_bridge_supports_socket_backends() -> None:
+    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    code = lua_path.read_text(encoding="utf-8")
+    assert "NEUROFORGE_BRIDGE_TRANSPORT" in code
+    assert "NEUROFORGE_BRIDGE_SOCKET_BACKEND" in code
+    assert "NEUROFORGE_BRIDGE_FRAME_CAPTURE" in code
+    assert "NEUROFORGE_BRIDGE_SCREENSHOT_PORT" in code
+    assert "socket.core" in code  # BizHawk may only ship Lua/socket/core.dll
+    assert "MSWinsock.Winsock" in code
+    assert "comm.socketServerScreenShot" in code
+    assert "SendData" in code
+    assert "GetData" in code
+    assert "socket_recv_message" in code
+
+
+@pytest.mark.unit
 def test_launcher_passes_frameskip_and_speed_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -573,6 +613,58 @@ def test_launcher_passes_frameskip_and_speed_env(
     assert isinstance(env, dict)
     assert env[lmod.BRIDGE_FRAMESKIP_ENV] == "4"
     assert env[lmod.BRIDGE_SPEED_PERCENT_ENV] == "400"
+    assert env[lmod.BRIDGE_TRANSPORT_ENV] == "file"
+
+
+@pytest.mark.unit
+def test_launcher_passes_socket_transport_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from neuroforge.game.clients import launcher as lmod
+
+    (tmp_path / "EmuHawk.exe").write_text("")
+    (tmp_path / "bridge.lua").write_text("")
+    rom_path = tmp_path / "game.nes"
+    rom_path.write_text("")
+    captured: dict[str, object] = {}
+
+    def _fake_popen(_cmd: object, env: object = None, **_kw: object) -> object:
+        captured["cmd"] = _cmd
+        captured["env"] = env
+
+        class _Proc:
+            def poll(self) -> None:
+                return None
+
+        return _Proc()
+
+    monkeypatch.setattr(lmod.subprocess, "Popen", _fake_popen)  # type: ignore[attr-defined]
+    lmod.EmuHawkLauncher(
+        emuhawk_path=str(tmp_path / "EmuHawk.exe"),
+        lua_script=str(tmp_path / "bridge.lua"),
+        rom_path=str(rom_path),
+        socket_backend="auto",
+    ).launch(
+        port=9999,
+        host="127.0.0.1",
+        screenshot_port=10001,
+        screenshot_host="127.0.0.1",
+    )
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env[lmod.BRIDGE_TRANSPORT_ENV] == "socket"
+    assert env[lmod.BRIDGE_HOST_ENV] == "127.0.0.1"
+    assert env[lmod.BRIDGE_PORT_ENV] == "9999"
+    assert env[lmod.BRIDGE_SOCKET_BACKEND_ENV] == "auto"
+    assert env[lmod.BRIDGE_FRAME_CAPTURE_ENV] == "socket"
+    assert env[lmod.BRIDGE_SCREENSHOT_HOST_ENV] == "127.0.0.1"
+    assert env[lmod.BRIDGE_SCREENSHOT_PORT_ENV] == "10001"
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert "--socket_ip=127.0.0.1" in cmd
+    assert "--socket_port=10001" in cmd
+    assert cmd.index("--socket_port=10001") < cmd.index(str(rom_path))
+    assert cmd.index(f"--lua={tmp_path / 'bridge.lua'}") < cmd.index(str(rom_path))
 
 
 @pytest.mark.unit

@@ -140,6 +140,7 @@ def main() -> int:
             connect_timeout_s=60.0,   # EmuHawk can take a moment to start
             step_timeout_s=45.0,      # tolerate brief pauses (e.g. focus loss)
             launch=True,
+            transport="socket",
             passive_input=MANUAL_MODE,
         ),
         launcher=EmuHawkLauncher(

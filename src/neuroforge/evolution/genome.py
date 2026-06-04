@@ -48,21 +48,16 @@ class GeneDef:
         """Perturb a value while preserving bounds and type."""
         if self.kind == "bool":
             return not bool(value)
-        span = max(1e-12, self.maximum - self.minimum)
-        delta = rng.gauss(0.0, self.sigma * power)
         if self.kind == "int":
-            raw = int(round(float(value) + delta))
+            raw = int(round(float(value) + rng.gauss(0.0, self.sigma * power)))
             return max(int(self.minimum), min(int(self.maximum), raw))
-        raw_float = float(value) + delta
-        # Learning rates are tiny; multiplicative mutation is more useful there.
+        # Learning rates span orders of magnitude, so mutate them in log-space.
         if self.key == "lr":
             log_value = math.log(max(float(value), self.minimum))
-            log_delta = rng.gauss(0.0, power)
-            raw_float = math.exp(log_value + log_delta)
-        clipped = max(self.minimum, min(self.maximum, raw_float))
-        if span > 1.0:
-            return float(clipped)
-        return float(clipped)
+            raw_float = math.exp(log_value + rng.gauss(0.0, power))
+        else:
+            raw_float = float(value) + rng.gauss(0.0, self.sigma * power)
+        return float(max(self.minimum, min(self.maximum, raw_float)))
 
     def normalised_distance(self, a: int | float | bool, b: int | float | bool) -> float:
         """Return a [0, 1]-ish distance contribution for this gene."""
@@ -91,11 +86,14 @@ def policy_gene_defs() -> tuple[GeneDef, ...]:
         GeneDef(5, "init_scale", "float", 0.5, 0.05, 1.5, 0.12),
         GeneDef(6, "tau_mem", "float", 5e-3, 2e-3, 20e-3, 1.5e-3),
         GeneDef(7, "decide_ticks", "int", 12, 4, 28, 3),
-        GeneDef(8, "noise_amp", "float", 0.4, 0.0, 1.0, 0.08),
-        GeneDef(9, "commit_frames", "int", 8, 0, 20, 2),
+        GeneDef(8, "noise_amp", "float", 0.25, 0.0, 0.6, 0.06),
+        GeneDef(9, "commit_frames", "int", 4, 0, 20, 2),
         GeneDef(10, "lr", "float", 3e-4, 1e-5, 3e-3, 2e-4),
         GeneDef(11, "tau_e", "float", 80e-3, 20e-3, 250e-3, 18e-3),
         GeneDef(12, "reward_scale", "float", 0.05, 0.005, 0.2, 0.02),
+        GeneDef(13, "n_hidden_layers", "int", 1, 1, 3, 1),
+        GeneDef(14, "hidden_fanin", "int", 0, 0, 160, 24),
+        GeneDef(15, "input_to_motor_skip", "bool", False),
     )
 
 
@@ -140,18 +138,25 @@ class PolicyGenome:
         if not isinstance(genes_raw, list):
             msg = "PolicyGenome payload 'genes' must be a list"
             raise ValueError(msg)
-        genes: list[Gene] = []
+        genes_by_key: dict[str, Gene] = {}
         for item in genes_raw:
             if not isinstance(item, dict):
                 msg = "PolicyGenome gene entries must be objects"
                 raise ValueError(msg)
-            genes.append(
-                Gene(
-                    innovation=int(item["innovation"]),
-                    key=str(item["key"]),
-                    value=cast("int | float | bool", item["value"]),
-                )
+            gene = Gene(
+                innovation=int(item["innovation"]),
+                key=str(item["key"]),
+                value=cast("int | float | bool", item["value"]),
             )
+            if gene.key in _DEFS_BY_KEY:
+                genes_by_key[gene.key] = gene
+        genes = [
+            genes_by_key.get(
+                definition.key,
+                Gene(definition.innovation, definition.key, definition.default),
+            )
+            for definition in _GENE_DEFS
+        ]
         parent_raw = payload.get("parent_ids", [])
         parent_ids = tuple(str(pid) for pid in parent_raw) if isinstance(parent_raw, list) else ()
         return cls(
@@ -178,6 +183,30 @@ class PolicyGenome:
                 return gene.value
         msg = f"gene {key!r} not found"
         raise KeyError(msg)
+
+    def content_key(self) -> str:
+        """Return a stable key over gene *content* (ignores id/generation/parents).
+
+        Two genomes with identical genes share a content key, so fitness can be
+        seeded and cached by genes rather than by id — which is what makes
+        re-evaluated elites reproducible and selection respond to genes, not seed.
+        """
+        parts = [
+            f"{gene.innovation}:{gene.key}={gene.value!r}"
+            for gene in sorted(self.genes, key=lambda gene: gene.innovation)
+        ]
+        return ";".join(parts)
+
+    def as_offspring(
+        self, *, child_id: str, generation: int, parent_ids: tuple[str, ...] | None = None,
+    ) -> PolicyGenome:
+        """Return a copy with new lineage but identical genes (elite / asexual clone)."""
+        return PolicyGenome(
+            id=child_id,
+            generation=generation,
+            genes=self.genes,
+            parent_ids=parent_ids if parent_ids is not None else (self.id,),
+        )
 
     def mutate(
         self,
@@ -265,9 +294,12 @@ class PolicyGenome:
         return PolicyNetworkConfig(
             n_input=n_input,
             n_hidden=int(self.value("n_hidden")),
+            n_hidden_layers=int(self.value("n_hidden_layers")),
             motor_per_button=int(self.value("motor_per_button")),
             input_fanin=int(self.value("input_fanin")),
+            hidden_fanin=int(self.value("hidden_fanin")),
             recurrent_hidden=bool(self.value("recurrent_hidden")),
+            input_to_motor_skip=bool(self.value("input_to_motor_skip")),
             init_scale=float(self.value("init_scale")),
             tau_mem=float(self.value("tau_mem")),
             seed=seed,
@@ -275,7 +307,13 @@ class PolicyGenome:
             dtype=dtype,
         )
 
-    def to_game_training_config(self, *, base: Any | None = None, seed: int) -> Any:
+    def to_game_training_config(
+        self,
+        *,
+        base: Any | None = None,
+        seed: int,
+        include_network_shape: bool = True,
+    ) -> Any:
         """Build a :class:`GameTrainingConfig` for this genome."""
         from neuroforge.learning.online_rstdp import OnlineRSTDPConfig
         from neuroforge.tasks.game_training import GameTrainingConfig
@@ -287,20 +325,26 @@ class PolicyGenome:
             tau_e=float(self.value("tau_e")),
             reward_scale=float(self.value("reward_scale")),
         )
-        return dataclasses.replace(
-            cfg,
-            n_hidden=int(self.value("n_hidden")),
-            motor_per_button=int(self.value("motor_per_button")),
-            input_fanin=int(self.value("input_fanin")),
-            recurrent_hidden=bool(self.value("recurrent_hidden")),
-            init_scale=float(self.value("init_scale")),
-            tau_mem=float(self.value("tau_mem")),
-            decide_ticks=int(self.value("decide_ticks")),
-            noise_amp=float(self.value("noise_amp")),
-            commit_frames=int(self.value("commit_frames")),
-            rstdp=rstdp,
-            seed=seed,
-        )
+        updates: dict[str, Any] = {
+            "decide_ticks": int(self.value("decide_ticks")),
+            "noise_amp": float(self.value("noise_amp")),
+            "commit_frames": int(self.value("commit_frames")),
+            "rstdp": rstdp,
+            "seed": seed,
+        }
+        if include_network_shape:
+            updates.update(
+                n_hidden=int(self.value("n_hidden")),
+                n_hidden_layers=int(self.value("n_hidden_layers")),
+                motor_per_button=int(self.value("motor_per_button")),
+                input_fanin=int(self.value("input_fanin")),
+                hidden_fanin=int(self.value("hidden_fanin")),
+                recurrent_hidden=bool(self.value("recurrent_hidden")),
+                input_to_motor_skip=bool(self.value("input_to_motor_skip")),
+                init_scale=float(self.value("init_scale")),
+                tau_mem=float(self.value("tau_mem")),
+            )
+        return dataclasses.replace(cfg, **updates)
 
     def to_network_spec(self, *, n_input: int) -> NetworkSpec:
         """Return a declarative spec summary for dashboards/checkpoints.
@@ -310,60 +354,96 @@ class PolicyGenome:
         and stores the policy-builder details in metadata.
         """
         n_hidden = int(self.value("n_hidden"))
+        n_hidden_layers = int(self.value("n_hidden_layers"))
         n_motor = int(self.value("motor_per_button")) * 8
         input_fanin = int(self.value("input_fanin"))
-        input_topology: dict[str, Any]
-        if 0 < input_fanin < n_input:
-            input_topology = {
-                "type": "sparse_fanin",
-                "fanin": input_fanin,
-                "init": "uniform",
-                "low": 0.0,
-                "high": float(self.value("init_scale")),
-            }
-        else:
-            input_topology = {
+        hidden_fanin = int(self.value("hidden_fanin"))
+        init_scale = float(self.value("init_scale"))
+        hidden_names = ("hidden",) if n_hidden_layers == 1 else tuple(
+            f"hidden_{idx}" for idx in range(n_hidden_layers)
+        )
+
+        def _topology(fanin: int, n_pre: int) -> dict[str, Any]:
+            if 0 < fanin < n_pre:
+                return {
+                    "type": "sparse_fanin",
+                    "fanin": fanin,
+                    "init": "uniform",
+                    "low": 0.0,
+                    "high": init_scale,
+                }
+            return {
                 "type": "dense",
                 "init": "uniform",
                 "low": 0.0,
-                "high": float(self.value("init_scale")),
+                "high": init_scale,
             }
+
         projections = [
-            ProjectionSpec("in_to_hidden", "input", "hidden", "static", topology=input_topology),
             ProjectionSpec(
-                "hidden_to_motor",
-                "hidden",
-                "motor",
+                "in_to_hidden",
+                "input",
+                hidden_names[0],
                 "static",
-                topology={
-                    "type": "dense",
-                    "init": "uniform",
-                    "low": 0.0,
-                    "high": float(self.value("init_scale")),
-                },
-            ),
+                topology=_topology(input_fanin, n_input),
+            )
         ]
-        if bool(self.value("recurrent_hidden")):
+        for prev_hidden, next_hidden in zip(hidden_names, hidden_names[1:], strict=False):
             projections.append(
                 ProjectionSpec(
-                    "hidden_to_hidden",
-                    "hidden",
-                    "hidden",
+                    f"{prev_hidden}_to_{next_hidden}",
+                    prev_hidden,
+                    next_hidden,
                     "static",
-                    topology={
-                        "type": "dense",
-                        "init": "uniform",
-                        "low": 0.0,
-                        "high": float(self.value("init_scale")),
-                    },
+                    topology=_topology(hidden_fanin, n_hidden),
+                )
+            )
+        projections.append(
+            ProjectionSpec(
+                "hidden_to_motor",
+                hidden_names[-1],
+                "motor",
+                "static",
+                topology=_topology(0, n_hidden),
+            )
+        )
+        if bool(self.value("input_to_motor_skip")):
+            projections.append(
+                ProjectionSpec(
+                    "input_to_motor",
+                    "input",
+                    "motor",
+                    "static",
+                    topology=_topology(input_fanin, n_input),
+                )
+            )
+        if bool(self.value("recurrent_hidden")):
+            recurrent_name = (
+                "hidden_to_hidden"
+                if n_hidden_layers == 1
+                else f"{hidden_names[-1]}_to_{hidden_names[-1]}"
+            )
+            projections.append(
+                ProjectionSpec(
+                    recurrent_name,
+                    hidden_names[-1],
+                    hidden_names[-1],
+                    "static",
+                    topology=_topology(hidden_fanin, n_hidden),
                 )
             )
         return NetworkSpec(
             populations=[
                 PopulationSpec("input", n_input, "lif", {"tau_mem": float(self.value("tau_mem"))}),
-                PopulationSpec(
-                    "hidden", n_hidden, "lif", {"tau_mem": float(self.value("tau_mem"))},
-                ),
+                *[
+                    PopulationSpec(
+                        hidden_name,
+                        n_hidden,
+                        "lif",
+                        {"tau_mem": float(self.value("tau_mem"))},
+                    )
+                    for hidden_name in hidden_names
+                ],
                 PopulationSpec("motor", n_motor, "lif", {"tau_mem": float(self.value("tau_mem"))}),
             ],
             projections=projections,
@@ -371,6 +451,9 @@ class PolicyGenome:
                 "genome_id": self.id,
                 "generation": self.generation,
                 "phenotype_builder": "neuroforge.game.policies.network.build_policy_network",
+                "n_hidden_layers": n_hidden_layers,
+                "hidden_fanin": hidden_fanin,
+                "input_to_motor_skip": bool(self.value("input_to_motor_skip")),
                 "decide_ticks": int(self.value("decide_ticks")),
                 "noise_amp": float(self.value("noise_amp")),
                 "commit_frames": int(self.value("commit_frames")),

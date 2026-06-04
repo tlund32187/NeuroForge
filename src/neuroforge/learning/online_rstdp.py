@@ -42,6 +42,7 @@ class OnlineRSTDPConfig:
     reward_clip: float = 1.0
     baseline_beta: float = 0.01   # EMA rate for the reward baseline (0 disables)
     update_every_frames: int = 1
+    consolidation_strength: float = 0.0
     dt: float = 1e-3
     plastic_projections: tuple[str, ...] = ("in_to_hidden", "hidden_to_motor")
 
@@ -81,6 +82,9 @@ class _PlasticProjection:
     rule: RSTDPRule
     state: dict[str, Any]
     pending: Any         # accumulated dw [E] between weight writes
+    loaded_weight_mask: Any | None = None
+    consolidation_anchor: Any | None = None
+    consolidation_mask: Any | None = None
 
 
 class OnlineRSTDPTrainer:
@@ -100,6 +104,7 @@ class OnlineRSTDPTrainer:
         self._cfg = config or OnlineRSTDPConfig()
         self._engine = engine
         self._frame = 0
+        self._consolidation_strength = max(0.0, float(self._cfg.consolidation_strength))
         self._shaper = RewardShaper(
             scale=self._cfg.reward_scale,
             clip=self._cfg.reward_clip,
@@ -181,6 +186,7 @@ class OnlineRSTDPTrainer:
         shaped = self._shaper.shape(raw_reward)
         self._frame += 1
         dw_norm = 0.0
+        consolidation_norm = 0.0
         torch = self._torch
         with torch.no_grad():
             for pp in self._plastic:
@@ -192,6 +198,7 @@ class OnlineRSTDPTrainer:
                 for pp in self._plastic:
                     topo = pp.proj.topology
                     topo.weights.copy_(pp.rule.apply_dw(topo.weights, pp.pending))
+                    consolidation_norm += self._apply_consolidation(pp)
                     pp.pending.zero_()
 
         return {
@@ -199,9 +206,48 @@ class OnlineRSTDPTrainer:
             "reward_shaped": float(shaped),
             "reward_baseline": float(self._shaper.baseline),
             "dw_norm": dw_norm,
+            "consolidation_norm": consolidation_norm,
         }
 
     # ── checkpoint support ────────────────────────────────────────────
+
+    def _apply_consolidation(self, pp: _PlasticProjection) -> float:
+        """Blend anchored weights back toward their checkpoint values."""
+        anchor = pp.consolidation_anchor
+        mask = pp.consolidation_mask
+        if anchor is None or mask is None:
+            return 0.0
+        if self._consolidation_strength <= 0.0:
+            return 0.0
+        weights = pp.proj.topology.weights
+        delta = (anchor - weights) * mask * self._consolidation_strength
+        if bool(mask.any()):
+            weights.add_(delta).clamp_(self._cfg.w_min, self._cfg.w_max)
+        return float(delta.abs().sum().item())
+
+    def anchor_current_weights(
+        self,
+        *,
+        strength: float | None = None,
+        loaded_only: bool = True,
+    ) -> None:
+        """Anchor current synapses so later training resists catastrophic drift.
+
+        ``loaded_only`` anchors only weights restored from a checkpoint. That is
+        important for partial warm-starts: old knowledge is protected, while
+        newly added capacity remains free to adapt.
+        """
+        next_strength = self._cfg.consolidation_strength if strength is None else float(strength)
+        self._consolidation_strength = max(0.0, float(next_strength))
+        if self._consolidation_strength <= 0.0:
+            return
+        for pp in self._plastic:
+            weights = pp.proj.topology.weights
+            mask = pp.loaded_weight_mask if loaded_only else self._torch.ones_like(weights)
+            if mask is None:
+                continue
+            pp.consolidation_anchor = weights.detach().clone()
+            pp.consolidation_mask = mask.to(weights.device, weights.dtype).clone()
 
     def weights_snapshot(self) -> dict[str, Any]:
         return {pp.name: pp.proj.topology.weights.detach().cpu().clone() for pp in self._plastic}
@@ -209,12 +255,116 @@ class OnlineRSTDPTrainer:
     def eligibility_snapshot(self) -> dict[str, Any]:
         return {pp.name: pp.state["eligibility"].detach().cpu().clone() for pp in self._plastic}
 
-    def load_weights(self, snapshot: dict[str, Any]) -> None:
+    def load_weights(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        allow_partial: bool = False,
+    ) -> dict[str, dict[str, int | bool | str]]:
+        summary: dict[str, dict[str, int | bool | str]] = {}
         for pp in self._plastic:
-            if pp.name in snapshot:
-                pp.proj.topology.weights.copy_(snapshot[pp.name].to(pp.proj.topology.weights.device))
+            target = pp.proj.topology.weights
+            if pp.name not in snapshot:
+                summary[pp.name] = _missing_load_summary(target)
+                continue
+            source_numel, copied, partial = _load_tensor(
+                target,
+                snapshot[pp.name],
+                allow_partial=allow_partial,
+            )
+            loaded_mask = self._torch.zeros_like(target, dtype=self._torch.bool)
+            _mark_overlap_1d(loaded_mask, copied)
+            pp.loaded_weight_mask = loaded_mask
+            summary[pp.name] = _loaded_summary(
+                target,
+                source_numel=source_numel,
+                copied_numel=copied,
+                partial=partial,
+            )
+        return summary
 
-    def load_eligibility(self, snapshot: dict[str, Any]) -> None:
+    def load_eligibility(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        allow_partial: bool = False,
+    ) -> dict[str, dict[str, int | bool | str]]:
+        summary: dict[str, dict[str, int | bool | str]] = {}
         for pp in self._plastic:
-            if pp.name in snapshot:
-                pp.state["eligibility"].copy_(snapshot[pp.name].to(pp.state["eligibility"].device))
+            target = pp.state["eligibility"]
+            if pp.name not in snapshot:
+                summary[pp.name] = _missing_load_summary(target)
+                continue
+            source_numel, copied, partial = _load_tensor(
+                target,
+                snapshot[pp.name],
+                allow_partial=allow_partial,
+            )
+            summary[pp.name] = _loaded_summary(
+                target,
+                source_numel=source_numel,
+                copied_numel=copied,
+                partial=partial,
+            )
+        return summary
+
+
+def _load_tensor(
+    target: Any,
+    source_raw: Any,
+    *,
+    allow_partial: bool,
+) -> tuple[int, int, bool]:
+    """Load one checkpoint tensor into *target* and report copy coverage."""
+    source = source_raw.to(target.device, target.dtype).reshape(-1)
+    source_numel = int(source.numel())
+    target_numel = int(target.numel())
+    if allow_partial and tuple(source.shape) != tuple(target.shape):
+        copied = _copy_overlap_1d(target, source)
+        return source_numel, copied, True
+    target.copy_(source.reshape_as(target))
+    return source_numel, target_numel, False
+
+
+def _missing_load_summary(target: Any) -> dict[str, int | bool | str]:
+    return {
+        "loaded": False,
+        "reason": "missing",
+        "source_numel": 0,
+        "target_numel": int(target.numel()),
+        "copied_numel": 0,
+        "partial": False,
+    }
+
+
+def _loaded_summary(
+    target: Any,
+    *,
+    source_numel: int,
+    copied_numel: int,
+    partial: bool,
+) -> dict[str, int | bool | str]:
+    return {
+        "loaded": copied_numel > 0,
+        "reason": "",
+        "source_numel": int(source_numel),
+        "target_numel": int(target.numel()),
+        "copied_numel": int(copied_numel),
+        "partial": bool(partial),
+    }
+
+
+def _copy_overlap_1d(target: Any, source: Any) -> int:
+    """Copy the overlapping prefix from *source* into a flattened *target* tensor."""
+    flat_target = target.reshape(-1)
+    n = min(int(flat_target.numel()), int(source.numel()))
+    if n > 0:
+        flat_target[:n].copy_(source[:n])
+    return n
+
+
+def _mark_overlap_1d(mask: Any, n: int) -> None:
+    """Mark the first *n* flattened entries as loaded from a checkpoint."""
+    flat_mask = mask.reshape(-1)
+    if n > 0:
+        flat_mask[:n].fill_(True)

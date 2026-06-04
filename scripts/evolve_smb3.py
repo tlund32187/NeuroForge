@@ -13,16 +13,25 @@ population * generations * episodes * frames, plus emulator startup when
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
 import sys
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from smb3_env import env_bool, env_float, env_int
 
 from neuroforge.contracts.monitors import EventTopic
 from neuroforge.evolution import (
     EvolutionConfig,
+    GraphReproduction,
+    InnovationRegistry,
     SMB3LiveFitnessConfig,
     build_live_smb3_fitness_evaluator,
     existing_savestates,
+    make_graph_seed_population,
+    max_connection_innovation,
 )
 from neuroforge.game.clients import BizHawkConnectionError
 from neuroforge.monitors.bus import EventBus
@@ -36,51 +45,216 @@ SAVESTATE_PATHS: tuple[str, ...] = (
     r"C:\BizHawk\States\smb3_level1.State",
 )
 
-PORT = 8650
-FRAMESKIP = 4
-BIZHAWK_SPEED_PERCENT = 400
-LAUNCH_EMUHAWK = True
+PORT = env_int("NEUROFORGE_SMB3_PORT", 8650, min_value=1)
+FRAMESKIP = env_int("NEUROFORGE_SMB3_FRAMESKIP", 4, min_value=1)
+BIZHAWK_SPEED_PERCENT = env_int("NEUROFORGE_SMB3_SPEED_PERCENT", 400, min_value=1)
+LAUNCH_EMUHAWK = env_bool("NEUROFORGE_SMB3_LAUNCH_EMUHAWK", True)
 
-POPULATION_SIZE = 4
-GENERATIONS = 2
-ELITE_COUNT = 1
-EVAL_EPISODES = 1
-EVAL_FRAMES_PER_EPISODE = 600
-EVOLUTION_WORKERS = 1  # keep live BizHawk at 1 unless each worker owns a separate emulator
+POPULATION_SIZE = env_int("NEUROFORGE_SMB3_EVOLVE_POPULATION", 16, min_value=2)
+GENERATIONS = env_int("NEUROFORGE_SMB3_EVOLVE_GENERATIONS", 25, min_value=1)
+ELITE_COUNT = env_int("NEUROFORGE_SMB3_EVOLVE_ELITES", 1, min_value=1)
+EVAL_EPISODES = env_int("NEUROFORGE_SMB3_EVOLVE_EVAL_EPISODES", 1, min_value=1)
+EVAL_FRAMES_PER_EPISODE = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_EVAL_FRAMES",
+    3600,
+    min_value=1,
+)
+# Keep live BizHawk at 1 unless each worker owns a separate emulator.
+EVOLUTION_WORKERS = env_int("NEUROFORGE_SMB3_EVOLVE_WORKERS", 1, min_value=1)
+EVOLUTION_SEED = env_int("NEUROFORGE_SMB3_EVOLVE_SEED", 1234)
+MUTATION_RATE = env_float("NEUROFORGE_SMB3_EVOLVE_MUTATION_RATE", 0.35, min_value=0.0)
+MUTATION_POWER = env_float("NEUROFORGE_SMB3_EVOLVE_MUTATION_POWER", 1.0, min_value=1e-9)
+# "graph" evolves network STRUCTURE (NEAT-style topology invention); "policy"
+# evolves the fixed hyperparameter vector. Structure invention is the goal.
+def _resolve_genome_kind() -> str:
+    kind = os.environ.get("NEUROFORGE_SMB3_EVOLVE_GENOME", "graph").strip().lower()
+    return kind if kind in {"graph", "policy"} else "graph"
+
+
+GENOME_KIND = _resolve_genome_kind()
 
 _REPO = Path(__file__).resolve().parents[1]
 LUA_SCRIPT = _REPO / "bizhawk" / "neuroforge_bridge.lua"
 RUNS_DIR = _REPO / "artifacts" / "runs"
+EVOLUTION_RUN_DIR_ENV = "NEUROFORGE_SMB3_EVOLUTION_RUN_DIR"
 
 
 class _ConsoleMonitor:
     enabled = True
 
+    def __init__(self) -> None:
+        self._started_at = time.monotonic()
+        self._saw_progress = False
+
     def on_event(self, event: Any) -> None:
         topic = event.topic.value
         data = event.data
-        if topic == "scalar" and "best_fitness" in data:
+        if topic == "run_start" and event.source == "evolution":
+            self._started_at = time.monotonic()
+            self._print_resume(data)
+        elif topic == "evaluation_progress" and event.source == "evolution":
+            self._saw_progress = True
+            self._print_progress(data)
+        elif topic == "scalar" and "best_fitness" in data:
             print(
-                f"  generation {data.get('generation')} | "
+                f"  generation {int(data.get('generation', 0)) + 1} complete | "
                 f"best={float(data.get('best_fitness', 0.0)):.3f} | "
                 f"mean={float(data.get('mean_fitness', 0.0)):.3f} | "
                 f"species={data.get('species_count')}",
+                flush=True,
             )
-        elif topic == "training_trial" and event.source == "evolution":
+        elif (
+            topic == "training_trial"
+            and event.source == "evolution"
+            and not self._saw_progress
+        ):
+            parents = str(data.get("parent_ids", ""))
+            parent_text = f" parents={parents}" if parents else ""
             print(
                 f"    genome {data.get('genome_id')} | "
                 f"fitness={float(data.get('fitness', 0.0)):.3f} | "
                 f"x={float(data.get('max_x_progress', 0.0)):.3f} | "
-                f"reward={float(data.get('reward_mean', 0.0)):+.3f}",
+                f"reward={float(data.get('reward_mean', 0.0)):+.3f}"
+                f"{parent_text}",
+                flush=True,
             )
         elif topic == "run_end" and event.source == "evolution":
-            print(f"  [evolution run_end] {dict(data)}")
+            print(f"  [evolution run_end] {dict(data)}", flush=True)
+
+    def _print_progress(self, data: dict[str, Any]) -> None:
+        phase = str(data.get("phase", ""))
+        generation = int(data.get("generation", 0)) + 1
+        generations = int(data.get("generations", 0))
+        individual = int(data.get("individual", 0)) + 1
+        population_size = int(data.get("population_size", 0))
+        genome_id = data.get("genome_id", "")
+        prefix = (
+            f"  gen {generation}/{generations} | "
+            f"individual {individual}/{population_size} | "
+            f"genome {genome_id}"
+        )
+        progress_text = self._progress_text(data)
+        if phase == "start":
+            print(f"{prefix} | evaluating | {progress_text}", flush=True)
+        elif phase == "complete":
+            print(
+                f"{prefix} | "
+                f"fitness={float(data.get('fitness', 0.0)):.3f} | "
+                f"x={float(data.get('max_x_progress', 0.0)):.3f} | "
+                f"reward={float(data.get('reward_mean', 0.0)):+.3f} | "
+                f"{progress_text}",
+                flush=True,
+            )
+        elif phase == "error":
+            print(
+                f"{prefix} | error={data.get('error', '')} | {progress_text}",
+                flush=True,
+            )
+
+    def _progress_text(self, data: dict[str, Any]) -> str:
+        done = int(data.get("run_evaluations", 0))
+        total = int(data.get("run_total_evaluations", 0))
+        if total <= 0:
+            return "progress=?"
+        remaining = max(0, int(data.get("remaining_evaluations", total - done)))
+        percent = 100.0 * min(done, total) / total
+        text = f"done={done}/{total} ({percent:4.1f}%) | remaining={remaining}"
+        eta = self._eta(done, remaining)
+        if eta:
+            text = f"{text} | eta={eta}"
+        return text
+
+    def _eta(self, done: int, remaining: int) -> str:
+        if done <= 0 or remaining <= 0:
+            return ""
+        elapsed = max(0.0, time.monotonic() - self._started_at)
+        seconds = elapsed * remaining / done
+        return _format_duration(seconds)
+
+    def _print_resume(self, data: dict[str, Any]) -> None:
+        raw_resume = data.get("resume")
+        if not isinstance(raw_resume, dict):
+            return
+        resume = cast("dict[str, object]", raw_resume)
+        if not bool(resume.get("loaded", False)):
+            return
+        generation = _as_int(resume.get("generation"), 0) + 1
+        generations = _as_int(data.get("generations"), 0)
+        population_size = _as_int(resume.get("population_size"), 0)
+        evaluations = _as_int(resume.get("evaluations"), 0)
+        schema_version = _as_int(resume.get("schema_version"), 0)
+        print(
+            f"  resumed checkpoint: gen {generation}/{generations} | "
+            f"pop={population_size} | evals={evaluations} | "
+            f"schema=v{schema_version} | {_as_text(resume.get('path'))}",
+            flush=True,
+        )
+        differences = _resume_difference_text(resume.get("config_differences"))
+        if differences:
+            print(f"  active config changes: {differences}", flush=True)
 
     def reset(self) -> None:
         return
 
     def snapshot(self) -> dict[str, Any]:
         return {}
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _as_text(value: object) -> str:
+    return "" if value is None else str(value)
+
+
+def _resume_difference_text(raw: object) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    differences = cast("dict[str, object]", raw)
+    interesting = (
+        "population_size",
+        "generations",
+        "elite_count",
+        "mutation_rate",
+        "mutation_power",
+        "crossover_rate",
+        "species_threshold",
+        "seed",
+        "max_workers",
+    )
+    parts: list[str] = []
+    for key in interesting:
+        raw_item = differences.get(key)
+        if not isinstance(raw_item, dict):
+            continue
+        item = cast("dict[str, object]", raw_item)
+        checkpoint = _as_text(item.get("checkpoint"))
+        active = _as_text(item.get("active"))
+        parts.append(f"{key} {checkpoint}->{active}")
+    return ", ".join(parts)
 
 
 def _validate_paths() -> bool:
@@ -98,6 +272,43 @@ def _validate_paths() -> bool:
     return ok
 
 
+def _resolve_run_dir() -> Path:
+    raw = os.environ.get(EVOLUTION_RUN_DIR_ENV)
+    if raw:
+        return Path(raw).expanduser()
+    return RUNS_DIR / dt.datetime.now().astimezone().strftime("evolve_%Y%m%d_%H%M%S")
+
+
+def _innovation_registry_for(checkpoint_path: str) -> InnovationRegistry:
+    """Continue innovation numbers above any already in a resumed checkpoint.
+
+    A fresh run starts at 0; resuming a structural run starts past the highest
+    connection innovation so new add-node/add-connection mutations never collide
+    with genes already in the population.
+    """
+    path = Path(checkpoint_path)
+    if not path.exists():
+        return InnovationRegistry()
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return InnovationRegistry()
+    if not isinstance(raw, dict):
+        return InnovationRegistry()
+    payload = cast("dict[str, Any]", raw)
+    population = payload.get("population")
+    items: list[object] = cast("list[object]", population) if isinstance(population, list) else []
+    payloads: list[dict[str, Any]] = [
+        cast("dict[str, Any]", item) for item in items if isinstance(item, dict)
+    ]
+    best = payload.get("best")
+    if isinstance(best, dict):
+        best_genome = cast("dict[str, Any]", best).get("genome")
+        if isinstance(best_genome, dict):
+            payloads.append(cast("dict[str, Any]", best_genome))
+    return InnovationRegistry(start=max_connection_innovation(payloads) + 1)
+
+
 def main() -> int:
     print("=" * 70)
     print("NeuroForge - SMB3 neuroevolution")
@@ -105,7 +316,7 @@ def main() -> int:
     if not _validate_paths():
         return 1
 
-    run_dir = RUNS_DIR / dt.datetime.now().astimezone().strftime("evolve_%Y%m%d_%H%M%S")
+    run_dir = _resolve_run_dir()
     bus = EventBus()
     console = _ConsoleMonitor()
     recorder = EventRecorderMonitor(run_dir)
@@ -130,22 +341,36 @@ def main() -> int:
         population_size=POPULATION_SIZE,
         generations=GENERATIONS,
         elite_count=ELITE_COUNT,
-        mutation_rate=0.35,
-        mutation_power=1.0,
-        seed=1234,
+        mutation_rate=MUTATION_RATE,
+        mutation_power=MUTATION_POWER,
+        seed=EVOLUTION_SEED,
         checkpoint_path=str(run_dir / "evolution" / "checkpoint.json"),
         resume=True,
         max_workers=EVOLUTION_WORKERS,
     )
+    # Graph mode evolves network STRUCTURE; policy mode the hyperparameter vector.
+    reproduction = None
+    seed_population = None
+    if GENOME_KIND == "graph":
+        innovations = _innovation_registry_for(str(evo_cfg.checkpoint_path))
+        reproduction = GraphReproduction(evo_cfg, innovations)
+        seed_population = make_graph_seed_population(innovations)
+
     print(
-        f"  population={POPULATION_SIZE} generations={GENERATIONS} "
+        f"  genome={GENOME_KIND} population={POPULATION_SIZE} generations={GENERATIONS} "
         f"eval={EVAL_EPISODES}x{EVAL_FRAMES_PER_EPISODE} frames "
         f"frameskip={FRAMESKIP} speed={BIZHAWK_SPEED_PERCENT}%",
     )
     print(f"  metrics: {run_dir / 'events' / 'events.ndjson'}")
 
     try:
-        result = EvolutionTask(evo_cfg, event_bus=bus, evaluator=evaluator).run()
+        result = EvolutionTask(
+            evo_cfg,
+            event_bus=bus,
+            evaluator=evaluator,
+            reproduction=reproduction,
+            seed_population=seed_population,
+        ).run()
         print("\n" + "=" * 70)
         print(f"  DONE: {result}")
         print(f"  Evolution checkpoint: {evo_cfg.checkpoint_path}")
@@ -156,6 +381,7 @@ def main() -> int:
     except BizHawkConnectionError as exc:
         print(f"\n  Emulator error: {exc}")
     finally:
+        evaluator.close()  # tear down the shared emulator reused across genomes
         recorder.close()
     return 0
 

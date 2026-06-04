@@ -9,12 +9,21 @@ runs offline and honours stop requests.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 import torch
 
-from neuroforge.contracts.game import EpisodeDecision, GameObservation
+from neuroforge.contracts.game import (
+    ControllerAction,
+    EpisodeDecision,
+    GameObservation,
+    ScreenFrame,
+    VisionGameMetrics,
+)
 from neuroforge.contracts.monitors import EventTopic
-from neuroforge.game.checkpoint import PolicyCheckpoint
+from neuroforge.game.action_energy import ActionEnergyConfig, ActionEnergyModel
+from neuroforge.game.checkpoint import PolicyCheckpoint, resume_status_lines
 from neuroforge.game.clients.scripted import ScriptedGameClient
 from neuroforge.game.policies.network import PolicyNetworkConfig, build_policy_network
 from neuroforge.game.policies.preprocess import FramePreprocessConfig
@@ -26,6 +35,9 @@ from neuroforge.learning.online_rstdp import (
 from neuroforge.learning.rstdp import RSTDPRule
 from neuroforge.monitors.bus import EventBus
 from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _small_net() -> object:
@@ -48,7 +60,52 @@ def _force_spikes(net: object, *, pre: bool, post: bool) -> None:
     engine.populations["hidden"].state["last_spikes"] = torch.full((8,), post, dtype=torch.bool)
 
 
+def _metric_observation(step: int, *, x: float = 0.0, score: int = 0) -> GameObservation:
+    frame = ScreenFrame(width=1, height=1, channels=1, data=b"\x00", frame_id=step)
+    return GameObservation(
+        step=step,
+        t=step / 60.0,
+        frame=frame,
+        metrics=VisionGameMetrics(score=score, lives=3, x_progress=x),
+    )
+
+
 # ── learning mechanics ──────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_action_energy_penalizes_churn_and_refills_on_progress() -> None:
+    model = ActionEnergyModel(
+        ActionEnergyConfig(
+            enabled=True,
+            capacity=0.10,
+            recover_per_frame=0.0,
+            button_cost=0.08,
+            change_cost=0.05,
+            cost_penalty_scale=1.0,
+            shortage_penalty_scale=2.0,
+            progress_refill_scale=1.0,
+        )
+    )
+    model.begin_episode()
+
+    first = model.score(
+        ControllerAction(right=True),
+        _metric_observation(0, x=0.0),
+        _metric_observation(1, x=0.0),
+    )
+    second = model.score(
+        ControllerAction(up=True, right=True),
+        _metric_observation(1, x=0.0),
+        _metric_observation(2, x=0.2),
+    )
+
+    assert first.button_count == 1
+    assert second.button_count == 2
+    assert second.change_count == 1
+    assert first.reward_delta < 0.0
+    assert second.refill > 0.0
+    assert second.shortage >= 0.0
 
 
 @pytest.mark.unit
@@ -141,6 +198,136 @@ def test_checkpoint_round_trip(tmp_path: object) -> None:
 
 
 @pytest.mark.unit
+def test_checkpoint_partial_load_warm_starts_changed_shape(tmp_path: object) -> None:
+    source_net = _small_net()
+    source_trainer = _trainer(source_net)
+    source_weights = torch.linspace(
+        0.0,
+        1.0,
+        source_trainer.weights_snapshot()["in_to_hidden"].numel(),
+        dtype=torch.float32,
+    )
+    source_topo = source_net.engine.projections["in_to_hidden"].topology  # type: ignore[attr-defined]
+    source_topo.weights.copy_(source_weights)
+
+    path = tmp_path / "partial.pt"  # type: ignore[operator]
+    PolicyCheckpoint.save(path, trainer=source_trainer)
+
+    target_net = build_policy_network(
+        PolicyNetworkConfig(
+            n_input=8,
+            n_hidden=12,
+            motor_per_button=1,
+            input_fanin=0,
+            seed=999,
+        ),
+    )
+    target_trainer = OnlineRSTDPTrainer(
+        target_net.engine,
+        OnlineRSTDPConfig(lr=0.1, plastic_projections=("in_to_hidden",)),
+        device="cpu",
+        dtype="float32",
+    )
+
+    meta = PolicyCheckpoint.load(path, trainer=target_trainer, allow_partial=True)
+    loaded = target_trainer.weights_snapshot()["in_to_hidden"].reshape(-1)
+    n = source_weights.numel()
+    weight_summary = meta["load_summary"]["weights"]["in_to_hidden"]
+    eligibility_summary = meta["load_summary"]["eligibility"]["in_to_hidden"]
+    assert loaded.numel() > n
+    assert torch.allclose(loaded[:n], source_weights)
+    assert weight_summary["partial"] is True
+    assert weight_summary["source_numel"] == n
+    assert weight_summary["copied_numel"] == n
+    assert weight_summary["target_numel"] == loaded.numel()
+    assert eligibility_summary["partial"] is True
+    assert eligibility_summary["copied_numel"] == n
+
+
+@pytest.mark.unit
+def test_resume_status_lines_report_missing_and_partial_loads() -> None:
+    missing = resume_status_lines(
+        {
+            "requested": True,
+            "loaded": False,
+            "reason": "missing",
+            "path": "policy.pt",
+        }
+    )
+    loaded = resume_status_lines(
+        {
+            "requested": True,
+            "loaded": True,
+            "path": "policy.pt",
+            "weights_copied": 4,
+            "weights_target": 8,
+            "eligibility_copied": 2,
+            "eligibility_target": 8,
+            "encoder_loaded": True,
+            "load_summary": {
+                "weights": {"p": {"partial": True}},
+                "eligibility": {},
+            },
+        }
+    )
+
+    assert missing == ["Resume requested but not loaded: missing (policy.pt)."]
+    assert loaded == [
+        "Resume loaded (policy.pt): weights=4/8 (50.0%), "
+        "eligibility=2/8 (25.0%), encoder=yes, partial=yes."
+    ]
+
+
+@pytest.mark.unit
+def test_consolidation_anchor_protects_loaded_weight_prefix(tmp_path: object) -> None:
+    source_net = _small_net()
+    source_trainer = _trainer(source_net)
+    source_weights = torch.linspace(
+        0.0,
+        1.0,
+        source_trainer.weights_snapshot()["in_to_hidden"].numel(),
+        dtype=torch.float32,
+    )
+    source_topo = source_net.engine.projections["in_to_hidden"].topology  # type: ignore[attr-defined]
+    source_topo.weights.copy_(source_weights)
+
+    path = tmp_path / "anchor.pt"  # type: ignore[operator]
+    PolicyCheckpoint.save(path, trainer=source_trainer)
+
+    target_net = build_policy_network(
+        PolicyNetworkConfig(
+            n_input=8,
+            n_hidden=12,
+            motor_per_button=1,
+            input_fanin=0,
+            seed=999,
+        ),
+    )
+    target_trainer = OnlineRSTDPTrainer(
+        target_net.engine,
+        OnlineRSTDPConfig(
+            lr=0.0,
+            consolidation_strength=0.5,
+            plastic_projections=("in_to_hidden",),
+        ),
+        device="cpu",
+        dtype="float32",
+    )
+
+    PolicyCheckpoint.load(path, trainer=target_trainer, allow_partial=True)
+    target_trainer.anchor_current_weights()
+    target_topo = target_net.engine.projections["in_to_hidden"].topology
+    target_topo.weights.zero_()
+
+    telemetry = target_trainer.learn(0.0)
+    loaded = target_trainer.weights_snapshot()["in_to_hidden"].reshape(-1)
+    n = source_weights.numel()
+    assert telemetry["consolidation_norm"] > 0.0
+    assert torch.allclose(loaded[:n], source_weights * 0.5)
+    assert torch.allclose(loaded[n:], torch.zeros_like(loaded[n:]))
+
+
+@pytest.mark.unit
 def test_checkpoint_round_trips_encoder_state(tmp_path: object) -> None:
     net = _small_net()
     trainer = _trainer(net)
@@ -217,6 +404,55 @@ def test_game_training_task_runs_offline() -> None:
 
 
 @pytest.mark.unit
+def test_game_training_emits_action_energy_metrics() -> None:
+    events: list[object] = []
+
+    class _Collector:
+        enabled = True
+
+        def on_event(self, event: object) -> None:
+            events.append(event)
+
+        def reset(self) -> None: ...
+        def snapshot(self) -> dict[str, object]:
+            return {}
+
+    bus = EventBus()
+    collector = _Collector()
+    for topic in EventTopic:
+        bus.subscribe(topic, collector)
+
+    cfg = GameTrainingConfig(
+        preprocess=FramePreprocessConfig(out_h=10, out_w=10, motion=False),
+        n_hidden=16,
+        motor_per_button=1,
+        input_fanin=8,
+        decide_ticks=3,
+        max_episodes=1,
+        frames_per_episode=3,
+        telemetry_every=1,
+        action_energy=ActionEnergyConfig(enabled=True),
+        seed=9,
+    )
+    task = GameTrainingTask(
+        cfg,
+        event_bus=bus,
+        client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=3),
+    )
+    task.run()
+
+    scalars = [event for event in events if event.topic.value == "scalar"]  # type: ignore[attr-defined]
+    trials = [event for event in events if event.topic.value == "training_trial"]  # type: ignore[attr-defined]
+    assert scalars
+    assert trials
+    assert "action_energy" in scalars[0].data  # type: ignore[attr-defined]
+    assert "action_up" in scalars[0].data  # type: ignore[attr-defined]
+    assert "reward_action_energy_sum" in trials[0].data  # type: ignore[attr-defined]
+    assert "action_button_mean" in trials[0].data  # type: ignore[attr-defined]
+    assert "action_up_frac" in trials[0].data  # type: ignore[attr-defined]
+
+
+@pytest.mark.unit
 def test_game_training_task_honours_stop() -> None:
     result, _topics = _run_offline_task(stop_after=3, frames=100)
     assert result.stopped is True  # type: ignore[attr-defined]
@@ -281,13 +517,13 @@ def test_task_queues_curriculum_savestate_and_terminates_per_episode() -> None:
     result = task.run()
 
     assert client.queued == ["lvl1.State", "lvl1.State"]  # queued before each episode
-    assert result.episodes == 2  # type: ignore[attr-defined]
-    assert result.frames == 6  # type: ignore[attr-defined] - 3 frames/episode via the manager
+    assert result.episodes == 2
+    assert result.frames == 6
 
 
 @pytest.mark.unit
-def test_resume_loads_checkpoint_before_training(tmp_path: object) -> None:
-    ckpt = tmp_path / "policy.pt"  # type: ignore[operator]
+def test_resume_loads_checkpoint_before_training(tmp_path: Path) -> None:
+    ckpt = tmp_path / "policy.pt"
     common = {
         "preprocess": FramePreprocessConfig(out_h=10, out_w=10, motion=False),
         "n_hidden": 16, "motor_per_button": 1, "input_fanin": 8,
@@ -300,9 +536,62 @@ def test_resume_loads_checkpoint_before_training(tmp_path: object) -> None:
         client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=5),
     )
     first.run()
-    assert ckpt.exists()  # type: ignore[attr-defined]
+    assert ckpt.exists()
 
     # Second run resumes: run_start must report resumed=True.
+    resumed: list[object] = []
+    resume_payloads: list[dict[str, object]] = []
+
+    class _RunStartSpy:
+        enabled = True
+
+        def on_event(self, event: object) -> None:
+            if event.topic.value == "run_start":  # type: ignore[attr-defined]
+                data = event.data  # type: ignore[attr-defined]
+                resumed.append(data.get("resumed"))
+                resume_payloads.append(data.get("resume"))
+
+        def reset(self) -> None: ...
+        def snapshot(self) -> dict[str, object]:
+            return {}
+
+    bus = EventBus()
+    spy = _RunStartSpy()
+    for topic in EventTopic:
+        bus.subscribe(topic, spy)
+    second = GameTrainingTask(
+        GameTrainingConfig(checkpoint_path=str(ckpt), resume=True, **common),  # type: ignore[arg-type]
+        event_bus=bus,
+        client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=5),
+    )
+    second.run()
+    assert resumed == [True]
+    assert resume_payloads[0]["loaded"] is True
+    assert resume_payloads[0]["weights_copied"] == resume_payloads[0]["weights_target"]
+    assert resume_payloads[0]["eligibility_copied"] == resume_payloads[0]["eligibility_target"]
+
+
+@pytest.mark.unit
+def test_resume_checkpoint_path_loads_without_overwriting_source(tmp_path: Path) -> None:
+    source = tmp_path / "source_policy.pt"
+    common = {
+        "preprocess": FramePreprocessConfig(out_h=10, out_w=10, motion=False),
+        "n_hidden": 16, "motor_per_button": 1, "input_fanin": 8,
+        "decide_ticks": 3, "max_episodes": 1,
+        "telemetry_every": 0, "seed": 4,
+    }
+    first = GameTrainingTask(
+        GameTrainingConfig(
+            checkpoint_path=str(source),
+            frames_per_episode=2,
+            **common,  # type: ignore[arg-type]
+        ),
+        client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=2),
+    )
+    first.run()
+    before = torch.load(str(source), map_location="cpu", weights_only=False)
+    assert before["frame"] == 2
+
     resumed: list[object] = []
 
     class _RunStartSpy:
@@ -320,10 +609,21 @@ def test_resume_loads_checkpoint_before_training(tmp_path: object) -> None:
     spy = _RunStartSpy()
     for topic in EventTopic:
         bus.subscribe(topic, spy)
+
     second = GameTrainingTask(
-        GameTrainingConfig(checkpoint_path=str(ckpt), resume=True, **common),  # type: ignore[arg-type]
+        GameTrainingConfig(
+            checkpoint_path=None,
+            resume_checkpoint_path=str(source),
+            resume=True,
+            frames_per_episode=3,
+            **common,  # type: ignore[arg-type]
+        ),
         event_bus=bus,
-        client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=5),
+        client=ScriptedGameClient(width=80, height=70, channels=3, max_steps=3),
     )
     second.run()
+
+    after = torch.load(str(source), map_location="cpu", weights_only=False)
     assert resumed == [True]
+    assert after["frame"] == before["frame"]
+    assert after["episode"] == before["episode"]

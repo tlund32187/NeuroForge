@@ -41,6 +41,7 @@ class EventTopic(StrEnum):
     RUN_START = auto()
     RUN_END = auto()
     SCALAR = auto()
+    EVALUATION_PROGRESS = auto()
 
 
 # ── Event DTO ───────────────────────────────────────────────────────

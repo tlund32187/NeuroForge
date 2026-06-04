@@ -27,28 +27,32 @@ weights are checkpointed to artifacts/smb3_policy.pt.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
-from neuroforge.game import BizHawkClient, BizHawkClientConfig, VisionMetricRewardConfig
+from smb3_env import env_bool, env_float, env_int
+from smb3_evolved_config import apply_evolved_genome_config, evolved_config_status_lines
+
+from neuroforge.game import (
+    BizHawkClient,
+    BizHawkClientConfig,
+)
+from neuroforge.game.checkpoint import resume_status_lines
 from neuroforge.game.clients import BizHawkConnectionError
 from neuroforge.game.clients.launcher import EmuHawkLauncher
-from neuroforge.game.curriculum import SMB3Curriculum
-from neuroforge.game.episode import SMB3EpisodeConfig, SMB3EpisodeManager
-from neuroforge.game.policies.action_decode import ActionDecodeConfig
-from neuroforge.game.policies.preprocess import FramePreprocessConfig
-from neuroforge.game.rewards_smb3 import SMB3RewardConfig, SMB3RewardModel
-from neuroforge.game.vision import SMB3HudConfig, SMB3HudExtractor
-from neuroforge.learning.online_rstdp import OnlineRSTDPConfig
+from neuroforge.game.smb3_live import (
+    build_smb3_curriculum,
+    build_smb3_episode_manager,
+    build_smb3_game_training_config,
+    build_smb3_hud_extractor,
+    build_smb3_perception_stack,
+    build_smb3_reward_model,
+)
 from neuroforge.monitors.bus import EventBus
 from neuroforge.monitors.event_recorder import EventRecorderMonitor
-from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
-from neuroforge.vision.encoding import (
-    PerceptionStack,
-    PerceptionStackConfig,
-    RetinaEncoderConfig,
-)
+from neuroforge.tasks.game_training import GameTrainingTask
 
 # ── CONFIG — edit if your paths differ ────────────────────────────────────────
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
@@ -58,26 +62,38 @@ ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 
 SAVESTATE_PATHS: tuple[str, ...] = (
     r"C:\BizHawk\States\smb3_level1.State",
 )
-PORT = 8650
-MAX_EPISODES = 50
-FRAMES_PER_EPISODE = 2000
-TELEMETRY_EVERY = 30
+PORT = env_int("NEUROFORGE_SMB3_PORT", 8650, min_value=1)
+MAX_EPISODES = env_int("NEUROFORGE_SMB3_TRAIN_EPISODES", 50, min_value=1)
+FRAMES_PER_EPISODE = env_int("NEUROFORGE_SMB3_TRAIN_FRAMES", 2000, min_value=1)
+TELEMETRY_EVERY = env_int("NEUROFORGE_SMB3_TRAIN_TELEMETRY_EVERY", 30, min_value=0)
 # Emulator frames advanced per decision (action-repeat). Higher = much faster
 # wall-clock (fewer IPC round-trips + brain steps per second of gameplay) AND it
 # helps build run momentum. With BizHawk at 400%, 4 targets about 60 decisions/sec.
-FRAMESKIP = 4
+FRAMESKIP = env_int("NEUROFORGE_SMB3_FRAMESKIP", 4, min_value=1)
 # BizHawk throttle speed percent. 400 is the menu's "Speed 400%" setting (4x),
 # so FRAMESKIP=4 should land near 60 decisions/sec when transport keeps up.
-BIZHAWK_SPEED_PERCENT = 400
+BIZHAWK_SPEED_PERCENT = env_int("NEUROFORGE_SMB3_SPEED_PERCENT", 400, min_value=1)
 # Continue learning from the last checkpoint instead of starting from random
 # weights. Set False for a fresh brain.
-RESUME = True
+RESUME = env_bool("NEUROFORGE_SMB3_RESUME", True)
+CHECKPOINT_EVERY = env_int("NEUROFORGE_SMB3_CHECKPOINT_EVERY", 1000, min_value=0)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _REPO = Path(__file__).resolve().parents[1]
 LUA_SCRIPT = _REPO / "bizhawk" / "neuroforge_bridge.lua"
-CHECKPOINT = _REPO / "artifacts" / "smb3_policy.pt"
 RUNS_DIR = _REPO / "artifacts" / "runs"
+CHECKPOINT = Path(
+    os.environ.get("NEUROFORGE_SMB3_CHECKPOINT", str(_REPO / "artifacts" / "smb3_policy.pt"))
+)
+USE_EVOLVED_GENOME = env_bool("NEUROFORGE_SMB3_USE_EVOLVED", False)
+EVOLUTION_CHECKPOINT = os.environ.get("NEUROFORGE_SMB3_EVOLUTION_CHECKPOINT")
+EVOLVED_MODE = os.environ.get("NEUROFORGE_SMB3_EVOLVED_MODE", "compatible").strip().lower()
+RESUME_CHECKPOINT = os.environ.get("NEUROFORGE_SMB3_RESUME_CHECKPOINT")
+CONSOLIDATION_STRENGTH = env_float(
+    "NEUROFORGE_SMB3_CONSOLIDATION_STRENGTH",
+    0.0,
+    min_value=0.0,
+)
 
 
 class _ConsoleMonitor:
@@ -107,8 +123,16 @@ class _ConsoleMonitor:
                 f" max_x={data.get('max_x_progress', 0.0):.3f}"
                 f" stage={data.get('curriculum_stage', 0)}",
             )
-        elif topic == "run_start" and data.get("resumed"):
+        elif topic == "run_start" and not data.get("resumed"):
+            for line in resume_status_lines(data.get("resume")):
+                print(f"  {line}")
+        elif topic == "run_start":
+            for line in resume_status_lines(data.get("resume")):
+                print(f"  {line}")
             print("  Resumed from checkpoint — continuing to learn from prior runs.")
+            strength = float(data.get("consolidation_strength", 0.0))
+            if data.get("resumed") and strength > 0.0:
+                print(f"  Consolidation anchor enabled (strength={strength:.4g}).")
         elif topic in {"training_end", "run_end"}:
             print(f"  [{topic}] {dict(data)}")
 
@@ -135,6 +159,20 @@ def _resolve_savestates() -> tuple[str, ...]:
     return present
 
 
+def _apply_evolved_genome_config(cfg: Any) -> Any:
+    """Optionally apply the best evolved genome to the training config."""
+    selection = apply_evolved_genome_config(
+        cfg,
+        use_evolved=USE_EVOLVED_GENOME,
+        evolved_mode=EVOLVED_MODE,
+        evolution_checkpoint=EVOLUTION_CHECKPOINT,
+        runs_dir=RUNS_DIR,
+    )
+    for line in evolved_config_status_lines(selection, action="training"):
+        print(f"  {line}")
+    return selection.config
+
+
 def main() -> int:
     print("=" * 70)
     print("NeuroForge — SMB3 online R-STDP training (Phase 4: in-level curriculum)")
@@ -145,9 +183,13 @@ def main() -> int:
             return 1
 
     savestates = _resolve_savestates()
-    curriculum = SMB3Curriculum(savestates, advance_threshold=0.9, min_episodes_per_stage=4)
+    curriculum = build_smb3_curriculum(
+        savestates,
+        advance_threshold=0.9,
+        min_episodes_per_stage=4,
+    )
 
-    extractor = SMB3HudExtractor(SMB3HudConfig(track_progress=True))
+    extractor = build_smb3_hud_extractor()
     print(f"  HUD digit OCR calibrated: {extractor.is_calibrated}")
     print(f"  BizHawk speed target: {BIZHAWK_SPEED_PERCENT}% | frameskip: {FRAMESKIP}")
     print("  Launching EmuHawk; the brain will start driving (and learning) shortly.\n")
@@ -170,63 +212,46 @@ def main() -> int:
     client = BizHawkClient(
         BizHawkClientConfig(
             port=PORT, width=256, height=240, channels=3, frameskip=FRAMESKIP,
-            connect_timeout_s=60.0, step_timeout_s=45.0, launch=True,
+            connect_timeout_s=60.0, step_timeout_s=45.0, launch=True, transport="socket",
         ),
         launcher=EmuHawkLauncher(
             emuhawk_path=EMUHAWK_PATH, lua_script=str(LUA_SCRIPT), rom_path=ROM_PATH,
             frameskip=FRAMESKIP, speed_percent=BIZHAWK_SPEED_PERCENT,
         ),
     )
-    cfg = GameTrainingConfig(
-        preprocess=FramePreprocessConfig(out_h=28, out_w=32, motion=True),
+    cfg = build_smb3_game_training_config(
         # Exploration is essential early: a random brain has a fixed direction bias,
         # so without stochastic decoding + a stochastic d-pad tie-break it gets stuck
         # going one way forever and never earns the progress reward for the other.
-        decode=ActionDecodeConfig(
-            mode="bernoulli", threshold=0.25, temperature=0.3, dpad_explore_floor=0.1,
-        ),
-        noise_amp=0.4,  # injected motor noise (the brain-level exploration knob)
         # Hold the decoded heading for a window so the brain stops dithering
         # ("runs in place") and builds run momentum — the action-side trace rule.
-        commit_frames=8,
         # Larger learning signal so the (rare) forward-progress reward isn't lost.
-        rstdp=OnlineRSTDPConfig(reward_scale=0.05),
         max_episodes=MAX_EPISODES,
         frames_per_episode=FRAMES_PER_EPISODE,
         telemetry_every=TELEMETRY_EVERY,
-        checkpoint_every=1000,
+        checkpoint_every=CHECKPOINT_EVERY,
         checkpoint_path=str(CHECKPOINT),
         resume=RESUME,
+        resume_checkpoint_path=RESUME_CHECKPOINT,
+        consolidation_strength=CONSOLIDATION_STRENGTH,
     )
+    cfg = _apply_evolved_genome_config(cfg)
     # Bio-faithful perception front-end (Track A), full stack: A0 retinal contrast
     # → A1 STDP feature maps → A2 trace-rule object cells, plus A3 motion. A1/A2
     # learn online while playing and are checkpointed with the policy (so resume
     # stays coherent). The brain now sees learned, invariant features + motion.
-    encoder = PerceptionStack(
-        PerceptionStackConfig(
-            retina=RetinaEncoderConfig(out_h=28, out_w=32),
-            features=True, objects=True, motion=True, learn=True,
-        ),
-    )
+    encoder = build_smb3_perception_stack(learn=True)
     # Reward shaping (starting points — tune against the metrics log). Forward
     # progress dominates; idle/stall are gentle nudges (not a swamping per-frame
     # drag), so reward/frame is interpretable and progress stands out.
-    reward_model = SMB3RewardModel(
-        SMB3RewardConfig(
-            base=VisionMetricRewardConfig(
-                progress_scale=200.0, score_scale=0.05, time_delta_scale=0.0,
-                life_loss_penalty=-50.0, life_gain_bonus=25.0,
-            ),
-            idle_penalty=-0.05, stall_penalty=-3.0,
-        ),
-    )
+    reward_model = build_smb3_reward_model()
     task = GameTrainingTask(
         cfg,
         event_bus=bus,
         client=client,
         metric_extractor=extractor,
         reward_model=reward_model,
-        episode_manager=SMB3EpisodeManager(SMB3EpisodeConfig()),
+        episode_manager=build_smb3_episode_manager(),
         curriculum=curriculum,
         encoder=encoder,
     )

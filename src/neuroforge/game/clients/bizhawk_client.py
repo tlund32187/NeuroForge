@@ -32,6 +32,7 @@ from neuroforge.game.clients.errors import (
     BizHawkProtocolError,
     BizHawkStateError,
 )
+from neuroforge.game.clients.screenshot_socket import ScreenshotSocketReceiver
 from neuroforge.game.clients.transport import SocketTransport
 
 if TYPE_CHECKING:
@@ -55,7 +56,8 @@ class BizHawkClientConfig:
 
     * ``"file"`` (default) — atomically-renamed files in ``comm_dir``. Works on
       NLua EmuHawk builds that lack LuaSocket.
-    * ``"socket"`` — a localhost TCP server (needs LuaSocket in the Lua side).
+    * ``"socket"`` — a localhost TCP server. The Lua side tries LuaSocket,
+      including BizHawk's ``Lua/socket/core.dll`` path, then LuaCOM/MSWinsock.
     """
 
     host: str = "127.0.0.1"
@@ -107,6 +109,8 @@ class BizHawkClient:
         self._transport = transport
         self._owns_transport = transport is None
         self._launcher = launcher
+        self._screenshot_receiver: ScreenshotSocketReceiver | None = None
+        self._bridge_error_path = str(Path(tempfile.gettempdir()) / "neuroforge_bridge_error.log")
         self._connected = False
         self._step_count = 0
         self._next_savestate: str | None = None
@@ -201,6 +205,9 @@ class BizHawkClient:
                 transport.close()
         if self._launcher is not None:
             self._launcher.close()
+        if self._screenshot_receiver is not None:
+            self._screenshot_receiver.close()
+            self._screenshot_receiver = None
         self._connected = False
 
     def __enter__(self) -> BizHawkClient:
@@ -213,7 +220,17 @@ class BizHawkClient:
 
     def _on_bound(self, port: int) -> None:
         if self._launcher is not None:
-            self._launcher.launch(port=port)
+            with contextlib.suppress(OSError):
+                Path(self._bridge_error_path).unlink()
+            screenshot_receiver = ScreenshotSocketReceiver.serve(self._cfg.host, 0)
+            self._screenshot_receiver = screenshot_receiver
+            self._launcher.launch(
+                port=port,
+                host=self._cfg.host,
+                screenshot_port=screenshot_receiver.port,
+                screenshot_host=self._cfg.host,
+                error_path=self._bridge_error_path,
+            )
 
     def _handshake(self) -> None:
         self._set_timeout(self._cfg.connect_timeout_s)
@@ -275,6 +292,10 @@ class BizHawkClient:
         try:
             frame_id, emu_time_us, pixels = proto.decode_frame_payload(payload)
             if self._pixel_format == proto.PIXEL_FORMAT_PNG:
+                if not pixels and self._screenshot_receiver is not None:
+                    pixels = self._screenshot_receiver.recv_screenshot(
+                        timeout=self._cfg.step_timeout_s,
+                    )
                 from neuroforge.game.clients.frame_codec import decode_png_to_raw
 
                 pixels = decode_png_to_raw(
@@ -301,9 +322,22 @@ class BizHawkClient:
 
     def _recv_exactly(self, n: int) -> bytes:
         assert self._transport is not None  # noqa: S101 — guarded by callers
-        return self._transport.recv_exactly(n)
+        try:
+            return self._transport.recv_exactly(n)
+        except BizHawkConnectionError as exc:
+            detail = self._read_bridge_error()
+            if detail:
+                msg = f"{exc}; Lua bridge error: {detail}"
+                raise BizHawkConnectionError(msg) from exc
+            raise
 
     def _set_timeout(self, seconds: float) -> None:
         setter = getattr(self._transport, "set_timeout", None)
         if callable(setter):
             setter(seconds)
+
+    def _read_bridge_error(self) -> str:
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            text = Path(self._bridge_error_path).read_text(encoding="utf-8").strip()
+            return text[-1000:]
+        return ""

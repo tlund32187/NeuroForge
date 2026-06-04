@@ -181,6 +181,17 @@ class _CountingReward:
 
 
 @pytest.mark.unit
+def test_loop_does_not_close_a_borrowed_client() -> None:
+    client = ScriptedGameClient(width=1, height=1, channels=1, max_steps=1)
+    loop = VisionOnlyGameLoop(
+        client=client, policy=_HoldRightPolicy(), close_client=False,
+    )
+    loop.reset()
+    loop.close()
+    assert client.closed is False  # borrowed client is left for its owner to close
+
+
+@pytest.mark.unit
 def test_loop_resets_env_collaborators_each_episode() -> None:
     # Guards the x_progress-carryover fix: scroll/reward state must be cleared
     # at the start of every episode, not just the first.

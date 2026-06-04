@@ -114,6 +114,12 @@ client/emulator instance.
 For live SMB3 fitness, edit the paths at the top of `scripts/evolve_smb3.py`
 and start with the tiny defaults before scaling population or episode length.
 
+SMB3 game-backed training also includes an optional action-energy bucket. It
+charges small costs for pressed buttons and larger costs for button churn, then
+refills over time and on progress/score. This nudges the policy toward
+human-like, deliberate input instead of frame-by-frame thrashing while preserving
+exploration.
+
 ### Trial Stats Monitor
 
 `TrialStatsMonitor` enriches `TRAINING_TRIAL` events (and therefore `scalars.csv`)

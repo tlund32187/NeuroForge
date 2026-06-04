@@ -56,7 +56,10 @@ def evaluate_proxy_policy_gene_target(genome: PolicyGenome) -> FitnessResult:
     lr = _float_gene(genome, "lr")
     tau_e = _float_gene(genome, "tau_e")
     reward_scale = _float_gene(genome, "reward_scale")
+    hidden_layers = _float_gene(genome, "n_hidden_layers")
+    hidden_fanin = _float_gene(genome, "hidden_fanin")
     recurrent = bool(genome.value("recurrent_hidden"))
+    input_skip = bool(genome.value("input_to_motor_skip"))
 
     target_cost = (
         abs(hidden - 160.0) / 64.0
@@ -66,13 +69,16 @@ def evaluate_proxy_policy_gene_target(genome: PolicyGenome) -> FitnessResult:
         + abs(tau_mem - 0.006) / 0.006
         + abs(decide_ticks - 10.0) / 10.0
         + abs(noise_amp - 0.35) / 0.35
-        + abs(commit_frames - 8.0) / 8.0
+        + abs(commit_frames - 4.0) / 4.0
         + abs(lr - 4e-4) / 4e-4
         + abs(tau_e - 0.10) / 0.10
         + abs(reward_scale - 0.06) / 0.06
+        + abs(hidden_layers - 2.0) / 2.0
+        + abs(hidden_fanin - 64.0) / 96.0
     )
     recurrent_bonus = 0.35 if recurrent else 0.0
-    fitness = 100.0 - target_cost * 5.0 + recurrent_bonus
+    skip_bonus = 0.20 if input_skip else 0.0
+    fitness = 100.0 - target_cost * 5.0 + recurrent_bonus + skip_bonus
     return FitnessResult(
         fitness=fitness,
         metrics={
@@ -80,6 +86,9 @@ def evaluate_proxy_policy_gene_target(genome: PolicyGenome) -> FitnessResult:
             "proxy.hidden_error": abs(hidden - 160.0),
             "proxy.decision_error": abs(decide_ticks - 10.0),
             "proxy.recurrent_bonus": recurrent_bonus,
+            "proxy.hidden_layer_error": abs(hidden_layers - 2.0),
+            "proxy.hidden_fanin_error": abs(hidden_fanin - 64.0),
+            "proxy.input_skip_bonus": skip_bonus,
         },
     )
 

@@ -4,21 +4,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from neuroforge.evolution.evaluators import GameTrainingFitnessEvaluator
 from neuroforge.game.clients.launcher import EmuHawkLauncher
-from neuroforge.game.episode import SMB3EpisodeConfig, SMB3EpisodeManager
-from neuroforge.game.policies.action_decode import ActionDecodeConfig
-from neuroforge.game.policies.preprocess import FramePreprocessConfig
 from neuroforge.game.rewards import VisionMetricRewardConfig, VisionMetricRewardModel
-from neuroforge.game.rewards_smb3 import SMB3RewardConfig, SMB3RewardModel
-from neuroforge.learning.online_rstdp import OnlineRSTDPConfig
-from neuroforge.tasks.game_training import GameTrainingConfig
-from neuroforge.vision.encoding import (
-    PerceptionStack,
-    PerceptionStackConfig,
-    RetinaEncoderConfig,
+from neuroforge.game.smb3_live import (
+    build_smb3_curriculum,
+    build_smb3_episode_manager,
+    build_smb3_game_training_config,
+    build_smb3_hud_extractor,
+    build_smb3_perception_stack,
+    build_smb3_reward_model,
+    existing_savestates,
 )
 
 __all__ = [
@@ -61,13 +58,9 @@ class SMB3LiveFitnessConfig:
     connect_timeout_s: float = 60.0
     step_timeout_s: float = 45.0
     launch: bool = True
+    eval_repeats: int = 2       # average N short rollouts/genome to cut fitness noise
     device: str = "cpu"
     dtype: str = "float32"
-
-
-def existing_savestates(paths: tuple[str, ...]) -> tuple[str, ...]:
-    """Return configured savestates that currently exist on disk."""
-    return tuple(path for path in paths if Path(path).exists())
 
 
 def build_scripted_progress_fitness_evaluator(
@@ -77,7 +70,7 @@ def build_scripted_progress_fitness_evaluator(
     from neuroforge.game.clients.scripted import ActionProgressGameClient
 
     cfg = config or ScriptedGameFitnessConfig()
-    base = _base_game_config(
+    base = build_smb3_game_training_config(
         max_episodes=cfg.max_episodes,
         frames_per_episode=cfg.frames_per_episode,
         telemetry_every=cfg.telemetry_every,
@@ -108,10 +101,8 @@ def build_live_smb3_fitness_evaluator(
 ) -> GameTrainingFitnessEvaluator:
     """Build a short live SMB3 evaluator backed by BizHawk/GameTrainingTask."""
     from neuroforge.game import BizHawkClient, BizHawkClientConfig
-    from neuroforge.game.curriculum import SMB3Curriculum
-    from neuroforge.game.vision import SMB3HudConfig, SMB3HudExtractor
 
-    base = _base_game_config(
+    base = build_smb3_game_training_config(
         max_episodes=config.max_episodes,
         frames_per_episode=config.frames_per_episode,
         telemetry_every=config.telemetry_every,
@@ -130,6 +121,7 @@ def build_live_smb3_fitness_evaluator(
                 connect_timeout_s=config.connect_timeout_s,
                 step_timeout_s=config.step_timeout_s,
                 launch=config.launch,
+                transport="socket",
             ),
             launcher=EmuHawkLauncher(
                 emuhawk_path=config.emuhawk_path,
@@ -140,73 +132,16 @@ def build_live_smb3_fitness_evaluator(
             ),
         ),
         base_config=base,
-        metric_extractor_factory=lambda: SMB3HudExtractor(SMB3HudConfig(track_progress=True)),
-        reward_model_factory=lambda: SMB3RewardModel(
-            SMB3RewardConfig(
-                base=VisionMetricRewardConfig(
-                    progress_scale=200.0,
-                    score_scale=0.05,
-                    time_delta_scale=0.0,
-                    life_loss_penalty=-50.0,
-                    life_gain_bonus=25.0,
-                ),
-                idle_penalty=-0.05,
-                stall_penalty=-3.0,
-            )
-        ),
-        episode_manager_factory=lambda: SMB3EpisodeManager(SMB3EpisodeConfig()),
-        curriculum_factory=lambda: SMB3Curriculum(
+        metric_extractor_factory=build_smb3_hud_extractor,
+        reward_model_factory=build_smb3_reward_model,
+        episode_manager_factory=build_smb3_episode_manager,
+        curriculum_factory=lambda: build_smb3_curriculum(
             savestates,
             advance_threshold=0.9,
             min_episodes_per_stage=4,
         ),
-        encoder_factory=_build_perception_stack,
-    )
-
-
-def _base_game_config(
-    *,
-    max_episodes: int,
-    frames_per_episode: int,
-    telemetry_every: int,
-    device: str,
-    dtype: str,
-) -> GameTrainingConfig:
-    return GameTrainingConfig(
-        preprocess=FramePreprocessConfig(
-            out_h=28,
-            out_w=32,
-            motion=True,
-            device=device,
-            dtype=dtype,
-        ),
-        decode=ActionDecodeConfig(
-            mode="bernoulli",
-            threshold=0.25,
-            temperature=0.3,
-            dpad_explore_floor=0.1,
-        ),
-        rstdp=OnlineRSTDPConfig(reward_scale=0.05),
-        noise_amp=0.4,
-        commit_frames=8,
-        max_episodes=max(1, int(max_episodes)),
-        frames_per_episode=max(1, int(frames_per_episode)),
-        telemetry_every=max(0, int(telemetry_every)),
-        checkpoint_every=0,
-        checkpoint_path=None,
-        resume=False,
-        device=device,
-        dtype=dtype,
-    )
-
-
-def _build_perception_stack() -> PerceptionStack:
-    return PerceptionStack(
-        PerceptionStackConfig(
-            retina=RetinaEncoderConfig(out_h=28, out_w=32),
-            features=True,
-            objects=True,
-            motion=True,
-            learn=True,
-        ),
+        encoder_factory=build_smb3_perception_stack,
+        # One launched emulator, reset per genome — not one cold-start per genome.
+        reuse_client=True,
+        eval_repeats=config.eval_repeats,
     )

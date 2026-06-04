@@ -36,6 +36,10 @@ class ActionDecodeConfig:
     epsilon: float = 0.0
     allow_start: bool = False    # keep Start/Select masked during play by default
     allow_select: bool = False
+    # Optional human-like button budget. After d-pad conflicts and Start/Select
+    # masking, keep only the strongest N pressed buttons; useful for preventing
+    # random early policies from spamming every button every frame.
+    max_pressed: int | None = None
     # In the stochastic modes, resolve a Left/Right (or Up/Down) clash by sampling
     # the kept direction in proportion to firing rate, with this additive floor so
     # the weaker direction still gets explored. Without it a random-but-fixed bias
@@ -52,6 +56,9 @@ class ActionDecodeConfig:
             raise ValueError(msg)
         if self.dpad_explore_floor < 0.0:
             msg = "ActionDecodeConfig.dpad_explore_floor must be >= 0"
+            raise ValueError(msg)
+        if self.max_pressed is not None and self.max_pressed < 1:
+            msg = "ActionDecodeConfig.max_pressed must be >= 1 when set"
             raise ValueError(msg)
 
 
@@ -96,6 +103,7 @@ class ActionDecoder:
             bits[_START] = False
         if not cfg.allow_select:
             bits[_SELECT] = False
+        _limit_pressed(bits, rate_list, cfg.max_pressed)
 
         kwargs = {_FIELD[name]: bits[i] for i, name in enumerate(NINTENDO_BUTTONS)}
         return ControllerAction(**kwargs)
@@ -124,3 +132,15 @@ def _resolve_conflict(bits: list[bool], rates: list[float], a: int, b: int) -> N
             bits[b] = False
         else:
             bits[a] = False
+
+
+def _limit_pressed(bits: list[bool], rates: list[float], max_pressed: int | None) -> None:
+    """Keep only the strongest pressed buttons when a button budget is configured."""
+    if max_pressed is None:
+        return
+    pressed = [index for index, bit in enumerate(bits) if bit]
+    if len(pressed) <= max_pressed:
+        return
+    keep = set(sorted(pressed, key=lambda index: rates[index], reverse=True)[:max_pressed])
+    for index in pressed:
+        bits[index] = index in keep

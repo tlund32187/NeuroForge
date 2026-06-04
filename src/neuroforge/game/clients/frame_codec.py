@@ -1,10 +1,12 @@
 """Decode emulator PNG screenshots into raw frame bytes.
 
-BizHawk's reliable Lua capture is a PNG screenshot, so the ``png`` wire format
-carries a complete PNG that this module turns into the row-major ``H×W×C``
-bytes a :class:`~neuroforge.contracts.game.ScreenFrame` expects. The ``raw``
-format bypasses this entirely. Torch/torchvision are imported lazily so the
-rest of the bridge stays dependency-light and importable without them.
+BizHawk's reliable capture APIs produce PNG screenshots. The ``png`` frame
+format carries that PNG either in the normal frame payload or through the
+dedicated screenshot socket, and this module turns it into the row-major
+``H×W×C`` bytes a :class:`~neuroforge.contracts.game.ScreenFrame` expects.
+The ``raw`` format bypasses this entirely. Torch/torchvision are imported
+lazily so the rest of the bridge stays dependency-light and importable without
+them.
 """
 
 from __future__ import annotations

@@ -11,7 +11,8 @@ Frame on the wire::
 
 Message types:
 
-* Lua → Python: ``HELLO`` (JSON geometry), ``FRAME`` (header + raw pixels), ``BYE``.
+* Lua → Python: ``HELLO`` (JSON geometry), ``FRAME`` (header + pixels, or
+  header-only when screenshot bytes arrive on the screenshot socket), ``BYE``.
 * Python → Lua: ``WELCOME`` (JSON ack), ``ACTION`` (button bitmask), ``RESET``, ``CLOSE``.
 
 The action bitmask packs the 8 buttons in :data:`~neuroforge.contracts.game.NINTENDO_BUTTONS`
