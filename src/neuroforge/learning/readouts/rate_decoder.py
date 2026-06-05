@@ -37,8 +37,8 @@ class RateDecoder:
     """Decode spike trains into output values.
 
     Accumulates spikes over a window and decodes:
-    - ``decode_binary(spike_counts)`` â†’ 0 or 1 per neuron
-    - ``decode_rate(spike_counts)`` â†’ firing rate per neuron
+    - ``decode_binary(spike_counts)`` -> 0 or 1 per neuron
+    - ``decode_rate(spike_counts)`` -> firing rate per neuron
     """
 
     def __init__(self, params: RateDecoderParams | None = None) -> None:
@@ -55,7 +55,7 @@ class RateDecoder:
         Returns
         -------
         Tensor:
-            Boolean tensor â€” True if spike_count >= threshold.
+            Boolean tensor - True if spike_count >= threshold.
         """
         return spike_counts >= self.params.threshold
 

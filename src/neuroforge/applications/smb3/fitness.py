@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
@@ -10,6 +13,7 @@ from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEval
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from neuroforge.applications.tasks.game_training import GameTrainingConfig
     from neuroforge.perception.vision.encoding.frame_encoder import IFrameEncoder
 from neuroforge.environments.games.clients.bizhawk.launcher import EmuHawkLauncher
 from neuroforge.environments.games.smb3.adapters.bizhawk_smb3_adapter import (
@@ -21,6 +25,7 @@ from neuroforge.environments.games.smb3.adapters.bizhawk_smb3_adapter import (
     build_smb3_reward_model,
     existing_savestates,
 )
+from neuroforge.environments.games.smb3.episode import SMB3EpisodeConfig
 from neuroforge.environments.games.smb3.rewards import (
     VisionMetricRewardConfig,
     VisionMetricRewardModel,
@@ -66,7 +71,13 @@ class SMB3LiveFitnessConfig:
     connect_timeout_s: float = 60.0
     step_timeout_s: float = 45.0
     launch: bool = True
+    bridge_error_path: str | None = None
     eval_repeats: int = 2       # average N short rollouts/genome to cut fitness noise
+    perf_telemetry: bool = False
+    stall_patience: int = 600
+    min_progress_frames: int = 0
+    min_progress: float = 0.0
+    max_decide_ticks: int = 0
     fitness_progress_scale: float = 100.0
     fitness_survival_scale: float = 1.0
     fitness_durable_progress_weight: float = 1.0
@@ -124,10 +135,34 @@ def build_live_smb3_fitness_evaluator(
         max_episodes=config.max_episodes,
         frames_per_episode=config.frames_per_episode,
         telemetry_every=config.telemetry_every,
+        perf_telemetry=config.perf_telemetry,
         device=config.device,
         dtype=config.dtype,
     )
     savestates = existing_savestates(config.savestate_paths)
+    episode_config = SMB3EpisodeConfig(
+        stall_patience=max(1, int(config.stall_patience)),
+        min_progress_frames=max(0, int(config.min_progress_frames)),
+        min_progress=max(0.0, float(config.min_progress)),
+    )
+    bridge_error_path = config.bridge_error_path or str(
+        Path(tempfile.gettempdir()) / f"neuroforge_bridge_error_{config.port}.log"
+    )
+
+    def _transform_config(
+        base_config: GameTrainingConfig,
+        _genome: object,
+    ) -> GameTrainingConfig:
+        if config.max_decide_ticks <= 0:
+            return base_config
+        decide_ticks = int(getattr(base_config, "decide_ticks", 0))
+        if decide_ticks <= config.max_decide_ticks:
+            return base_config
+        return dataclasses.replace(
+            base_config,
+            decide_ticks=int(config.max_decide_ticks),
+        )
+
     return GameTrainingFitnessEvaluator(
         client_factory=lambda: BizHawkClient(
             BizHawkClientConfig(
@@ -140,6 +175,7 @@ def build_live_smb3_fitness_evaluator(
                 step_timeout_s=config.step_timeout_s,
                 launch=config.launch,
                 transport="socket",
+                bridge_error_path=bridge_error_path,
             ),
             launcher=EmuHawkLauncher(
                 emuhawk_path=config.emuhawk_path,
@@ -152,7 +188,7 @@ def build_live_smb3_fitness_evaluator(
         base_config=base,
         metric_extractor_factory=build_smb3_hud_extractor,
         reward_model_factory=build_smb3_reward_model,
-        episode_manager_factory=build_smb3_episode_manager,
+        episode_manager_factory=lambda: build_smb3_episode_manager(episode_config),
         curriculum_factory=lambda: build_smb3_curriculum(
             savestates,
             advance_threshold=0.9,
@@ -162,6 +198,7 @@ def build_live_smb3_fitness_evaluator(
         # One launched emulator, reset per genome — not one cold-start per genome.
         reuse_client=True,
         eval_repeats=config.eval_repeats,
+        config_transform=_transform_config,
         progress_scale=config.fitness_progress_scale,
         survival_scale=config.fitness_survival_scale,
         durable_progress_weight=config.fitness_durable_progress_weight,

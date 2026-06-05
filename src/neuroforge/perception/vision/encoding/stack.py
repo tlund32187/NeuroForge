@@ -3,12 +3,12 @@
 Composes the bio-perception stages into a single drop-in encoder for the spiking
 policy (it satisfies ``IFrameEncoder``, like ``FramePreprocessor``):
 
-* **A0 retina** â€” palette/brightness/contrast-invariant ON/OFF contrast (always
+* **A0 retina** - palette/brightness/contrast-invariant ON/OFF contrast (always
   computed; it is the substrate for A1);
-* **A1 STDP features** *(opt-in)* â€” competitively-learned local feature maps;
-* **A2 trace-rule object cells** *(opt-in, needs A1)* â€” temporally-bound invariant
+* **A1 STDP features** *(opt-in)* - competitively-learned local feature maps;
+* **A2 trace-rule object cells** *(opt-in, needs A1)* - temporally-bound invariant
   object code;
-* **A3 motion figure-ground** *(opt-in)* â€” scroll-compensated sprite saliency.
+* **A3 motion figure-ground** *(opt-in)* - scroll-compensated sprite saliency.
 
 The learned stages (A1/A2) **train online while encoding** (``learn=True``): each
 frame their unsupervised rules update from what the brain just saw, so perception
@@ -16,7 +16,7 @@ adapts during play. Their weights persist across episodes (continual learning);
 A2's temporal trace and A3's motion reference reset each episode. With everything
 off but A0(+A3) this is identical to the earlier fixed front-end (backward
 compatible). State is serialisable so it can be checkpointed alongside the policy
-â€” essential so a resumed run's policy and perception stay aligned.
+- essential so a resumed run's policy and perception stay aligned.
 """
 
 from __future__ import annotations

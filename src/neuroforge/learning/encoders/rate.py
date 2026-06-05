@@ -7,7 +7,7 @@ For the logic gate task, the encoder maps binary inputs (0 or 1) to
 a constant current drive over a presentation window:
     drive = value * amplitude
 
-This is the simplest encoding: high value â†’ high drive â†’ high spike rate.
+This is the simplest encoding: high value -> high drive -> high spike rate.
 """
 
 from __future__ import annotations

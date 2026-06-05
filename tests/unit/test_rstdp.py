@@ -96,7 +96,7 @@ class TestRSTDPSimulation:
     def test_single_edge_pre_spike_positive_reward(
         self, rule: RSTDPRule, dt: float
     ) -> None:
-        """Pre-spike + positive reward â†’ positive dw."""
+        """Pre-spike + positive reward -> positive dw."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -119,7 +119,7 @@ class TestRSTDPSimulation:
         assert result.new_eligibility.item() == pytest.approx(e_expected)
 
     def test_single_edge_negative_reward(self, rule: RSTDPRule, dt: float) -> None:
-        """Pre-spike + negative reward â†’ negative dw (anti-Hebbian)."""
+        """Pre-spike + negative reward -> negative dw (anti-Hebbian)."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -138,7 +138,7 @@ class TestRSTDPSimulation:
         assert result.dw.item() == pytest.approx(dw_expected)
 
     def test_zero_reward_no_weight_change(self, rule: RSTDPRule, dt: float) -> None:
-        """Zero reward â†’ dw = 0 regardless of spikes."""
+        """Zero reward -> dw = 0 regardless of spikes."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -216,11 +216,11 @@ class TestRSTDPSimulation:
 
         result = rule.step(state, batch, dt)
 
-        # Edge 0: pre=T, post=F â†’ e += a_plus
+        # Edge 0: pre=T, post=F -> e += a_plus
         e0 = rule.predict_eligibility_update(0.0, True, False, dt)
-        # Edge 1: pre=F, post=T â†’ e -= a_minus
+        # Edge 1: pre=F, post=T -> e -= a_minus
         e1 = rule.predict_eligibility_update(0.0, False, True, dt)
-        # Edge 2: pre=T, post=T â†’ e += a_plus - a_minus
+        # Edge 2: pre=T, post=T -> e += a_plus - a_minus
         e2 = rule.predict_eligibility_update(0.0, True, True, dt)
 
         assert result.new_eligibility is not None

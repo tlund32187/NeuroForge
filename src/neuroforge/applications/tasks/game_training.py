@@ -1,4 +1,4 @@
-"""GameTrainingTask â€” play a game and learn from vision-only reward online.
+"""GameTrainingTask - play a game and learn from vision-only reward online.
 
 Closes the loop: a stateful spiking policy (Phase 2) drives the game through the
 :class:`VisionOnlyGameLoop`, the vision-metric reward (Phase 1) scores each
@@ -15,6 +15,7 @@ the same task drives BizHawk live or a scripted client offline/CI.
 from __future__ import annotations
 
 import dataclasses
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -109,6 +110,7 @@ class GameTrainingConfig:
     device: str = "cpu"
     dtype: str = "float32"
     telemetry_every: int = 4
+    perf_telemetry: bool = False
     checkpoint_every: int = 0          # 0 = no periodic checkpoints
     checkpoint_path: str | None = None
 
@@ -150,7 +152,7 @@ class GameTrainingTask(BaseTask):
         self._encoder = encoder
         # Optional injected phenotype builder (n_input -> PolicyNetwork). When set
         # (e.g. an evolved GraphGenome's graph), it replaces the fixed
-        # config-driven build_policy_network â€” that is how invented topologies run.
+        # config-driven build_policy_network - that is how invented topologies run.
         self._network_builder = network_builder
         self._active_encoder: object | None = None
 
@@ -225,6 +227,7 @@ class GameTrainingTask(BaseTask):
             trainer.anchor_current_weights()
         reward_model = self._reward_model or VisionMetricRewardModel(cfg.reward)
         action_energy = ActionEnergyModel(cfg.action_energy) if cfg.action_energy.enabled else None
+        perf_timings: dict[str, float] | None = {} if cfg.perf_telemetry else None
         loop = VisionOnlyGameLoop(
             client=self._client,
             policy=policy,
@@ -232,6 +235,7 @@ class GameTrainingTask(BaseTask):
             reward_model=reward_model,
             episode_manager=self._episode_manager,
             close_client=cfg.close_client,
+            timings=perf_timings,
         )
 
         self._emit(
@@ -263,13 +267,16 @@ class GameTrainingTask(BaseTask):
             ep_button_total = 0
             ep_change_total = 0
             ep_energy_min = cfg.action_energy.capacity
+            ep_termination_reason = ""
             button_counts = {name: 0 for name in NINTENDO_BUTTONS}
+            perf_start = dict(perf_timings) if perf_timings is not None else {}
             if action_energy is not None:
                 action_energy.begin_episode()
             for _ in range(cfg.frames_per_episode):
                 if self._should_stop():
                     stopped = True
                     break
+                frame_started = time.perf_counter()
                 transition = loop.step(current)
                 energy_metrics: dict[str, float | int] = {}
                 reward = transition.reward
@@ -294,7 +301,17 @@ class GameTrainingTask(BaseTask):
                     ep_button_total += len(pressed)
                 for name in transition.action.pressed():
                     button_counts[name] += 1
+                learn_started = time.perf_counter()
                 telemetry = trainer.learn(reward)
+                if perf_timings is not None:
+                    perf_timings["learn_seconds"] = (
+                        perf_timings.get("learn_seconds", 0.0)
+                        + max(0.0, time.perf_counter() - learn_started)
+                    )
+                    perf_timings["frame_seconds"] = (
+                        perf_timings.get("frame_seconds", 0.0)
+                        + max(0.0, time.perf_counter() - frame_started)
+                    )
                 frame_total += 1
                 ep_frames += 1
                 ep_reward += reward
@@ -309,6 +326,7 @@ class GameTrainingTask(BaseTask):
                 self._maybe_checkpoint(trainer, episode, frame_total)
                 current = transition.after
                 if transition.done:
+                    ep_termination_reason = transition.termination_reason or "done"
                     break
             if self._curriculum is not None:
                 self._curriculum.report_episode(ep_max_x)
@@ -327,6 +345,25 @@ class GameTrainingTask(BaseTask):
                     "action_button_mean": ep_button_total / ep_frames if ep_frames else 0.0,
                     "action_change_mean": ep_change_total / ep_frames if ep_frames else 0.0,
                     "action_energy_min": ep_energy_min if action_energy is not None else 0.0,
+                    "termination.death": float(ep_termination_reason == "death"),
+                    "termination.level_clear": float(ep_termination_reason == "level_clear"),
+                    "termination.stall": float(ep_termination_reason == "stall"),
+                    "termination.min_progress": float(
+                        ep_termination_reason == "min_progress"
+                    ),
+                    "termination.truncated": float(ep_termination_reason == "truncated"),
+                    "termination.other": float(
+                        bool(ep_termination_reason)
+                        and ep_termination_reason
+                        not in {
+                            "death",
+                            "level_clear",
+                            "stall",
+                            "min_progress",
+                            "truncated",
+                        }
+                    ),
+                    **_episode_perf_metrics(perf_timings, perf_start, ep_frames),
                     **{
                         f"action_{name.lower()}_frac": count / ep_frames if ep_frames else 0.0
                         for name, count in button_counts.items()
@@ -492,3 +529,21 @@ def _sum_load_summary(load_summary: object, section: str, field: str) -> int:
         if isinstance(value, int):
             total += value
     return total
+
+
+def _episode_perf_metrics(
+    timings: dict[str, float] | None,
+    start: dict[str, float],
+    frames: int,
+) -> dict[str, float]:
+    """Return per-episode timing metrics when perf telemetry is enabled."""
+    if timings is None:
+        return {}
+    denominator = max(1, frames)
+    out: dict[str, float] = {}
+    for key, value in timings.items():
+        delta = max(0.0, float(value) - float(start.get(key, 0.0)))
+        metric = f"perf.{key}"
+        out[metric] = delta
+        out[f"{metric}_per_frame"] = delta / denominator
+    return out

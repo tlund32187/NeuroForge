@@ -12,6 +12,7 @@ population * generations * episodes * frames, plus emulator startup when
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -35,6 +36,7 @@ from neuroforge.neuroevolution import (
     GraphReproduction,
     HyperNEATReproduction,
     InnovationRegistry,
+    ThreadLocalFitnessEvaluatorPool,
     make_graph_seed_population,
     make_hyperneat_seed_population,
     max_connection_innovation,
@@ -54,17 +56,60 @@ FRAMESKIP = env_int("NEUROFORGE_SMB3_FRAMESKIP", 4, min_value=1)
 BIZHAWK_SPEED_PERCENT = env_int("NEUROFORGE_SMB3_SPEED_PERCENT", 400, min_value=1)
 LAUNCH_EMUHAWK = env_bool("NEUROFORGE_SMB3_LAUNCH_EMUHAWK", True)
 
+
+def _resolve_evolve_profile() -> str:
+    profile = os.environ.get("NEUROFORGE_SMB3_EVOLVE_PROFILE", "explore").strip().lower()
+    return profile if profile in {"explore", "validate", "custom"} else "explore"
+
+
+EVOLVE_PROFILE = _resolve_evolve_profile()
+
+_PROFILE_DEFAULTS: dict[str, dict[str, int | float]] = {
+    "explore": {
+        "eval_frames": 900,
+        "eval_repeats": 1,
+        "stall_patience": 240,
+        "min_progress_frames": 240,
+        "min_progress": 0.012,
+        "max_decide_ticks": 16,
+    },
+    "validate": {
+        "eval_frames": 3600,
+        "eval_repeats": 2,
+        "stall_patience": 600,
+        "min_progress_frames": 0,
+        "min_progress": 0.0,
+        "max_decide_ticks": 0,
+    },
+    "custom": {
+        "eval_frames": 3600,
+        "eval_repeats": 2,
+        "stall_patience": 600,
+        "min_progress_frames": 0,
+        "min_progress": 0.0,
+        "max_decide_ticks": 0,
+    },
+}
+_PROFILE = _PROFILE_DEFAULTS[EVOLVE_PROFILE]
+_MAX_LIVE_WORKERS = 4
+
 POPULATION_SIZE = env_int("NEUROFORGE_SMB3_EVOLVE_POPULATION", 32, min_value=2)
 GENERATIONS = env_int("NEUROFORGE_SMB3_EVOLVE_GENERATIONS", 40, min_value=1)
 ELITE_COUNT = env_int("NEUROFORGE_SMB3_EVOLVE_ELITES", 1, min_value=1)
 EVAL_EPISODES = env_int("NEUROFORGE_SMB3_EVOLVE_EVAL_EPISODES", 1, min_value=1)
 EVAL_FRAMES_PER_EPISODE = env_int(
     "NEUROFORGE_SMB3_EVOLVE_EVAL_FRAMES",
-    3600,
+    int(_PROFILE["eval_frames"]),
     min_value=1,
 )
-# Keep live BizHawk at 1 unless each worker owns a separate emulator.
-EVOLUTION_WORKERS = env_int("NEUROFORGE_SMB3_EVOLVE_WORKERS", 1, min_value=1)
+_DEFAULT_EVOLUTION_WORKERS = 2 if LAUNCH_EMUHAWK else 1
+REQUESTED_EVOLUTION_WORKERS = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_WORKERS",
+    _DEFAULT_EVOLUTION_WORKERS,
+    min_value=1,
+)
+EVOLUTION_WORKERS = min(REQUESTED_EVOLUTION_WORKERS, _MAX_LIVE_WORKERS)
+EVOLUTION_WORKER_PORTS = tuple(PORT + idx for idx in range(EVOLUTION_WORKERS))
 EVOLUTION_SEED = env_int("NEUROFORGE_SMB3_EVOLVE_SEED", 1234)
 MUTATION_RATE = env_float("NEUROFORGE_SMB3_EVOLVE_MUTATION_RATE", 0.25, min_value=0.0)
 MUTATION_POWER = env_float("NEUROFORGE_SMB3_EVOLVE_MUTATION_POWER", 0.75, min_value=1e-9)
@@ -73,7 +118,32 @@ SPECIES_THRESHOLD = env_float(
     0.5,
     min_value=1e-9,
 )
-EVAL_REPEATS = env_int("NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS", 2, min_value=1)
+EVAL_REPEATS = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS",
+    int(_PROFILE["eval_repeats"]),
+    min_value=1,
+)
+EVOLVE_STALL_PATIENCE = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_STALL_PATIENCE",
+    int(_PROFILE["stall_patience"]),
+    min_value=1,
+)
+EVOLVE_MIN_PROGRESS_FRAMES = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_MIN_PROGRESS_FRAMES",
+    int(_PROFILE["min_progress_frames"]),
+    min_value=0,
+)
+EVOLVE_MIN_PROGRESS = env_float(
+    "NEUROFORGE_SMB3_EVOLVE_MIN_PROGRESS",
+    float(_PROFILE["min_progress"]),
+    min_value=0.0,
+)
+EVOLVE_MAX_DECIDE_TICKS = env_int(
+    "NEUROFORGE_SMB3_EVOLVE_MAX_DECIDE_TICKS",
+    int(_PROFILE["max_decide_ticks"]),
+    min_value=0,
+)
+PERF_TELEMETRY = env_bool("NEUROFORGE_SMB3_PERF_TELEMETRY", False)
 FITNESS_PROGRESS_SCALE = env_float(
     "NEUROFORGE_SMB3_EVOLVE_PROGRESS_SCALE",
     100.0,
@@ -163,12 +233,13 @@ class _ConsoleMonitor:
         if phase == "start":
             print(f"{prefix} | evaluating | {progress_text}", flush=True)
         elif phase == "complete":
+            timing = self._timing_text(data)
             print(
                 f"{prefix} | "
                 f"fitness={float(data.get('fitness', 0.0)):.3f} | "
                 f"x={float(data.get('max_x_progress', 0.0)):.3f} | "
                 f"reward={float(data.get('reward_mean', 0.0)):+.3f} | "
-                f"{progress_text}",
+                f"{timing}{progress_text}",
                 flush=True,
             )
         elif phase == "error":
@@ -189,6 +260,18 @@ class _ConsoleMonitor:
         if eta:
             text = f"{text} | eta={eta}"
         return text
+
+    def _timing_text(self, data: dict[str, Any]) -> str:
+        if float(data.get("evaluation_cache_hit", 0.0)) >= 1.0:
+            return "cache=hit | "
+        seconds = float(data.get("evaluation_wall_seconds", 0.0))
+        fps = float(data.get("evaluation_fps", 0.0))
+        parts: list[str] = []
+        if seconds > 0.0:
+            parts.append(f"time={_format_duration(seconds)}")
+        if fps > 0.0:
+            parts.append(f"fps={fps:.1f}")
+        return f"{' | '.join(parts)} | " if parts else ""
 
     def _eta(self, done: int, remaining: int) -> str:
         if done <= 0 or remaining <= 0:
@@ -336,6 +419,37 @@ def _innovation_registry_for(checkpoint_path: str) -> InnovationRegistry:
     return InnovationRegistry(start=max_connection_innovation(payloads) + 1)
 
 
+def _build_evaluator_for_worker(
+    live_cfg: SMB3LiveFitnessConfig,
+    *,
+    run_dir: Path,
+    worker_index: int,
+) -> Any:
+    worker_dir = run_dir / "bizhawk"
+    worker_dir.mkdir(parents=True, exist_ok=True)
+    worker_cfg = dataclasses.replace(
+        live_cfg,
+        port=live_cfg.port + worker_index,
+        bridge_error_path=str(worker_dir / f"bridge_error_worker_{worker_index}.log"),
+    )
+    if GENOME_KIND == "hyperneat":
+        def _retina_encoder() -> Any:
+            return RetinaEncoder(
+                RetinaEncoderConfig(
+                    out_h=28,
+                    out_w=32,
+                    device=worker_cfg.device,
+                    dtype=worker_cfg.dtype,
+                ),
+            )
+
+        return build_live_smb3_fitness_evaluator(
+            worker_cfg,
+            encoder_factory=_retina_encoder,
+        )
+    return build_live_smb3_fitness_evaluator(worker_cfg)
+
+
 def main() -> int:
     print("=" * 70)
     print("NeuroForge - SMB3 neuroevolution")
@@ -363,26 +477,26 @@ def main() -> int:
         frames_per_episode=EVAL_FRAMES_PER_EPISODE,
         launch=LAUNCH_EMUHAWK,
         eval_repeats=EVAL_REPEATS,
+        perf_telemetry=PERF_TELEMETRY,
+        stall_patience=EVOLVE_STALL_PATIENCE,
+        min_progress_frames=EVOLVE_MIN_PROGRESS_FRAMES,
+        min_progress=EVOLVE_MIN_PROGRESS,
+        max_decide_ticks=EVOLVE_MAX_DECIDE_TICKS,
         fitness_progress_scale=FITNESS_PROGRESS_SCALE,
         fitness_survival_scale=FITNESS_SURVIVAL_SCALE,
         fitness_durable_progress_weight=FITNESS_DURABLE_PROGRESS_WEIGHT,
     )
-    # HyperNEAT needs a clean retinotopic input grid; pair it with the A0 retina so
-    # the substrate's input coordinates are a true 2-D field. Other kinds keep the
-    # full A0+A1+A2+A3 perception stack.
-    if GENOME_KIND == "hyperneat":
-        def _retina_encoder() -> Any:
-            return RetinaEncoder(
-                RetinaEncoderConfig(
-                    out_h=28, out_w=32, device=live_cfg.device, dtype=live_cfg.dtype,
-                ),
-            )
-
-        evaluator = build_live_smb3_fitness_evaluator(
-            live_cfg, encoder_factory=_retina_encoder,
+    if EVOLUTION_WORKERS > 1:
+        evaluator = ThreadLocalFitnessEvaluatorPool(
+            lambda worker_index: _build_evaluator_for_worker(
+                live_cfg,
+                run_dir=run_dir,
+                worker_index=worker_index,
+            ),
+            max_workers=EVOLUTION_WORKERS,
         )
     else:
-        evaluator = build_live_smb3_fitness_evaluator(live_cfg)
+        evaluator = _build_evaluator_for_worker(live_cfg, run_dir=run_dir, worker_index=0)
     evo_cfg = EvolutionConfig(
         population_size=POPULATION_SIZE,
         generations=GENERATIONS,
@@ -414,8 +528,18 @@ def main() -> int:
         f"frameskip={FRAMESKIP} speed={BIZHAWK_SPEED_PERCENT}%",
     )
     print(
+        f"  profile={EVOLVE_PROFILE} workers={EVOLUTION_WORKERS}"
+        f"/{REQUESTED_EVOLUTION_WORKERS} ports={','.join(str(p) for p in EVOLUTION_WORKER_PORTS)} "
+        f"perf_telemetry={PERF_TELEMETRY}",
+    )
+    print(
         f"  evolution: species_threshold={SPECIES_THRESHOLD:.3f} "
         f"mutation_rate={MUTATION_RATE:.3f} mutation_power={MUTATION_POWER:.3f}",
+    )
+    print(
+        f"  guardrails: stall_patience={EVOLVE_STALL_PATIENCE} "
+        f"min_progress={EVOLVE_MIN_PROGRESS:.4f}@{EVOLVE_MIN_PROGRESS_FRAMES}f "
+        f"max_decide_ticks={EVOLVE_MAX_DECIDE_TICKS or 'off'}",
     )
     print(
         f"  fitness: progress_scale={FITNESS_PROGRESS_SCALE:.1f} "

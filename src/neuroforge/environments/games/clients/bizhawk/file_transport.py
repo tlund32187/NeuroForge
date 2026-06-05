@@ -1,6 +1,6 @@
 """File-based :class:`ITransport` for BizHawk builds without LuaSocket.
 
-Newer EmuHawk uses the NLua engine, which does **not** bundle LuaSocket â€” so
+Newer EmuHawk uses the NLua engine, which does **not** bundle LuaSocket - so
 ``require("socket")`` fails in the Lua side-car. This transport carries the
 exact same framed protocol messages over atomically-renamed files in a scratch
 directory, using only Lua's standard ``io``/``os`` (always available in NLua).
@@ -107,7 +107,7 @@ class FileTransport:
         data = b""
         # Poll until the message file appears AND is readable. On Windows a
         # just-created file can briefly raise PermissionError (AV/indexer holds
-        # a scan lock) â€” that is transient, so we retry rather than fail.
+        # a scan lock) - that is transient, so we retry rather than fail.
         while True:
             try:
                 data = path.read_bytes()

@@ -331,6 +331,8 @@ def _rebind_projection_weights(proj: Projection, weight_matrix: Tensor) -> None:
         delays=topo.delays,
         n_pre=topo.n_pre,
         n_post=topo.n_post,
+        kind="dense",
+        weight_matrix=weight_matrix,
     )
 
 

@@ -1,20 +1,20 @@
-"""Dale's Law enforcement â€” constraining neurons to pure E/I identity.
+"""Dale's Law enforcement - constraining neurons to pure E/I identity.
 
 Dale's Law (Dale's Principle) states that a neuron releases the same
 set of neurotransmitters at all of its synapses.  In simplified SNN
 models this means every outgoing synapse from a given neuron carries
 the same sign:
 
-- **Excitatory** neurons â†’ all outgoing weights â‰¥ 0
-- **Inhibitory** neurons â†’ all outgoing weights â‰¤ 0
+- **Excitatory** neurons -> all outgoing weights >= 0
+- **Inhibitory** neurons -> all outgoing weights <= 0
 
 Implementation uses an absolute-value reparameterization::
 
-    w_eff = |w_raw| Ã— sign_mask
+    w_eff = |w_raw| x sign_mask
 
 so that optimisers (gradient descent, R-STDP) operate on unconstrained
 raw weights while the effective weights always satisfy the constraint.
-Gradients flow through ``|Â·|`` via the ``sign()`` subgradient.
+Gradients flow through ``|*|`` via the ``sign()`` subgradient.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def make_dale_mask(
     n_excitatory:
         Number of excitatory neurons (sign = +1).
     n_inhibitory:
-        Number of inhibitory neurons (sign = âˆ’1).
+        Number of inhibitory neurons (sign = -1).
     device:
         Torch device string.
     dtype:
@@ -109,7 +109,7 @@ def make_dale_mask(
 
 
 def apply_dales_constraint(raw_weights: Any, signs: Any) -> Any:
-    """Apply Dale's Law via ``|w| Ã— sign`` reparameterization.
+    """Apply Dale's Law via ``|w| x sign`` reparameterization.
 
     Parameters
     ----------
@@ -122,7 +122,7 @@ def apply_dales_constraint(raw_weights: Any, signs: Any) -> Any:
     Returns
     -------
     Tensor:
-        Effective weights ``|raw_weights| Ã— signs`` that satisfy
+        Effective weights ``|raw_weights| x signs`` that satisfy
         Dale's constraint.
     """
     from neuroforge.kernel.torch_utils import require_torch

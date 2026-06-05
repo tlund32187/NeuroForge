@@ -1,7 +1,7 @@
 """Unit tests for the monitor infrastructure.
 
 Tests cover: EventBus, SpikeMonitor, VoltageMonitor, WeightMonitor,
-TrainingMonitor â€” all using math-predictive assertions where applicable.
+TrainingMonitor - all using math-predictive assertions where applicable.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ class TestTrainingMonitor:
         mon = TrainingMonitor()
         mon.on_event(_make_event(EventTopic.TRAINING_START, data={"gate": "AND"}))
 
-        # 3 trials for pattern (1, 1): 2 correct, 1 wrong â†’ 66.67%
+        # 3 trials for pattern (1, 1): 2 correct, 1 wrong -> 66.67%
         for i, correct in enumerate([True, True, False]):
             mon.on_event(_make_event(
                 EventTopic.TRAINING_TRIAL, step=i,
@@ -292,7 +292,7 @@ class TestTrainingMonitor:
         snap = mon.snapshot()
         entry = snap["truth_table"]["(1, 1)"]
         assert entry["total_count"] == 3
-        # 2/3 â‰ˆ 0.6667
+        # 2/3 approx 0.6667
         assert abs(entry["confidence"] - 2 / 3) < 1e-4
 
     def test_end_event_sets_converged(self) -> None:

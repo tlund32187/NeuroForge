@@ -1,10 +1,10 @@
 # pyright: basic, reportMissingImports=false
 """Dashboard ``/api/train`` dispatch tests.
 
-These lock in the gateâ†’handler routing that replaced the former if/elif chain
+These lock in the gate->handler routing that replaced the former if/elif chain
 in :func:
 euroforge.interfaces.dashboard.server._handle_train`. Real training is faked so
-the test is fast and deterministic â€” we only assert that the correct branch
+the test is fast and deterministic - we only assert that the correct branch
 ran and emitted a sensible ``run_end`` event.
 """
 

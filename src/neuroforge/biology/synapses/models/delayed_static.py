@@ -49,6 +49,10 @@ class DelayedStaticSynapseModel:
         del device, dtype
         torch = require_torch()
 
+        if topology.weight_matrix is not None:
+            msg = "DelayedStaticSynapseModel requires sparse edge topology"
+            raise ValueError(msg)
+
         weights = topology.weights
         delays = topology.delays.to(dtype=torch.int64)
         pre_idx = topology.pre_idx.to(dtype=torch.int64)
@@ -139,41 +143,25 @@ class DelayedStaticSynapseModel:
             )
             raise NotImplementedError(msg)
 
+        from neuroforge.biology.synapses.operators.delayed_sparse_static import (
+            delayed_sparse_static_step,
+        )
+
         ring = state["ring"]
         head = int(state["head"].item())
         ring_len = int(ring.shape[0])
 
-        pre_spikes = inputs.pre_spikes
-        edge_order = state["edge_order"]
-        pre_idx_s = state["pre_idx_s"]
-        post_idx_s = state["post_idx_s"]
-        delay_vals = state["delay_vals"]
-        delay_ptr = state["delay_ptr"]
-        weights_s = topology.weights[edge_order]
-
-        n_segments = int(delay_vals.numel())
-        for seg_i in range(n_segments):
-            start = int(delay_ptr[seg_i].item())
-            end = int(delay_ptr[seg_i + 1].item())
-            if end <= start:
-                continue
-
-            seg_pre = pre_idx_s[start:end]
-            seg_post = post_idx_s[start:end]
-            seg_weights = weights_s[start:end]
-            seg_spikes = pre_spikes[seg_pre]
-
-            if seg_spikes.dtype == torch.bool:
-                contrib = torch.where(seg_spikes, seg_weights, torch.zeros_like(seg_weights))
-            else:
-                contrib = seg_weights * seg_spikes.to(seg_weights.dtype)
-
-            delay_steps = int(delay_vals[seg_i].item())
-            slot = (head + delay_steps) % ring_len
-            ring[slot].scatter_add_(0, seg_post, contrib)
-
-        out = ring[head].clone()
-        ring[head].zero_()
+        out = delayed_sparse_static_step(
+            ring=ring,
+            head=head,
+            pre_spikes=inputs.pre_spikes,
+            edge_order=state["edge_order"],
+            pre_idx_s=state["pre_idx_s"],
+            post_idx_s=state["post_idx_s"],
+            delay_vals=state["delay_vals"],
+            delay_ptr=state["delay_ptr"],
+            weights=topology.weights,
+        )
         state["head"] = torch.tensor(
             (head + 1) % ring_len,
             dtype=torch.int64,

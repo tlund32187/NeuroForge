@@ -10,9 +10,9 @@ Eligibility trace update (simplified one-factor trace):
     e(t+1) = e(t) * decay + (pre_spike * A_plus - post_spike * A_minus)
 
 Where:
-    decay = exp(-dt / tau_e)    â€” trace decay per time step
-    A_plus                      â€” potentiation amplitude (preâ†’post correlation)
-    A_minus                     â€” depression amplitude (postâ†’pre anti-correlation)
+    decay = exp(-dt / tau_e)    - trace decay per time step
+    A_plus                      - potentiation amplitude (pre->post correlation)
+    A_minus                     - depression amplitude (post->pre anti-correlation)
 
 Weight clamping ensures weights stay in [w_min, w_max].
 

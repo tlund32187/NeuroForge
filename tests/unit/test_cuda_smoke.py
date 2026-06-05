@@ -1,5 +1,5 @@
 # pyright: basic, reportMissingImports=false
-"""CUDA smoke tests â€” skipped automatically on CPU-only systems.
+"""CUDA smoke tests - skipped automatically on CPU-only systems.
 
 Run explicitly with::
 
@@ -21,7 +21,7 @@ class TestCudaEngine:
     """Verify that CoreEngine runs on CUDA and tensors remain on-device."""
 
     def test_engine_step_on_cuda(self) -> None:
-        """Build a tiny 2â†’1 engine on cuda, step it, and assert device."""
+        """Build a tiny 2->1 engine on cuda, step it, and assert device."""
         from neuroforge.biology.compartments.types import Compartment
         from neuroforge.biology.neurons.models.lif.model import LIFModel
         from neuroforge.biology.neurons.models.lif.params import LIFParams

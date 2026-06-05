@@ -223,3 +223,33 @@ def test_bizhawk_bridge_imports_do_not_depend_on_game_or_app_layers() -> None:
             )
 
     assert offenders == []
+
+
+@pytest.mark.unit
+def test_neuroevolution_imports_do_not_depend_on_smb3_bizhawk_or_interfaces() -> None:
+    disallowed_prefixes = (
+        "neuroforge.applications.smb3",
+        "neuroforge.environments.games.clients.bizhawk",
+        "neuroforge.environments.games.smb3",
+        "neuroforge.interfaces",
+        "neuroforge.observability",
+    )
+    root = _repo_root() / "src" / "neuroforge" / "neuroevolution"
+    offenders: list[str] = []
+
+    for path in _python_files(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                names = [node.module]
+            else:
+                continue
+            offenders.extend(
+                f"{path}:{name}"
+                for name in names
+                if any(name.startswith(prefix) for prefix in disallowed_prefixes)
+            )
+
+    assert offenders == []

@@ -3,15 +3,15 @@
 Builds on A0's ON/OFF contrast ([[retina]]). A bank of feature neurons each owns
 a small receptive field over the contrast map. Shown a patch, they compete via
 lateral inhibition (winner-take-all) and only the winner learns, by an
-STDP-derived rule â€” so a set of *differentiated* local feature detectors
+STDP-derived rule - so a set of *differentiated* local feature detectors
 (oriented edges, corners, sprite-parts, block/pipe textures) emerges with NO
 labels and NO prepopulated shapes.
 
 Spike-timing grounding (rank-order STDP, Masquelier & Thorpe 2007): stronger
 contrast => earlier spike; a feature neuron's membrane sums the weights of the
 inputs that have spiked so far, so the (norm-corrected) matched-filter response
-``weightsÂ·patch`` predicts which neuron reaches threshold first. That
-first-to-fire neuron wins, inhibits the rest, and undergoes STDP â€” synapses whose
+``weights*patch`` predicts which neuron reaches threshold first. That
+first-to-fire neuron wins, inhibits the rest, and undergoes STDP - synapses whose
 input spiked *before* it fired (high contrast) are potentiated, the rest
 depressed (``a_minus < a_plus``). A win-frequency "conscience" (homeostasis)
 keeps every feature in use, so there are no dead or runaway-dominant units.
@@ -178,7 +178,7 @@ class STDPFeatureLayer:
         if self._cfg.conscience <= 0.0 or self._total_wins <= 0.0:
             return resp
         # "Conscience": penalise features that win more than their fair share, so
-        # under-used features get a chance â€” homeostasis against dead/dominant units.
+        # under-used features get a chance - homeostasis against dead/dominant units.
         freq = self._win_count / self._total_wins
         bias = self._cfg.conscience * (freq - 1.0 / self._cfg.n_features)
         return resp - bias.unsqueeze(0)

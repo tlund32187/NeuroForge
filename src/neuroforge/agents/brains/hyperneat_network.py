@@ -77,7 +77,7 @@ def build_hyperneat_policy_network(
     for layer, size in sizes.items():
         engine.add_population(Population(layer, _lif(), size))
 
-    # Dale signs: input excitatory, hidden split E/I â€” reuse the shared builder so the
+    # Dale signs: input excitatory, hidden split E/I - reuse the shared builder so the
     # sign convention matches the hand-built policy network exactly (DRY).
     n_inhibitory = round(_DEFAULT_INHIBITORY_FRAC * n_hidden)
     dale = build_dale_signs(n_input, n_hidden, n_inhibitory, dev, tdt, torch)
@@ -95,7 +95,7 @@ def build_hyperneat_policy_network(
         out = genome.cppn.query(features, torch=torch)           # [P, n_out], tanh-bounded
         raw = out[:, weight_idx]                                 # [-1, 1] connection weight
         # Locality: prune the sub-threshold band, and (if LEO is on) any link the
-        # expression output switches off â€” yielding sparse, localized receptive fields.
+        # expression output switches off - yielding sparse, localized receptive fields.
         keep = raw.abs() >= threshold
         if has_leo:
             keep = keep & (out[:, expression_idx] > 0.0)

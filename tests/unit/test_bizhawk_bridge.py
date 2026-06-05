@@ -333,7 +333,7 @@ def test_bizhawk_client_is_game_client() -> None:
 @pytest.mark.unit
 def test_client_over_real_socket_loopback() -> None:
     a, b = socket.socketpair()
-    w, h, c = 300, 300, 1  # 90_000 bytes > 64 KiB â†’ forces recv-buffer growth
+    w, h, c = 300, 300, 1  # 90_000 bytes > 64 KiB -> forces recv-buffer growth
     captured: dict[str, object] = {}
     errors: list[BaseException] = []
 
@@ -457,7 +457,7 @@ def test_png_frame_decoded_by_client() -> None:
     image = torch.arange(c * h * w, dtype=torch.uint8).reshape(c, h, w)
     png_bytes = bytes(torchvision_io.encode_png(image).numpy().tobytes())
 
-    # Direct codec round-trip: PNG â†’ row-major HWC bytes.
+    # Direct codec round-trip: PNG -> row-major HWC bytes.
     raw = decode_png_to_raw(png_bytes, width=w, height=h, channels=c)
     expected = bytes(image.permute(1, 2, 0).contiguous().flatten().tolist())
     assert raw == expected

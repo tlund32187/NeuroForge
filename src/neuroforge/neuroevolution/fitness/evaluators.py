@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import queue
+import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from neuroforge.contracts.applications.evolution import FitnessResult, IGenome
+from neuroforge.contracts.applications.evolution import (
+    FitnessResult,
+    IFitnessEvaluator,
+    IGenome,
+)
 from neuroforge.messaging.bus import EventBus
 
 if TYPE_CHECKING:
@@ -22,7 +29,11 @@ if TYPE_CHECKING:
     )
     from neuroforge.perception.vision.encoding.frame_encoder import IFrameEncoder
 
-__all__ = ["CallableFitnessEvaluator", "GameTrainingFitnessEvaluator"]
+__all__ = [
+    "CallableFitnessEvaluator",
+    "GameTrainingFitnessEvaluator",
+    "ThreadLocalFitnessEvaluatorPool",
+]
 
 
 @dataclass(slots=True)
@@ -37,6 +48,77 @@ class CallableFitnessEvaluator:
         if isinstance(result, FitnessResult):
             return result
         return FitnessResult(fitness=float(result))
+
+
+class ThreadLocalFitnessEvaluatorPool:
+    """Lease one evaluator per concurrent worker and keep them reusable.
+
+    The wrapper is generic: callers provide a ``worker_index -> evaluator``
+    factory, so reusable neuroevolution stays independent of SMB3/BizHawk while
+    live SMB3 can assign one emulator port to each worker.
+    """
+
+    def __init__(
+        self,
+        factory: Callable[[int], IFitnessEvaluator],
+        *,
+        max_workers: int,
+    ) -> None:
+        if max_workers < 1:
+            msg = "ThreadLocalFitnessEvaluatorPool.max_workers must be >= 1"
+            raise ValueError(msg)
+        self._factory = factory
+        self._max_workers = int(max_workers)
+        self._available: queue.LifoQueue[IFitnessEvaluator] = queue.LifoQueue()
+        self._created: list[IFitnessEvaluator] = []
+        self._lock = threading.Lock()
+
+    @property
+    def max_workers(self) -> int:
+        """Maximum number of worker evaluators this pool will create."""
+        return self._max_workers
+
+    @property
+    def created_count(self) -> int:
+        """Number of evaluators created so far."""
+        with self._lock:
+            return len(self._created)
+
+    def evaluate(self, genome: IGenome) -> FitnessResult:
+        """Evaluate *genome* with an exclusive worker evaluator."""
+        evaluator = self._acquire()
+        try:
+            return evaluator.evaluate(genome)
+        finally:
+            self._available.put(evaluator)
+
+    def close(self) -> None:
+        """Close every evaluator that exposes a close hook."""
+        with self._lock:
+            created = tuple(self._created)
+            self._created.clear()
+        while True:
+            try:
+                self._available.get_nowait()
+            except queue.Empty:
+                break
+        for evaluator in created:
+            close = getattr(evaluator, "close", None)
+            if callable(close):
+                close()
+
+    def _acquire(self) -> IFitnessEvaluator:
+        try:
+            return self._available.get_nowait()
+        except queue.Empty:
+            pass
+        with self._lock:
+            worker_index = len(self._created)
+            if worker_index < self._max_workers:
+                evaluator = self._factory(worker_index)
+                self._created.append(evaluator)
+                return evaluator
+        return self._available.get()
 
 
 class _TrialCollector:
@@ -80,6 +162,9 @@ class GameTrainingFitnessEvaluator:
         encoder_factory: Callable[[], IFrameEncoder] | None = None,
         eval_repeats: int = 1,
         reuse_client: bool = False,
+        config_transform: (
+            Callable[[GameTrainingConfig, IGenome], GameTrainingConfig] | None
+        ) = None,
         progress_scale: float = 100.0,
         survival_scale: float = 0.0,
         durable_progress_weight: float = 0.0,
@@ -95,9 +180,10 @@ class GameTrainingFitnessEvaluator:
         self._curriculum_factory = curriculum_factory
         self._encoder_factory = encoder_factory
         self._eval_repeats = int(eval_repeats)
+        self._config_transform = config_transform
         # reuse_client keeps one client (e.g. a single launched emulator) alive
         # across every genome/rollout instead of cold-starting one per evaluation
-        # â€” the fix for the per-genome emulator-launch tax. Call close() at the end.
+        # - the fix for the per-genome emulator-launch tax. Call close() at the end.
         self._reuse_client = bool(reuse_client)
         self._shared_client: IGameClient | None = None
         self._progress_scale = float(progress_scale)
@@ -130,12 +216,23 @@ class GameTrainingFitnessEvaluator:
             msg = "GameTrainingFitnessEvaluator requires a policy/graph genome"
             raise TypeError(msg)
 
+        started = time.perf_counter()
         base_seed = _stable_genome_seed(genome)
         rollouts = [
             self._run_once(genome, seed=base_seed + repeat)
             for repeat in range(self._eval_repeats)
         ]
-        return _average_results(rollouts)
+        result = _average_results(rollouts)
+        elapsed = time.perf_counter() - started
+        return dataclasses.replace(
+            result,
+            metrics={
+                **result.metrics,
+                "evaluation_wall_seconds": elapsed,
+                "evaluation_repeats": float(self._eval_repeats),
+                "evaluation_cache_hit": 0.0,
+            },
+        )
 
     def _run_once(self, genome: Any, *, seed: int) -> FitnessResult:
         """Run one game-training rollout and score it."""
@@ -147,6 +244,9 @@ class GameTrainingFitnessEvaluator:
         bus.subscribe(EventTopic.TRAINING_TRIAL, collector)
 
         config = genome.to_game_training_config(base=self._base_config, seed=seed)
+        genome_decide_ticks = _genome_value(genome, "decide_ticks")
+        if self._config_transform is not None:
+            config = self._config_transform(config, genome)
         # A reused client is borrowed: the per-genome task must not close it.
         config = dataclasses.replace(config, close_client=not self._reuse_client)
         # A structural genome supplies its own compiled phenotype; a hyperparameter
@@ -172,7 +272,9 @@ class GameTrainingFitnessEvaluator:
             curriculum=self._curriculum_factory() if self._curriculum_factory else None,
             encoder=self._encoder_factory() if self._encoder_factory else None,
         )
+        started = time.perf_counter()
         result = task.run()
+        elapsed = time.perf_counter() - started
         reward_means = [trial.get("reward_mean", 0.0) for trial in collector.trials]
         max_x = max((trial.get("max_x_progress", 0.0) for trial in collector.trials), default=0.0)
         reward_mean = sum(reward_means) / max(1, len(reward_means))
@@ -191,22 +293,16 @@ class GameTrainingFitnessEvaluator:
             "fitness_survival_score": survival_score,
             "fitness_durable_progress_bonus": durable_progress_bonus,
             "survival_frac": survival_frac,
+            "rollout_wall_seconds": elapsed,
+            "rollout_fps": result.frames / elapsed if elapsed > 0.0 else 0.0,
+            "effective_decide_ticks": float(config.decide_ticks),
             **_mean_trial_metrics(
                 collector.trials,
-                keys=(
-                    "reward_action_energy_sum",
-                    "action_button_mean",
-                    "action_change_mean",
-                    "action_energy_min",
-                    "action_up_frac",
-                    "action_down_frac",
-                    "action_left_frac",
-                    "action_right_frac",
-                    "action_a_frac",
-                    "action_b_frac",
-                ),
+                keys=_numeric_trial_keys(collector.trials),
             ),
         }
+        if genome_decide_ticks is not None:
+            metrics["genome_decide_ticks"] = genome_decide_ticks
         return FitnessResult(
             fitness=fitness,
             metrics=metrics,
@@ -232,10 +328,30 @@ def _mean_trial_metrics(
     return out
 
 
+def _numeric_trial_keys(trials: list[dict[str, float]]) -> tuple[str, ...]:
+    """Return stable numeric trial keys that should be averaged into fitness metrics."""
+    return tuple(sorted({key for trial in trials for key in trial}))
+
+
 def _stable_genome_seed(genome: Any) -> int:
     """Seed derived from gene *content* (not id), so identical genes evaluate alike."""
     digest = hashlib.sha256(genome.content_key().encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % (2**31 - 1)
+
+
+def _genome_value(genome: Any, key: str) -> float | None:
+    value = getattr(genome, "value", None)
+    if not callable(value):
+        return None
+    try:
+        raw = value(key)
+    except KeyError:
+        return None
+    if isinstance(raw, bool):
+        return float(int(raw))
+    if isinstance(raw, int | float):
+        return float(raw)
+    return None
 
 
 def _average_results(results: list[FitnessResult]) -> FitnessResult:
@@ -252,9 +368,13 @@ def _average_results(results: list[FitnessResult]) -> FitnessResult:
     fitness_values = [item.fitness for item in results]
     frame_values = [float(item.frames) for item in results]
     episode_values = [float(item.episodes) for item in results]
+    frames_total = sum(frame_values)
+    episodes_total = sum(episode_values)
     metrics.update(
         {
             "rollout_count": float(count),
+            "rollout_frames_total": frames_total,
+            "rollout_episodes_total": episodes_total,
             "fitness_std": _std(fitness_values),
             "fitness_min": min(fitness_values),
             "fitness_max": max(fitness_values),
@@ -275,8 +395,8 @@ def _average_results(results: list[FitnessResult]) -> FitnessResult:
     return FitnessResult(
         fitness=fitness,
         metrics=metrics,
-        episodes=results[0].episodes,
-        frames=results[0].frames,
+        episodes=int(episodes_total),
+        frames=int(frames_total),
     )
 
 

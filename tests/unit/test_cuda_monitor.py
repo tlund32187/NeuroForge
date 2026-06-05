@@ -1,5 +1,5 @@
 # pyright: basic, reportMissingImports=false
-"""Unit tests for CudaMetricsMonitor â€” works on CPU-only systems."""
+"""Unit tests for CudaMetricsMonitor - works on CPU-only systems."""
 
 from __future__ import annotations
 

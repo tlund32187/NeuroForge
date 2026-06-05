@@ -46,7 +46,7 @@ class SocketTransport:
 
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
-        # Not a TCP socket (e.g. socketpair on some platforms) â€” ignore.
+        # Not a TCP socket (e.g. socketpair on some platforms) - ignore.
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self._buf = bytearray(1 << 16)
@@ -66,7 +66,7 @@ class SocketTransport:
         """Bind/listen on ``host:port``, accept one peer, and wrap it.
 
         ``on_bound(port)`` (if given) is invoked once the server socket is
-        bound but before ``accept`` blocks â€” the seam an emulator launcher uses
+        bound but before ``accept`` blocks - the seam an emulator launcher uses
         to start EmuHawk only after the port is known and listening.
         """
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

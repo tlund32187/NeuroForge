@@ -6,7 +6,7 @@ reading only pixels. Digit fields (score/lives/world) come from a calibrated
 glyph atlas; the always-available ``x_progress`` comes from scroll tracking.
 
 Graceful degradation is deliberate: with no calibrated atlas the digit fields
-read as ``None`` (confidence 0) while ``x_progress`` still works â€” so the
+read as ``None`` (confidence 0) while ``x_progress`` still works - so the
 extractor is safe to wire into the loop before calibration is finished.
 """
 
@@ -39,7 +39,7 @@ _DEFAULT_ATLAS = Path(__file__).parent / "assets" / "smb3" / "atlas.npz"
 class SMB3HudConfig:
     """Configuration for :class:`SMB3HudExtractor`."""
 
-    atlas_path: str | None = None       # None â†’ packaged default atlas
+    atlas_path: str | None = None       # None -> packaged default atlas
     min_confidence: float = 0.82        # digit fields below this read as None
     track_progress: bool = True
     level_length_px: float = 4000.0

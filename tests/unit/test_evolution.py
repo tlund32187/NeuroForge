@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import random
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -25,6 +27,7 @@ from neuroforge.neuroevolution import (
     EvolutionConfig,
     Gene,
     PolicyGenome,
+    ThreadLocalFitnessEvaluatorPool,
     decode_genome,
     find_latest_evolution_checkpoint,
     get_policy_objective,
@@ -348,6 +351,8 @@ def test_evolution_task_improves_toy_objective_and_emits_events(tmp_path: Path) 
     assert "fitness" not in first_start
     assert first_complete["phase"] == "complete"
     assert first_complete["fitness"] > 0.0
+    assert first_complete["evaluation_cache_hit"] == pytest.approx(0.0)
+    assert first_complete["evaluation_wall_seconds"] >= 0.0
     assert first_complete["run_evaluations"] == 1
     assert final_complete["phase"] == "complete"
     assert final_complete["run_evaluations"] == 32
@@ -384,6 +389,48 @@ def test_evolution_task_supports_parallel_evaluation_workers() -> None:
 
     assert result.evaluations == 12
     assert result.best_genome is not None
+
+
+@pytest.mark.unit
+def test_thread_local_fitness_evaluator_pool_reuses_worker_evaluators() -> None:
+    created: list[int] = []
+    closed: list[int] = []
+
+    class _WorkerEvaluator:
+        def __init__(self, index: int) -> None:
+            self.index = index
+            created.append(index)
+
+        def evaluate(self, genome: Any) -> FitnessResult:
+            time.sleep(0.01)
+            return FitnessResult(
+                fitness=float(genome.value("n_hidden")) + self.index,
+                metrics={"worker_index": float(self.index)},
+            )
+
+        def close(self) -> None:
+            closed.append(self.index)
+
+    pool = ThreadLocalFitnessEvaluatorPool(
+        lambda worker_index: _WorkerEvaluator(worker_index),
+        max_workers=2,
+    )
+    task = EvolutionTask(
+        EvolutionConfig(
+            population_size=6,
+            generations=2,
+            elite_count=1,
+            max_workers=2,
+            seed=13,
+        ),
+        evaluator=pool,
+    )
+    result = task.run()
+    pool.close()
+
+    assert result.evaluations == 12
+    assert created == [0, 1]
+    assert sorted(closed) == [0, 1]
 
 
 @pytest.mark.unit
@@ -520,9 +567,45 @@ def test_evaluator_reuses_one_client_across_genomes_when_requested() -> None:
 
     assert created["count"] == 1  # one client served all genomes/rollouts
     assert result.metrics["rollout_count"] == pytest.approx(2.0)
+    assert result.metrics["rollout_frames_total"] == pytest.approx(8.0)
+    assert result.frames == 8
+    assert result.episodes == 2
     assert "fitness_std" in result.metrics
     assert "max_x_progress_std" in result.metrics
     assert "survival_frac" in result.metrics
+
+
+@pytest.mark.unit
+def test_game_training_evaluator_config_transform_clamps_decide_ticks() -> None:
+    from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+    from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
+    from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
+
+    genome = PolicyGenome.seed("g0", generation=0, randomise=False)
+
+    def clamp(config: GameTrainingConfig, _genome: object) -> GameTrainingConfig:
+        return dataclasses.replace(config, decide_ticks=min(config.decide_ticks, 5))
+
+    evaluator = GameTrainingFitnessEvaluator(
+        client_factory=lambda: ScriptedGameClient(width=12, height=10, channels=1, max_steps=3),
+        base_config=GameTrainingConfig(
+            preprocess=FramePreprocessConfig(out_h=10, out_w=10, motion=False),
+            n_hidden=16,
+            motor_per_button=1,
+            input_fanin=8,
+            decide_ticks=3,
+            max_episodes=1,
+            frames_per_episode=3,
+            telemetry_every=0,
+        ),
+        config_transform=clamp,
+    )
+
+    result = evaluator.evaluate(genome)
+
+    assert int(genome.value("decide_ticks")) == 12
+    assert result.metrics["genome_decide_ticks"] == pytest.approx(12.0)
+    assert result.metrics["effective_decide_ticks"] == pytest.approx(5.0)
 
 
 @pytest.mark.unit

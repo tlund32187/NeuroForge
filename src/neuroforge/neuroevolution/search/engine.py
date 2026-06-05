@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import random
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -384,14 +385,20 @@ class EvolutionEngine:
                 genome=genome,
                 completed_count=_completed_count(),
             )
+            started = time.perf_counter()
             cached = self._fitness_cache.get(_content_key(genome))
             if cached is not None:
+                progress_result = _with_evaluation_metrics(
+                    cached,
+                    wall_seconds=time.perf_counter() - started,
+                    cache_hit=True,
+                )
                 _publish_progress(
                     phase="complete",
                     index=index,
                     genome=genome,
                     completed_count=_mark_completed(),
-                    result=cached,
+                    result=progress_result,
                 )
                 return index, cached
             try:
@@ -405,12 +412,17 @@ class EvolutionEngine:
                     error=str(exc),
                 )
                 raise
+            progress_result = _with_evaluation_metrics(
+                result,
+                wall_seconds=time.perf_counter() - started,
+                cache_hit=False,
+            )
             _publish_progress(
                 phase="complete",
                 index=index,
                 genome=genome,
                 completed_count=_mark_completed(),
-                result=result,
+                result=progress_result,
             )
             return index, result
 
@@ -587,3 +599,23 @@ def _complete_results(results: list[FitnessResult | None]) -> list[FitnessResult
         msg = f"missing fitness results for population index(es): {missing}"
         raise RuntimeError(msg)
     return [result for result in results if result is not None]
+
+
+def _with_evaluation_metrics(
+    result: FitnessResult,
+    *,
+    wall_seconds: float,
+    cache_hit: bool,
+) -> FitnessResult:
+    metrics = dict(result.metrics)
+    metrics["evaluation_wall_seconds"] = float(max(0.0, wall_seconds))
+    metrics["evaluation_cache_hit"] = 1.0 if cache_hit else 0.0
+    frames = max(0, int(result.frames))
+    if wall_seconds > 0.0 and frames > 0:
+        metrics["evaluation_fps"] = frames / wall_seconds
+    return FitnessResult(
+        fitness=result.fitness,
+        metrics=metrics,
+        episodes=result.episodes,
+        frames=result.frames,
+    )

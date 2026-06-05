@@ -3,7 +3,7 @@
 Verifies:
 - ``DalesMask`` creation and properties
 - ``apply_dales_constraint`` produces correctly signed effective weights
-- Gradient flow through the ``|w| Ã— sign`` reparameterization
+- Gradient flow through the ``|w| x sign`` reparameterization
 - Sign constraint holds under optimiser updates
 """
 
@@ -67,14 +67,14 @@ class TestMakeDaleMask:
         assert (excitatory_mask.signs == 1.0).all()
 
     def test_all_inhibitory(self, inhibitory_mask: DalesMask) -> None:
-        """All-I mask: signs are all âˆ’1."""
+        """All-I mask: signs are all -1."""
         assert inhibitory_mask.size == 3
         assert inhibitory_mask.n_excitatory == 0
         assert inhibitory_mask.n_inhibitory == 3
         assert (inhibitory_mask.signs == -1.0).all()
 
     def test_mixed_mask(self, mixed_mask: DalesMask) -> None:
-        """Mixed E/I mask: first 3 = +1, last 2 = âˆ’1."""
+        """Mixed E/I mask: first 3 = +1, last 2 = -1."""
         assert mixed_mask.size == 5
         assert mixed_mask.n_excitatory == 3
         assert mixed_mask.n_inhibitory == 2
@@ -96,10 +96,10 @@ class TestMakeDaleMask:
 
 
 class TestApplyDalesConstraint:
-    """Effective weight computation via |w| Ã— sign."""
+    """Effective weight computation via |w| x sign."""
 
     def test_excitatory_positive(self) -> None:
-        """Excitatory constraint: all effective weights â‰¥ 0."""
+        """Excitatory constraint: all effective weights >= 0."""
         w_raw = torch.tensor([-0.5, 0.3, -0.1, 0.7], dtype=torch.float64)
         signs = torch.ones(4, dtype=torch.float64)
         w_eff = apply_dales_constraint(w_raw, signs)
@@ -108,7 +108,7 @@ class TestApplyDalesConstraint:
         assert (w_eff >= 0).all()
 
     def test_inhibitory_negative(self) -> None:
-        """Inhibitory constraint: all effective weights â‰¤ 0."""
+        """Inhibitory constraint: all effective weights <= 0."""
         w_raw = torch.tensor([0.5, -0.3, 0.1], dtype=torch.float64)
         signs = -torch.ones(3, dtype=torch.float64)
         w_eff = apply_dales_constraint(w_raw, signs)
@@ -117,12 +117,12 @@ class TestApplyDalesConstraint:
         assert (w_eff <= 0).all()
 
     def test_mixed_constraint(self, mixed_mask: DalesMask) -> None:
-        """Mixed E/I: first 3 â‰¥ 0, last 2 â‰¤ 0."""
+        """Mixed E/I: first 3 >= 0, last 2 <= 0."""
         w_raw = torch.tensor([-0.2, 0.4, -0.6, 0.8, -0.1], dtype=torch.float64)
         w_eff = apply_dales_constraint(w_raw, mixed_mask.signs)
-        # Excitatory (indices 0-2): |w| Ã— (+1)
+        # Excitatory (indices 0-2): |w| x (+1)
         assert (w_eff[:3] >= 0).all()
-        # Inhibitory (indices 3-4): |w| Ã— (âˆ’1)
+        # Inhibitory (indices 3-4): |w| x (-1)
         assert (w_eff[3:] <= 0).all()
 
     def test_zero_weight_stays_zero(self) -> None:
@@ -133,7 +133,7 @@ class TestApplyDalesConstraint:
         assert torch.equal(w_eff, torch.zeros(2, dtype=torch.float64))
 
     def test_broadcasting_2d(self) -> None:
-        """2-D weights with per-row signs (inputâ†’hidden)."""
+        """2-D weights with per-row signs (input->hidden)."""
         # 2 input neurons, 3 hidden neurons.
         w_raw = torch.tensor(
             [[-0.1, 0.2, -0.3], [0.4, -0.5, 0.6]], dtype=torch.float64
@@ -141,7 +141,7 @@ class TestApplyDalesConstraint:
         # Both inputs excitatory: signs = [+1, +1], unsqueeze to [2, 1].
         signs = torch.tensor([1.0, 1.0], dtype=torch.float64).unsqueeze(1)
         w_eff = apply_dales_constraint(w_raw, signs)
-        assert (w_eff >= 0).all(), "All excitatory â†’ effective weights â‰¥ 0"
+        assert (w_eff >= 0).all(), "All excitatory -> effective weights >= 0"
         expected = torch.tensor(
             [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=torch.float64
         )
@@ -152,17 +152,17 @@ class TestApplyDalesConstraint:
 
 
 class TestGradientFlow:
-    """Gradients flow through |w| Ã— sign reparameterization."""
+    """Gradients flow through |w| x sign reparameterization."""
 
     def test_gradient_through_abs(self) -> None:
-        """Gradient of |w| Ã— sign is sign(w) Ã— sign_mask."""
+        """Gradient of |w| x sign is sign(w) x sign_mask."""
         w_raw = torch.tensor([-0.5, 0.3], dtype=torch.float64, requires_grad=True)
         signs = torch.tensor([1.0, -1.0], dtype=torch.float64)
         w_eff = apply_dales_constraint(w_raw, signs)
         loss = w_eff.sum()
         loss.backward()
         assert w_raw.grad is not None
-        # d/dw |w| Ã— s = sign(w) Ã— s
+        # d/dw |w| x s = sign(w) x s
         expected_grad = torch.tensor([-1.0, -1.0], dtype=torch.float64)
         assert torch.allclose(w_raw.grad, expected_grad)
 
@@ -184,8 +184,8 @@ class TestGradientFlow:
 
         # Re-apply constraint and verify signs.
         w_eff2 = apply_dales_constraint(w_raw, signs)
-        assert (w_eff2[:3] >= 0).all(), "Excitatory weights still â‰¥ 0"
-        assert (w_eff2[3:] <= 0).all(), "Inhibitory weights still â‰¤ 0"
+        assert (w_eff2[:3] >= 0).all(), "Excitatory weights still >= 0"
+        assert (w_eff2[3:] <= 0).all(), "Inhibitory weights still <= 0"
 
 
 #
@@ -230,15 +230,15 @@ class TestDalesLawInLogicGates:
         w_ih = result.final_weights["layer_1"]
         w_ho = result.final_weights["layer_2"]
 
-        # Input neurons are excitatory â†’ |w_ih| â‰¥ 0 (trivially true
+        # Input neurons are excitatory -> |w_ih| >= 0 (trivially true
         # for abs values, but verify the reparameterization produces
         # correct effective weights).
         w_ih_eff = torch.abs(w_ih)
         assert (w_ih_eff >= 0).all()
 
-        # Hiddenâ†’output: first 4 E (+), last 2 I (âˆ’).
+        # Hidden->output: first 4 E (+), last 2 I (-).
         dev = str(w_ho.device)
         mask = make_dale_mask(4, 2, device=dev)
         w_ho_eff = apply_dales_constraint(w_ho, mask.signs)
-        assert (w_ho_eff[:4] >= 0).all(), "Excitatory hiddenâ†’output â‰¥ 0"
-        assert (w_ho_eff[4:] <= 0).all(), "Inhibitory hiddenâ†’output â‰¤ 0"
+        assert (w_ho_eff[:4] >= 0).all(), "Excitatory hidden->output >= 0"
+        assert (w_ho_eff[4:] <= 0).all(), "Inhibitory hidden->output <= 0"

@@ -7,7 +7,7 @@ What it does, hands-off:
   4. Saves the first few frames it receives to artifacts/smoke/ as PNGs, so you
      can SEE exactly what the brain sees.
 
-You should NOT need to type any commands: press the Run/â–¶ button on the
+You should NOT need to type any commands: press the Run/play button on the
 "NeuroForge: BizHawk smoke test" configuration in the Run and Debug panel.
 
 If your paths differ from the auto-detected ones below, edit the three values
@@ -33,7 +33,7 @@ from neuroforge.environments.games.smb3.hud import SMB3HudConfig, SMB3HudExtract
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
 ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 3 (USA) (Rev 1).nes"  # noqa: E501
 PORT = 8650
-# MANUAL_MODE=True: the bridge does NOT inject buttons â€” YOU play with the
+# MANUAL_MODE=True: the bridge does NOT inject buttons - YOU play with the
 # keyboard/controller while we record frames + metrics. Most reliable way to
 # reach an in-level state for HUD calibration. Set False to use the auto-demo.
 MANUAL_MODE = True
@@ -111,7 +111,7 @@ def _describe(observation: GameObservation) -> str:
 
 def main() -> int:
     print("=" * 70)
-    print("NeuroForge â€” BizHawk bridge smoke test")
+    print("NeuroForge - BizHawk bridge smoke test")
     print("=" * 70)
     for label, path in (
         ("EmuHawk", EMUHAWK_PATH),
@@ -174,7 +174,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n  Interrupted by user.")
     except BizHawkConnectionError as exc:
-        # The emulator stopped sending frames â€” usually EmuHawk pausing on focus
+        # The emulator stopped sending frames - usually EmuHawk pausing on focus
         # loss, or you closed/stopped it. Not fatal: keep what we captured.
         print(f"\n  Emulator stopped sending frames after {received} frames.")
         print(f"  ({exc})")
@@ -188,9 +188,9 @@ def main() -> int:
     print("\n" + "=" * 70)
     if received > 0:
         print(f"  SUCCESS: received {received} frames; saved {saved} screenshots.")
-        print(f"  Open {OUT_DIR} â€” those PNGs are the brain's view (incl. in-level frames).")
+        print(f"  Open {OUT_DIR} - those PNGs are the brain's view (incl. in-level frames).")
     else:
-        print("  No frames received. See docs/BIZHAWK_SETUP.md â†’ Troubleshooting.")
+        print("  No frames received. See docs/BIZHAWK_SETUP.md -> Troubleshooting.")
     print("=" * 70)
     return 0 if received > 0 else 2
 

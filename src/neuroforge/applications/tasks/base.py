@@ -7,8 +7,8 @@ task; :class:`BaseTask` houses it once so the publish/subscribe glue lives in
 a single place (DRY).
 
 Concrete tasks own their own (differently typed) ``config`` and construction
-logic. They only need to call ``super().__init__(event_bus, stop_check)`` â€”
-or set ``self._bus`` / ``self._stop_check`` directly â€” and then use the
+logic. They only need to call ``super().__init__(event_bus, stop_check)`` -
+or set ``self._bus`` / ``self._stop_check`` directly - and then use the
 ``_emit`` and ``_should_stop`` helpers.
 """
 

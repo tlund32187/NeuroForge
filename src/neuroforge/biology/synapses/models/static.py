@@ -1,13 +1,7 @@
-"""Static synapse model â€” zero-delay, weight-only propagation.
+"""Static synapse model.
 
-For each edge (i, j) in the topology, when pre-neuron i fires the
-post-synaptic current at neuron j receives a contribution of w_ij.
-
-Math:
-    I_post[j] = Î£_{i âˆˆ fired, (i,j) âˆˆ E} w_ij
-
-This is implemented via ``scatter_add`` for O(E) efficiency.
-Delays are ignored in this model (Phase 9+ adds myelinated delays).
+Dense projections use a matrix-backed operator. Sparse projections use an
+edge-list scatter operator.
 """
 
 from __future__ import annotations
@@ -24,11 +18,7 @@ __all__ = ["StaticSynapseModel"]
 
 
 class StaticSynapseModel:
-    """Static synapse model â€” no plasticity, no delays.
-
-    Computes post-synaptic current as the sum of weights of
-    all edges whose pre-synaptic neuron fired.
-    """
+    """Static synapse model with no plasticity and no delay state."""
 
     def __init__(
         self,
@@ -42,16 +32,14 @@ class StaticSynapseModel:
         Parameters
         ----------
         use_active_edge_filter:
-            When ``True``, bool-spike propagation can process only active
-            edges when the active-edge ratio is low.
+            When ``True``, bool-spike sparse propagation can process only
+            active edges when the active-edge ratio is low.
         active_edge_max_fraction:
-            Maximum active-edge ratio allowed for the active-edge fast path.
-            If the ratio is higher, the model falls back to dense masking.
+            Maximum active-edge ratio allowed for the sparse active-edge fast
+            path. If the ratio is higher, the model falls back to dense masking.
         """
         self._use_active_edge_filter = bool(use_active_edge_filter)
         self._active_edge_max_fraction = float(active_edge_max_fraction)
-
-    #
 
     def init_state(
         self,
@@ -59,7 +47,8 @@ class StaticSynapseModel:
         device: str,
         dtype: str,
     ) -> dict[str, Any]:
-        """Static synapse has no internal state â€” return empty dict."""
+        """Static synapse has no internal state."""
+        del topology, device, dtype
         return {}
 
     def step(
@@ -69,81 +58,34 @@ class StaticSynapseModel:
         inputs: SynapseInputs,
         ctx: object,
     ) -> SynapseStepResult:
-        """Propagate pre-synaptic spikes to post-synaptic currents.
+        """Propagate pre-synaptic spikes to post-synaptic currents."""
+        del state, ctx
 
-        Parameters
-        ----------
-        state:
-            Unused (static synapse has no state).
-        topology:
-            Wiring specification.
-        inputs:
-            Pre/post spike boolean tensors.
-        ctx:
-            Step context (unused here).
+        pre_spikes = inputs.pre_spikes
+        if topology.weight_matrix is not None:
+            from neuroforge.biology.synapses.operators.dense_static import dense_static_current
 
-        Returns
-        -------
-        SynapseStepResult:
-            Post-synaptic currents for SOMA compartment.
-        """
-        from neuroforge.kernel.torch_utils import require_torch
-
-        torch = require_torch()
-
-        pre_spikes = inputs.pre_spikes  # [N_pre] bool or float
-        weights = topology.weights  # [E]
-        pre_idx = topology.pre_idx  # [E] int
-        post_idx = topology.post_idx  # [E] int
-        n_post = topology.n_post
-
-        # Mask/scale edges by pre-neuron activation.
-        # Boolean spikes â†’ existing bool-index path.
-        # Float spikes  â†’ multiply weight by spike value (0..1).
-        spike_vals = pre_spikes[pre_idx]  # [E]
-        if spike_vals.dtype == torch.bool:
-            if self._use_active_edge_filter:
-                active_e = spike_vals.nonzero(as_tuple=False).squeeze(1)
-                n_active = int(active_e.numel())
-                if n_active == 0:
-                    post_current = torch.zeros(
-                        n_post,
-                        device=weights.device,
-                        dtype=weights.dtype,
-                    )
-                    return SynapseStepResult(
-                        post_current={Compartment.SOMA: post_current},
-                    )
-                n_edges = int(spike_vals.numel())
-                if n_edges > 0 and (n_active / n_edges) <= self._active_edge_max_fraction:
-                    contrib = weights[active_e]
-                    active_post = post_idx[active_e]
-                    post_current = torch.zeros(
-                        n_post,
-                        device=weights.device,
-                        dtype=weights.dtype,
-                    )
-                    post_current.scatter_add_(0, active_post, contrib)
-                    return SynapseStepResult(
-                        post_current={Compartment.SOMA: post_current},
-                    )
-            contrib = torch.where(spike_vals, weights, torch.zeros_like(weights))
+            post_current = dense_static_current(pre_spikes, topology.weight_matrix)
         else:
-            contrib = weights * spike_vals.to(weights.dtype)
+            from neuroforge.biology.synapses.operators.sparse_static import sparse_static_current
 
-        # Accumulate into post-synaptic current vector
-        post_current = torch.zeros(n_post, device=weights.device, dtype=weights.dtype)
-        post_current.scatter_add_(0, post_idx, contrib)
+            post_current = sparse_static_current(
+                pre_spikes=pre_spikes,
+                pre_idx=topology.pre_idx,
+                post_idx=topology.post_idx,
+                weights=topology.weights,
+                n_post=topology.n_post,
+                use_active_edge_filter=self._use_active_edge_filter,
+                active_edge_max_fraction=self._active_edge_max_fraction,
+            )
 
         return SynapseStepResult(
             post_current={Compartment.SOMA: post_current},
         )
 
     def state_tensors(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Return state tensors (empty for static synapse)."""
+        """Return state tensors."""
         return state
-
-    #
 
     @staticmethod
     def predict_post_current(
@@ -151,25 +93,10 @@ class StaticSynapseModel:
         edges: list[tuple[int, int, float]],
         n_post: int,
     ) -> list[float]:
-        """Analytically compute post-synaptic current.
-
-        Parameters
-        ----------
-        pre_fired:
-            Indices of pre-neurons that fired.
-        edges:
-            List of (pre_idx, post_idx, weight) tuples.
-        n_post:
-            Number of post-synaptic neurons.
-
-        Returns
-        -------
-        list[float]:
-            Expected post-synaptic current for each post-neuron.
-        """
+        """Analytically compute post-synaptic current."""
         result = [0.0] * n_post
         fired_set = set(pre_fired)
-        for pre, post, w in edges:
+        for pre, post, weight in edges:
             if pre in fired_set:
-                result[post] += w
+                result[post] += weight
         return result

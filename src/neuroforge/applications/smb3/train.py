@@ -2,14 +2,14 @@
 
 Wires the whole stack together against the real emulator: BizHawk bridge ->
 SMB3 HUD/scroll reward -> stateful spiking policy -> online R-STDP weight
-updates. Press Run/â–¶ on "NeuroForge: Train SMB3" (or run from a terminal).
+updates. Press Run/play on "NeuroForge: Train SMB3" (or run from a terminal).
 
-PHASE 4 â€” START INSIDE A LEVEL.  Booting from the ROM drops the brain at the
+PHASE 4 - START INSIDE A LEVEL.  Booting from the ROM drops the brain at the
 title/map screens, where there is no reward to learn from (it can only flail).
 So training instead begins from a SAVESTATE placed at the start of a level,
 where the vision reward (forward scroll progress, score, staying alive) is
 dense and learnable. Loading a savestate is an environment reset, not memory
-reading â€” the policy still only ever sees pixels.
+reading - the policy still only ever sees pixels.
 
 ONE-TIME SETUP (create the savestate):
   1. Open EmuHawk, load the SMB3 ROM, and play until Mario is standing at the
@@ -20,7 +20,7 @@ ONE-TIME SETUP (create the savestate):
      many fresh attempts at the same level and learns to make progress.
 
 If the savestate file is missing this still runs (booting the ROM) but prints a
-warning â€” it will not learn much until you create the savestate. Learned
+warning - it will not learn much until you create the savestate. Learned
 weights are checkpointed to artifacts/smb3_policy.pt.
 """
 
@@ -131,7 +131,7 @@ class _ConsoleMonitor:
         elif topic == "run_start":
             for line in resume_status_lines(data.get("resume")):
                 print(f"  {line}")
-            print("  Resumed from checkpoint â€” continuing to learn from prior runs.")
+            print("  Resumed from checkpoint - continuing to learn from prior runs.")
             strength = float(data.get("consolidation_strength", 0.0))
             if data.get("resumed") and strength > 0.0:
                 print(f"  Consolidation anchor enabled (strength={strength:.4g}).")
@@ -152,7 +152,7 @@ def _resolve_savestates() -> tuple[str, ...]:
         print(f"  WARNING: savestate not found: {path}")
     if not present:
         print(
-            "  No savestate available â€” booting from the ROM instead. The brain\n"
+            "  No savestate available - booting from the ROM instead. The brain\n"
             "  will start at the title/map screens (no reward there) and mostly\n"
             "  flail. See ONE-TIME SETUP at the top of this file to create one.",
         )
@@ -182,7 +182,7 @@ etwork_builder`` that compiles its invented topology into the policy.
 
 def main() -> int:
     print("=" * 70)
-    print("NeuroForge â€” SMB3 online R-STDP training (Phase 4: in-level curriculum)")
+    print("NeuroForge - SMB3 online R-STDP training (Phase 4: in-level curriculum)")
     print("=" * 70)
     for label, path in (("EmuHawk", EMUHAWK_PATH), ("ROM", ROM_PATH), ("Lua", str(LUA_SCRIPT))):
         if not Path(path).exists():
@@ -231,7 +231,7 @@ def main() -> int:
         # so without stochastic decoding + a stochastic d-pad tie-break it gets stuck
         # going one way forever and never earns the progress reward for the other.
         # Hold the decoded heading for a window so the brain stops dithering
-        # ("runs in place") and builds run momentum â€” the action-side trace rule.
+        # ("runs in place") and builds run momentum - the action-side trace rule.
         # Larger learning signal so the (rare) forward-progress reward isn't lost.
         max_episodes=MAX_EPISODES,
         frames_per_episode=FRAMES_PER_EPISODE,
@@ -248,11 +248,11 @@ def main() -> int:
     # a hyperparameter champion / no champion leaves this None (build from config).
     network_builder = selection.network_builder
     # Bio-faithful perception front-end (Track A), full stack: A0 retinal contrast
-    # â†’ A1 STDP feature maps â†’ A2 trace-rule object cells, plus A3 motion. A1/A2
+    # -> A1 STDP feature maps -> A2 trace-rule object cells, plus A3 motion. A1/A2
     # learn online while playing and are checkpointed with the policy (so resume
     # stays coherent). The brain now sees learned, invariant features + motion.
     encoder = build_smb3_perception_stack(learn=True)
-    # Reward shaping (starting points â€” tune against the metrics log). Forward
+    # Reward shaping (starting points - tune against the metrics log). Forward
     # progress dominates; idle/stall are gentle nudges (not a swamping per-frame
     # drag), so reward/frame is interpretable and progress stands out.
     reward_model = build_smb3_reward_model()

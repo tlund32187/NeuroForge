@@ -58,7 +58,7 @@ __all__ = [
 MAGIC: bytes = b"NFB1"
 PROTOCOL_VERSION: int = 1
 
-#: ACTION flag bit: do NOT inject the buttons â€” let the human's controller drive
+#: ACTION flag bit: do NOT inject the buttons - let the human's controller drive
 #: (used for passive frame capture / recording human play). The frame is still
 #: advanced and captured; only ``joypad.set`` is skipped on the Lua side.
 ACTION_FLAG_PASSIVE: int = 0x01
@@ -79,11 +79,11 @@ _FRAME_PREFIX_SIZE: int = struct.calcsize(_FRAME_PREFIX_STRUCT)  # 16 bytes
 class MsgType(IntEnum):
     """Wire message type tags."""
 
-    # Lua â†’ Python
+    # Lua -> Python
     HELLO = 1
     FRAME = 2
     BYE = 3
-    # Python â†’ Lua
+    # Python -> Lua
     WELCOME = 16
     ACTION = 17
     RESET = 18
@@ -266,7 +266,7 @@ def encode_reset(savestate: str = "") -> bytes:
     An empty payload means "reboot the core" (a fresh power-on). A non-empty
     payload is a raw UTF-8 savestate **file path**: the Lua side loads it as an
     *environment reset* (like resetting a Gym env to a start state) so the brain
-    can begin inside a level. This is NOT memory reading â€” the policy still only
+    can begin inside a level. This is NOT memory reading - the policy still only
     ever sees pixels. A raw path (not JSON) avoids backslash-escaping pitfalls
     with Windows paths.
     """

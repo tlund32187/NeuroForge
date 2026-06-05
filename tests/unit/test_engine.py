@@ -1,4 +1,4 @@
-"""Tests for the CoreEngine â€” orchestration of populations and projections.
+"""Tests for the CoreEngine - orchestration of populations and projections.
 
 Tests verify that the engine correctly wires neuron populations through
 synaptic projections and produces mathematically predictable results.
@@ -251,7 +251,7 @@ class TestEngineTwoPopulations:
         """Strong inhibitory connection prevents post-neuron from reaching threshold.
 
         We give both pre and post external drive, but the inhibitory synapse
-        from preâ†’post should counteract the post drive.
+        from pre->post should counteract the post drive.
         """
         dt = 1e-3
         lif_params = LIFParams(tau_mem=20e-3, v_thresh=1.0)
@@ -274,7 +274,7 @@ class TestEngineTwoPopulations:
 
         # Drive pre hard (100), post just enough to be near threshold
         drive_pre = torch.tensor([100.0], dtype=torch.float64)
-        # Drive post at 20.0 â€” steady state = 20*0.05/0.04877 â‰ˆ 20.5 >> threshold,
+        # Drive post at 20.0 - steady state = 20*0.05/0.04877 approx 20.5 >> threshold,
         # but inhibition should suppress
         drive_post = torch.tensor([20.0], dtype=torch.float64)
 

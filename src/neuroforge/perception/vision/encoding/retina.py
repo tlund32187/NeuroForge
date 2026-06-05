@@ -7,14 +7,14 @@ mirrors that, and the payoff is invariance to exactly the things that differ
 between SMB3 worlds while structure is preserved:
 
 * **grayscale** drops hue;
-* **center-surround (difference-of-Gaussians)** drops local mean brightness â€”
+* **center-surround (difference-of-Gaussians)** drops local mean brightness -
   it responds to edges/holes/outlines, not absolute luminance;
-* **divisive normalization** drops contrast *magnitude* â€” a low-contrast and a
+* **divisive normalization** drops contrast *magnitude* - a low-contrast and a
   high-contrast rendering of the same shape encode almost identically.
 
 So "a hole is a hole" and "that outline is a sprite" survive a palette change
-(world 1 black â†’ world 2 blue). There are **no labels and no prepopulated sprite
-shapes** â€” the invariance is a pure property of the encoding. The output is a
+(world 1 black -> world 2 blue). There are **no labels and no prepopulated sprite
+shapes** - the invariance is a pure property of the encoding. The output is a
 1-D current drive in the same format as
 :class:`~neuroforge.perception.vision.encoding.frame_preprocess.FramePreprocessor`, so this is a
 drop-in front-end for the spiking policy and the later STDP feature layers (A1+).

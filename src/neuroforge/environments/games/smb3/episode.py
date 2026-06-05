@@ -35,6 +35,8 @@ class SMB3EpisodeConfig:
     stall_patience: int = 600           # frames of no progress (~10s at 60 fps)
     progress_epsilon: float = 1e-4      # min x_progress delta counted as progress
     lives_confidence: float = 0.5       # only trust the lives metric above this
+    min_progress_frames: int = 0        # 0 disables the early poor-progress gate
+    min_progress: float = 0.0
 
 
 class SMB3EpisodeManager:
@@ -44,22 +46,29 @@ class SMB3EpisodeManager:
         self._cfg = config or SMB3EpisodeConfig()
         self._last_lives: int | None = None
         self._stall_frames = 0
+        self._episode_frames = 0
+        self._episode_max_x = 0.0
 
     def begin_episode(self) -> None:
         """Clear per-episode death/stall bookkeeping."""
         self._last_lives = None
         self._stall_frames = 0
+        self._episode_frames = 0
+        self._episode_max_x = 0.0
 
     def should_end(
         self, before: GameObservation, after: GameObservation,
     ) -> EpisodeDecision:
         """Return the termination verdict for one transition."""
         cfg = self._cfg
+        self._episode_frames += 1
 
         if cfg.terminate_on_death and self._died(after):
             return EpisodeDecision(terminated=True, reason="death")
 
         x = after.metrics.x_progress
+        if x is not None:
+            self._episode_max_x = max(self._episode_max_x, float(x))
         if (
             cfg.terminate_on_clear
             and x is not None
@@ -70,6 +79,13 @@ class SMB3EpisodeManager:
         self._update_stall(before, after)
         if cfg.terminate_on_stall and self._stall_frames >= cfg.stall_patience:
             return EpisodeDecision(terminated=True, reason="stall")
+
+        if (
+            cfg.min_progress_frames > 0
+            and self._episode_frames >= cfg.min_progress_frames
+            and self._episode_max_x < cfg.min_progress
+        ):
+            return EpisodeDecision(terminated=True, reason="min_progress")
 
         return EpisodeDecision(terminated=False)
 

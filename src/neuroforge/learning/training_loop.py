@@ -127,8 +127,8 @@ class OnlineRSTDPTrainer:
                 raise ValueError(msg)
             proj = projections[name]
             rule = RSTDPRule(params)
-            n_edges = int(proj.topology.pre_idx.numel())
-            state = rule.init_state(n_edges, device, dtype)
+            n_weights = int(proj.topology.weights.numel())
+            state = rule.init_state(n_weights, device, dtype)
             self._plastic.append(
                 _PlasticProjection(
                     name=name,
@@ -161,7 +161,7 @@ class OnlineRSTDPTrainer:
         """Advance every eligibility trace one tick from current pre/post spikes.
 
         Designed to be the engine's per-tick ``on_tick`` callback. Reward is
-        zero here â€” only the synaptic tag is laid down.
+        zero here - only the synaptic tag is laid down.
         """
         torch = self._torch
         with torch.no_grad():
@@ -171,14 +171,17 @@ class OnlineRSTDPTrainer:
                 if pre_full is None or post_full is None:
                     continue
                 topo = pp.proj.topology
-                batch = LearningBatch(
-                    pre_spikes=pre_full[topo.pre_idx],
-                    post_spikes=post_full[topo.post_idx],
-                    weights=topo.weights,
-                    eligibility=pp.state["eligibility"],
-                    reward=None,
-                )
-                pp.rule.step(pp.state, batch, self._cfg.dt)  # advances state["eligibility"]
+                if topo.weight_matrix is not None:
+                    self._accumulate_dense(pp, pre_full, post_full)
+                else:
+                    batch = LearningBatch(
+                        pre_spikes=pre_full[topo.pre_idx],
+                        post_spikes=post_full[topo.post_idx],
+                        weights=topo.weights,
+                        eligibility=pp.state["eligibility"],
+                        reward=None,
+                    )
+                    pp.rule.step(pp.state, batch, self._cfg.dt)  # advances state["eligibility"]
 
     def learn(self, raw_reward: float) -> dict[str, float]:
         """Convert the surviving eligibility into a weight change for one frame."""
@@ -209,6 +212,25 @@ class OnlineRSTDPTrainer:
         }
 
     #
+
+    def _accumulate_dense(self, pp: _PlasticProjection, pre_full: Any, post_full: Any) -> None:
+        """Advance eligibility for a matrix-backed dense projection."""
+        topo = pp.proj.topology
+        dtype = pp.state["eligibility"].dtype
+        device = pp.state["eligibility"].device
+        pre = pre_full[: topo.n_pre].to(device=device, dtype=dtype)
+        post = post_full[: topo.n_post].to(device=device, dtype=dtype)
+        decay = pp.rule.eligibility_decay(self._cfg.dt)
+
+        if topo.weight_matrix is not None and int(topo.weight_matrix.ndim) == 1:
+            delta = pre * pp.rule.params.a_plus - post.reshape(1)[0] * pp.rule.params.a_minus
+        else:
+            delta = (
+                pre.reshape(topo.n_pre, 1) * pp.rule.params.a_plus
+                - post.reshape(1, topo.n_post) * pp.rule.params.a_minus
+            )
+
+        pp.state["eligibility"] = pp.state["eligibility"] * decay + delta.reshape(-1)
 
     def _apply_consolidation(self, pp: _PlasticProjection) -> float:
         """Blend anchored weights back toward their checkpoint values."""

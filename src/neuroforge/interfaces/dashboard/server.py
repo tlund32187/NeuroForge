@@ -1,25 +1,25 @@
-"""Dashboard server â€” aiohttp + WebSocket for real-time SNN visualisation.
+"""Dashboard server - aiohttp + WebSocket for real-time SNN visualisation.
 
 Serves static files (HTML/CSS/JS) and provides:
 
 **Live mode** (real-time training):
-- ``POST /api/train``  â€” start a training run (returns immediately)
-- ``GET  /api/status``  â€” poll current training state
-- ``GET  /ws``          â€” WebSocket for live event streaming
+- ``POST /api/train``  - start a training run (returns immediately)
+- ``GET  /api/status``  - poll current training state
+- ``GET  /ws``          - WebSocket for live event streaming
 
 **Replay mode** (artifact-driven, read-only):
-- ``GET /api/runs``              â€” list completed runs
-- ``GET /api/run/<run_id>/meta``    â€” run_meta.json
-- ``GET /api/run/<run_id>/config``  â€” config_resolved.json
-- ``GET /api/run/<run_id>/topology``â€” topology.json
-- ``GET /api/run/<run_id>/topology-stats`` â€” topology/topology_stats.json
-- ``GET /api/run/<run_id>/scalars`` â€” metrics/scalars.csv as JSON
-- ``GET /api/run/<run_id>/vision/sample-grid`` â€” vision/samples/input_grid.png
-- ``GET /api/run/<run_id>/vision/event-sample`` â€” event sample stats summary
-- ``GET /api/run/<run_id>/vision/event-image?mode=bins|sum`` â€” event sample images
-- ``GET /api/run/<run_id>/vision/confusion`` â€” confusion matrix + per-class accuracy
-- ``GET /api/run/<run_id>/vision/layer-stats`` â€” vision layer stats CSV as JSON
-- ``GET /api/run/<run_id>/vision/summary`` â€” throughput summary from reports/scalars
+- ``GET /api/runs``              - list completed runs
+- ``GET /api/run/<run_id>/meta``    - run_meta.json
+- ``GET /api/run/<run_id>/config``  - config_resolved.json
+- ``GET /api/run/<run_id>/topology``- topology.json
+- ``GET /api/run/<run_id>/topology-stats`` - topology/topology_stats.json
+- ``GET /api/run/<run_id>/scalars`` - metrics/scalars.csv as JSON
+- ``GET /api/run/<run_id>/vision/sample-grid`` - vision/samples/input_grid.png
+- ``GET /api/run/<run_id>/vision/event-sample`` - event sample stats summary
+- ``GET /api/run/<run_id>/vision/event-image?mode=bins|sum`` - event sample images
+- ``GET /api/run/<run_id>/vision/confusion`` - confusion matrix + per-class accuracy
+- ``GET /api/run/<run_id>/vision/layer-stats`` - vision layer stats CSV as JSON
+- ``GET /api/run/<run_id>/vision/summary`` - throughput summary from reports/scalars
 
 The training task runs in a background thread so the event loop stays
 responsive.
@@ -683,7 +683,7 @@ async def _handle_train(request: web.Request) -> web.Response:
             },
         ))
 
-    # Dispatch table â€” replaces the former if/elif chain. Any gate not listed
+    # Dispatch table - replaces the former if/elif chain. Any gate not listed
     # here (i.e. a concrete gate name like "AND"/"XOR") trains a single gate.
     _train_handlers: dict[str, Callable[[], None]] = {
         "LOGIC_BACKBONE_TINY": _run_vision_backbone,

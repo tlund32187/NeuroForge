@@ -21,3 +21,5 @@ class SynapseTopology:
     delays: Tensor
     n_pre: int
     n_post: int
+    kind: str = "sparse"
+    weight_matrix: Tensor | None = None

@@ -29,28 +29,21 @@ def build_dense_topology(
     dev: Any,
     torch: Any,
 ) -> SynapseTopology:
-    """Build a dense edge-list topology from a weight matrix.
+    """Build a dense matrix-backed topology from a weight matrix.
 
     The returned ``topology.weights`` is a live view of ``weight_matrix``.
     """
-    pre_idx = torch.arange(
-        n_pre,
-        dtype=torch.int64,
-        device=dev,
-    ).repeat_interleave(n_post)
-    post_idx = torch.arange(
-        n_post,
-        dtype=torch.int64,
-        device=dev,
-    ).repeat(n_pre)
-    delays = torch.zeros(n_pre * n_post, dtype=torch.int64, device=dev)
+    empty_idx = torch.zeros(0, dtype=torch.int64, device=dev)
+    delays = torch.zeros(0, dtype=torch.int64, device=dev)
     return SynapseTopology(
-        pre_idx=pre_idx,
-        post_idx=post_idx,
+        pre_idx=empty_idx,
+        post_idx=empty_idx,
         weights=weight_matrix.reshape(-1),
         delays=delays,
         n_pre=n_pre,
         n_post=n_post,
+        kind="dense",
+        weight_matrix=weight_matrix,
     )
 
 

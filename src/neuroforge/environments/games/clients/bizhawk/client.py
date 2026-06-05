@@ -47,14 +47,14 @@ class BizHawkClientConfig:
 
     Geometry (``width``/``height``/``channels``) is the native frame size the
     Lua side announces; it is validated against the HELLO handshake so a
-    mismatched script fails fast and clearly. Defaults are NES native (256Ã—240
+    mismatched script fails fast and clearly. Defaults are NES native (256x240
     RGB).
 
     ``transport`` selects how messages reach the emulator:
 
-    * ``"file"`` (default) â€” atomically-renamed files in ``comm_dir``. Works on
+    * ``"file"`` (default) - atomically-renamed files in ``comm_dir``. Works on
       NLua EmuHawk builds that lack LuaSocket.
-    * ``"socket"`` â€” a localhost TCP server. The Lua side tries LuaSocket,
+    * ``"socket"`` - a localhost TCP server. The Lua side tries LuaSocket,
       including BizHawk's ``Lua/socket/core.dll`` path, then LuaCOM/MSWinsock.
     """
 
@@ -69,8 +69,9 @@ class BizHawkClientConfig:
     max_episode_steps: int = 0  # 0 = unlimited
     launch: bool = False
     transport: str = "file"
-    comm_dir: str | None = None  # None â†’ a default scratch dir under TEMP
-    passive_input: bool = False  # True â†’ don't inject buttons; the human drives
+    comm_dir: str | None = None  # None -> a default scratch dir under TEMP
+    bridge_error_path: str | None = None
+    passive_input: bool = False  # True -> don't inject buttons; the human drives
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0:
@@ -108,7 +109,9 @@ class BizHawkClient:
         self._owns_transport = transport is None
         self._launcher = launcher
         self._screenshot_receiver: ScreenshotSocketReceiver | None = None
-        self._bridge_error_path = str(Path(tempfile.gettempdir()) / "neuroforge_bridge_error.log")
+        self._bridge_error_path = self._cfg.bridge_error_path or str(
+            Path(tempfile.gettempdir()) / "neuroforge_bridge_error.log"
+        )
         self._connected = False
         self._step_count = 0
         self._next_savestate: str | None = None
@@ -127,7 +130,7 @@ class BizHawkClient:
     def queue_savestate(self, path: str | None) -> None:
         """Load *path* on the next :meth:`reset` (an environment reset).
 
-        Loading a savestate restores the emulator to a chosen start state â€” for
+        Loading a savestate restores the emulator to a chosen start state - for
         SMB3 this is how training begins *inside a level* (a curriculum), where
         the vision reward is dense, instead of in the unrewarded title/map
         screens. It is an environment reset, not memory reading: the policy
@@ -317,11 +320,11 @@ class BizHawkClient:
         return GameObservation(step=self._step_count, t=frame.t, frame=frame)
 
     def _send(self, msg_type: proto.MsgType, payload: bytes = b"") -> None:
-        assert self._transport is not None  # noqa: S101 â€” guarded by callers
+        assert self._transport is not None  # noqa: S101 - guarded by callers
         self._transport.send(proto.encode_message(msg_type, payload))
 
     def _recv_exactly(self, n: int) -> bytes:
-        assert self._transport is not None  # noqa: S101 â€” guarded by callers
+        assert self._transport is not None  # noqa: S101 - guarded by callers
         try:
             return self._transport.recv_exactly(n)
         except BizHawkConnectionError as exc:

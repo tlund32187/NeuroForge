@@ -62,6 +62,26 @@ def test_delayed_static_registered() -> None:
 
 
 @pytest.mark.unit
+def test_delayed_static_rejects_dense_matrix_topology() -> None:
+    weights = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+    empty_idx = torch.zeros(0, dtype=torch.int64)
+    topo = SynapseTopology(
+        pre_idx=empty_idx,
+        post_idx=empty_idx,
+        weights=weights.reshape(-1),
+        delays=torch.zeros(0, dtype=torch.int64),
+        n_pre=1,
+        n_post=2,
+        kind="dense",
+        weight_matrix=weights,
+    )
+    model = DelayedStaticSynapseModel()
+
+    with pytest.raises(ValueError, match="sparse edge topology"):
+        model.init_state(topo, "cpu", "float32")
+
+
+@pytest.mark.unit
 def test_delayed_static_bool_delays_cpu() -> None:
     outs = _run_bool_pattern(torch.device("cpu"))
     expected = [

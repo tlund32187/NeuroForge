@@ -1,25 +1,25 @@
-"""Logic gate task â€” train an SNN to solve all 6 logic gates.
+"""Logic gate task - train an SNN to solve all 6 logic gates.
 
-Architecture (all gates â€” one brain, one topology):
-    H*W input neurons â†’ N hidden neurons â†’ 1 output neuron
+Architecture (all gates - one brain, one topology):
+    H*W input neurons -> N hidden neurons -> 1 output neuron
 
 Every gate uses the **same** architecture with **Dale's Law** enforced
-on every projection: effective weights are ``|w_raw| Ã— sign_mask``.
+on every projection: effective weights are ``|w_raw| x sign_mask``.
 Input neurons are excitatory; hidden neurons are split E/I.
 
 Inputs are **pixel-encoded**: each 2-bit pattern is rendered as a tiny
 ``(H, W)`` image with two bright squares at fixed coordinates.  The
 flattened image is rate-encoded into current drives.
 
-Training â€” all gates use surrogate-gradient descent + Adam:
+Training - all gates use surrogate-gradient descent + Adam:
 1. Pick a random input pattern (00, 01, 10, 11)
 2. Render the pattern as a pixel image, flatten, rate-encode.
 3. Run simulation for ``window_steps`` using population neuron models
    with inline synaptic-current computation so gradients flow through
    trainable weights.
 4. Readout via :class:`SpikeCountReadout`; decode binary output.
-5. On error: MSE-count (or BCE-logits) loss â†’ ``loss.backward()`` â†’
-   gradient-clipped Adam step â†’ weight clamp.
+5. On error: MSE-count (or BCE-logits) loss -> ``loss.backward()`` ->
+   gradient-clipped Adam step -> weight clamp.
 6. Repeat until convergence or max trials.
 
 All 6 gates must pass for the milestone.
@@ -98,7 +98,7 @@ _hidden - n_inhibitory`` are excitatory.
     device:
         Torch device string (``"cpu"``, ``"cuda"``, or ``"auto"``).
         ``"auto"`` (the default) picks the fastest device for the
-        network size â€” CPU for small topologies, CUDA for large ones.
+        network size - CPU for small topologies, CUDA for large ones.
     dtype:
         Torch dtype string (``"float32"`` or ``"float64"``).
     image_h:
@@ -186,7 +186,7 @@ def _pattern_to_image(
     bits:
         ``(b0, b1)`` where each value is 0 or 1.
     h, w:
-        Image height and width (default 8Ã—8).
+        Image height and width (default 8x8).
     torch_mod:
         The ``torch`` module.
 
@@ -302,7 +302,7 @@ class LogicGateTask(BaseTask):
         dev = drives.device
         dt_t = drives.dtype
 
-        # Resolve effective weights (Dale's Law: |w| Ã— sign).
+        # Resolve effective weights (Dale's Law: |w| x sign).
         w_ih = gn.trainables["raw_w_in_to_hidden"]
         b_ih = gn.trainables["bias_in_to_hidden"]
         w_ho = gn.trainables["raw_w_hidden_to_out"]

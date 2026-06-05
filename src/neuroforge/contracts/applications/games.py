@@ -203,6 +203,7 @@ class GameTransition:
     reward: float
     terminated: bool = False
     truncated: bool = False
+    termination_reason: str | None = None
 
     @property
     def done(self) -> bool:

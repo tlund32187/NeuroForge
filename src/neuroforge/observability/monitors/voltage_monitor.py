@@ -1,4 +1,4 @@
-"""VoltageMonitor â€” records per-population membrane voltages.
+"""VoltageMonitor - records per-population membrane voltages.
 
 Samples voltage at each step for each population.  For dashboards,
 only the last *window* steps are kept (ring-buffer style) to bound

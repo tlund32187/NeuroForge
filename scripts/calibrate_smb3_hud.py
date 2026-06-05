@@ -2,20 +2,20 @@
 """Calibrate the SMB3 HUD glyph atlas from a real captured frame.
 
 Template matching needs pixel-exact glyphs, which can only come from real
-frames. This tool slices the digit cells out of a known frame â€” where you've
-read the on-screen value for each field â€” and saves them as the atlas the
+frames. This tool slices the digit cells out of a known frame - where you've
+read the on-screen value for each field - and saves them as the atlas the
 extractor loads.
 
 Workflow:
   1. Capture a frame (the smoke test saves them to artifacts/smoke/).
   2. Fill in the SPEC below: the frame path, and for each field its known digit
      string plus the cell ROI (x, y, cell size, stride).
-  3. Run this file (Run/â–¶ on "NeuroForge: calibrate HUD", or from a terminal).
+  3. Run this file (Run/play on "NeuroForge: calibrate HUD", or from a terminal).
   4. It writes src/neuroforge/game/vision/assets/smb3/atlas.npz and saves
      per-field crops to artifacts/calibration/ so you can verify the ROIs lined
      up with the digits.
 
-The ROIs here should match neuroforge.environments.games.smb3.hud.rois â€” adjust both together.
+The ROIs here should match neuroforge.environments.games.smb3.hud.rois - adjust both together.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 FRAME_PATH = r"artifacts/smoke/frame_600.png"
 # field name -> (known digits, x, y, n_cells, cell_w, cell_h, step_x)
 FIELDS: dict[str, tuple[str, int, int, int, int, int, int]] = {
-    # Example (placeholder â€” replace with values read off your frame):
+    # Example (placeholder - replace with values read off your frame):
     # "score": ("0000000", 96, 208, 7, 8, 8, 8),
     # "lives": ("4",       40, 208, 1, 8, 8, 8),
     # "world": ("1",       56, 200, 1, 8, 8, 8),
@@ -91,13 +91,13 @@ def main() -> int:
             cx = x + i * step
             cell = gray[y : y + ch, cx : cx + cw]
             if cell.shape != (ch, cw):
-                print(f"  [{name}] cell {i} out of bounds â€” skipped")
+                print(f"  [{name}] cell {i} out of bounds - skipped")
                 continue
             glyphs.setdefault(ch_char, cell.copy())
         print(f"  [{name}] '{digits}' -> {len(digits)} cells (crop saved)")
 
     if not glyphs:
-        print("No glyphs extracted â€” check the ROIs.")
+        print("No glyphs extracted - check the ROIs.")
         return 1
 
     _ATLAS_OUT.parent.mkdir(parents=True, exist_ok=True)

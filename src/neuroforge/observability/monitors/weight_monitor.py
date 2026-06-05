@@ -1,4 +1,4 @@
-"""WeightMonitor â€” records synaptic weight snapshots.
+"""WeightMonitor - records synaptic weight snapshots.
 
 Captures weight tensors on ``EventTopic.WEIGHT`` events. Stores a
 bounded history of weight snapshots per projection.

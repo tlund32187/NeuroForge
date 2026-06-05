@@ -1,4 +1,4 @@
-"""Gate-network builder â€” high-level helper for logic-gate SNNs.
+"""Gate-network builder - high-level helper for logic-gate SNNs.
 
 Accepts a :class:`GateNetworkSpec` and returns a ready-to-train
 :class:`GateNetwork` with the engine, trainable parameters, and
@@ -7,9 +7,9 @@ metadata.
 The builder delegates to focused helper functions that can be tested
 and reused independently:
 
-- :func:`build_dale_signs` â€” Dale's-Law excitatory/inhibitory masks.
-- :func:`init_projection_weights` â€” trainable weight & bias allocation.
-- :func:`build_projection` â€” full projection assembly (weights +
+- :func:`build_dale_signs` - Dale's-Law excitatory/inhibitory masks.
+- :func:`init_projection_weights` - trainable weight & bias allocation.
+- :func:`build_projection` - full projection assembly (weights +
   topology + synapse model).
 
 Usage::
@@ -113,19 +113,19 @@ def _dense_edge_topology(
     dev: Any,
     torch_mod: Any,
 ) -> SynapseTopology:
-    """Create a :class:`SynapseTopology` edge-list from a dense matrix."""
-    pre_idx = torch_mod.arange(n_pre, device=dev).repeat_interleave(n_post)
-    post_idx = torch_mod.arange(n_post, device=dev).repeat(n_pre)
-    flat_w = weight_matrix.detach().reshape(-1)
-    delays = torch_mod.zeros(n_pre * n_post, dtype=torch_mod.int64, device=dev)
+    """Create a matrix-backed dense :class:`SynapseTopology`."""
+    empty_idx = torch_mod.zeros(0, dtype=torch_mod.int64, device=dev)
+    delays = torch_mod.zeros(0, dtype=torch_mod.int64, device=dev)
 
     return SynapseTopology(
-        pre_idx=pre_idx,
-        post_idx=post_idx,
-        weights=flat_w,
+        pre_idx=empty_idx,
+        post_idx=empty_idx,
+        weights=weight_matrix.reshape(-1),
         delays=delays,
         n_pre=n_pre,
         n_post=n_post,
+        kind="dense",
+        weight_matrix=weight_matrix,
     )
 
 
@@ -185,7 +185,7 @@ def init_projection_weights(
 ) -> tuple[Any, Any]:
     """Allocate trainable weight and bias tensors.
 
-    Weights are drawn from ``Uniform(âˆ’scale, +scale)`` on CPU then
+    Weights are drawn from ``Uniform(-scale, +scale)`` on CPU then
     moved to *dev*.  Both tensors have ``requires_grad=True``.
 
     Parameters
@@ -204,7 +204,7 @@ def init_projection_weights(
     Returns
     -------
     tuple[Tensor, Tensor]:
-        ``(raw_w, bias)`` â€” weight matrix and bias vector.
+        ``(raw_w, bias)`` - weight matrix and bias vector.
     """
     if n_post == 1:
         raw_w = torch_mod.empty(n_pre, dtype=tdt).uniform_(-scale, scale).to(dev)

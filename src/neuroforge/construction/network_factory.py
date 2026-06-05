@@ -230,7 +230,7 @@ def to_topology_json(engine: CoreEngine) -> dict[str, Any]:
         topo = proj.topology
         flat_weights = topo.weights.detach().reshape(-1)
         n_edges = int(flat_weights.numel())
-        dense = "weight_matrix" in proj.state
+        dense = topo.weight_matrix is not None
         dtype_name = str(topo.weights.dtype).replace("torch.", "")
 
         if n_edges > 0:
@@ -277,14 +277,14 @@ def to_topology_json(engine: CoreEngine) -> dict[str, Any]:
         )
 
         if dense and n_edges <= max_full_edges:
-            dense_weights = proj.state.get("weight_matrix")
+            dense_weights = topo.weight_matrix
             if dense_weights is not None:
                 edge["weights"] = dense_weights.detach().cpu().tolist()
         elif n_edges > 0:
             sample_n = min(sample_limit, n_edges)
             edge["weights_sample"] = flat_weights[:sample_n].cpu().tolist()
             edge["sample_size"] = sample_n
-            if "weight_matrix" not in proj.state:
+            if not dense:
                 edge["sparse_sample"] = {
                     "pre_idx": topo.pre_idx.detach().reshape(-1)[:sample_n].cpu().tolist(),
                     "post_idx": topo.post_idx.detach().reshape(-1)[:sample_n].cpu().tolist(),

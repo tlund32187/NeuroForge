@@ -1,7 +1,7 @@
-"""SpikeMonitor â€” records per-population spike events.
+"""SpikeMonitor - records per-population spike events.
 
 Stores spike counts per population per step and can produce a raster
-(step Ã— neuron boolean) for small populations.
+(step x neuron boolean) for small populations.
 
 CUDA-compatible: if spike tensors live on GPU, the monitor copies them
 to CPU before storing.

@@ -60,6 +60,7 @@ def build_smb3_game_training_config(
     consolidation_strength: float = 0.0,
     plastic: bool = True,
     deterministic: bool = False,
+    perf_telemetry: bool = False,
     device: str = "cpu",
     dtype: str = "float32",
 ) -> GameTrainingConfig:
@@ -117,6 +118,7 @@ def build_smb3_game_training_config(
         max_episodes=max(1, int(max_episodes)),
         frames_per_episode=max(1, int(frames_per_episode)),
         telemetry_every=max(0, int(telemetry_every)),
+        perf_telemetry=bool(perf_telemetry),
         checkpoint_every=max(0, int(checkpoint_every)),
         checkpoint_path=checkpoint_path,
         resume=resume,
@@ -149,9 +151,11 @@ def build_smb3_hud_extractor() -> SMB3HudExtractor:
     return SMB3HudExtractor(SMB3HudConfig(track_progress=True))
 
 
-def build_smb3_episode_manager() -> SMB3EpisodeManager:
+def build_smb3_episode_manager(
+    config: SMB3EpisodeConfig | None = None,
+) -> SMB3EpisodeManager:
     """Build the vision-derived SMB3 episode terminator."""
-    return SMB3EpisodeManager(SMB3EpisodeConfig())
+    return SMB3EpisodeManager(config or SMB3EpisodeConfig())
 
 
 def build_smb3_reward_model() -> SMB3RewardModel:

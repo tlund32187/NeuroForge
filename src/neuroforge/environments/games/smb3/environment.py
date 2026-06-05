@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from neuroforge.contracts.applications.games import (
@@ -52,6 +53,7 @@ class VisionOnlyGameLoop:
         reward_model: IRewardModel | None = None,
         episode_manager: IEpisodeManager | None = None,
         close_client: bool = True,
+        timings: dict[str, float] | None = None,
     ) -> None:
         self._client = client
         self._policy = policy
@@ -59,6 +61,7 @@ class VisionOnlyGameLoop:
         self._reward_model = reward_model
         self._episode_manager = episode_manager
         self._close_client = close_client
+        self._timings = timings
 
     def reset(self) -> GameObservation:
         """Reset per-episode state, reset the client, and return the first frame.
@@ -74,22 +77,38 @@ class VisionOnlyGameLoop:
         ):
             if collaborator is not None:
                 _maybe_begin_episode(collaborator)
-        return self._with_frame_metrics(self._client.reset())
+        started = time.perf_counter()
+        try:
+            observation = self._client.reset()
+        finally:
+            self._record("client_reset_seconds", time.perf_counter() - started)
+        return self._with_frame_metrics(observation)
 
     def step(self, current: GameObservation) -> GameTransition:
         """Run one policy/client/reward step."""
+        started = time.perf_counter()
         action = self._policy.act(current)
+        self._record("policy_seconds", time.perf_counter() - started)
+        started = time.perf_counter()
         result = self._client.step(action)
+        self._record("client_step_seconds", time.perf_counter() - started)
         after = self._with_frame_metrics(result.observation)
-        reward = (
-            self._reward_model.reward(current, after)
-            if self._reward_model is not None
-            else 0.0
-        )
+        started = time.perf_counter()
+        reward = 0.0
+        if self._reward_model is not None:
+            reward = self._reward_model.reward(current, after)
+        self._record("reward_seconds", time.perf_counter() - started)
         terminated = result.terminated
+        termination_reason: str | None = "client" if terminated else None
         if self._episode_manager is not None:
+            started = time.perf_counter()
             decision = self._episode_manager.should_end(current, after)
+            self._record("episode_seconds", time.perf_counter() - started)
             terminated = terminated or decision.terminated
+            if decision.terminated:
+                termination_reason = decision.reason
+        if result.truncated and termination_reason is None:
+            termination_reason = "truncated"
         return GameTransition(
             before=current,
             action=action,
@@ -97,6 +116,7 @@ class VisionOnlyGameLoop:
             reward=float(reward),
             terminated=terminated,
             truncated=result.truncated,
+            termination_reason=termination_reason,
         )
 
     def run(self, *, max_steps: int) -> Iterator[GameTransition]:
@@ -121,4 +141,14 @@ class VisionOnlyGameLoop:
     def _with_frame_metrics(self, observation: GameObservation) -> GameObservation:
         if self._metric_extractor is None:
             return observation
-        return observation.with_metrics(self._metric_extractor.extract(observation.frame))
+        started = time.perf_counter()
+        try:
+            metrics = self._metric_extractor.extract(observation.frame)
+        finally:
+            self._record("metrics_seconds", time.perf_counter() - started)
+        return observation.with_metrics(metrics)
+
+    def _record(self, key: str, seconds: float) -> None:
+        if self._timings is None:
+            return
+        self._timings[key] = self._timings.get(key, 0.0) + max(0.0, float(seconds))

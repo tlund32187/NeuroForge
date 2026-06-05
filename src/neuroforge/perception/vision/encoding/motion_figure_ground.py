@@ -2,8 +2,8 @@
 
 The organic object-discovery cue. In a side-scroller the background scrolls
 *coherently* with the camera, while sprites (enemies, items, the player) move
-*differently*. So if we estimate the global scroll and **cancel it** â€” warp the
-previous frame by that shift and difference it with the current frame â€” the
+*differently*. So if we estimate the global scroll and **cancel it** - warp the
+previous frame by that shift and difference it with the current frame - the
 background subtracts to ~zero and only the things that moved differently survive
 as a **figure-ground / object-saliency map**.
 
@@ -44,7 +44,7 @@ class MotionFigureGroundConfig:
 
 
 class MotionFigureGround:
-    """Scroll-compensated frame differencing â†’ a per-pixel object-saliency map."""
+    """Scroll-compensated frame differencing -> a per-pixel object-saliency map."""
 
     def __init__(self, config: MotionFigureGroundConfig | None = None) -> None:
         self._cfg = config or MotionFigureGroundConfig()
@@ -71,7 +71,7 @@ class MotionFigureGround:
         shift = -self._best_shift(self._prev.mean(dim=0), gray.mean(dim=0))
         aligned_prev = torch.roll(self._prev, shifts=shift, dims=1)
         residual = (gray - aligned_prev).abs()
-        # Columns wrapped by the roll are invalid â€” they aren't a real comparison.
+        # Columns wrapped by the roll are invalid - they aren't a real comparison.
         if shift > 0:
             residual[:, :shift] = 0.0
         elif shift < 0:

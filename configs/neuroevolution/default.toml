@@ -1,10 +1,17 @@
 [neuroevolution]
 package = "neuroforge.neuroevolution"
-genome = "graph"
-population_size = 16
-generations = 25
+genome = "hyperneat"
+population_size = 32
+generations = 40
+species_threshold = 0.5
+eval_repeats = 2
+preserve_global_best = true
 
 [neuroevolution.mutation]
-rate = 0.35
-power = 1.0
+rate = 0.25
+power = 0.75
 
+[neuroevolution.fitness]
+progress_scale = 100.0
+survival_scale = 1.0
+durable_progress_weight = 1.0

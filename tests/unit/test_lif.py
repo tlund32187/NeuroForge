@@ -2,7 +2,7 @@
 
 Every test computes the expected result analytically FIRST, then
 verifies that the model produces the same result.  No "trust the code"
-tests â€” only "trust the math" tests.
+tests - only "trust the math" tests.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ class TestLIFMathHelpers:
 
     def test_steps_to_fire(self, lif: LIFModel, dt: float) -> None:
         """Predict the exact step on which the neuron fires."""
-        drive = 25.0  # strong drive â†’ should fire quickly
+        drive = 25.0  # strong drive -> should fire quickly
         k = lif.steps_to_fire(drive, dt)
         assert k is not None
 
@@ -99,7 +99,7 @@ class TestLIFMathHelpers:
         self, lif: LIFModel, dt: float
     ) -> None:
         """If steady-state < threshold, steps_to_fire returns None."""
-        # steady-state with drive=0.5: v_ss = 0.5 * 0.05/0.04877 â‰ˆ 0.5125 < 1.0
+        # steady-state with drive=0.5: v_ss = 0.5 * 0.05/0.04877 approx 0.5125 < 1.0
         drive = 0.5
         assert lif.steps_to_fire(drive, dt) is None
 
@@ -148,12 +148,12 @@ class TestLIFSimulation:
 
     def test_multi_step_trajectory(self, lif: LIFModel, dt: float) -> None:
         """Run k steps and compare final voltage to closed-form prediction."""
-        drive_val = 0.8  # low enough â†’ no spike
+        drive_val = 0.8  # low enough -> no spike
         k = 50
 
         # Math prediction (no spike)
         predicted = lif.voltage_after_k_steps(0.0, drive_val, dt, k)
-        assert predicted < lif.params.v_thresh, "Drive too high â€” would spike"
+        assert predicted < lif.params.v_thresh, "Drive too high - would spike"
 
         state = lif.init_state(1, "cpu", "float64")
         drive_tensor = torch.tensor([drive_val], dtype=torch.float64)
@@ -191,7 +191,7 @@ class TestLIFSimulation:
         # Put voltage just above threshold
         state["v"] = torch.tensor([lif.params.v_thresh + 0.1], dtype=torch.float64)
 
-        # Any drive â€” voltage is already above threshold from last step's update
+        # Any drive - voltage is already above threshold from last step's update
         # Actually we need to step so the model detects the spike
         drive_val = 100.0  # strong drive to guarantee spike
         inputs = NeuronInputs(

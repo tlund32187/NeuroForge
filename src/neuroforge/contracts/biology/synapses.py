@@ -39,6 +39,11 @@ class SynapseTopology:
         Number of pre-synaptic neurons.
     n_post:
         Number of post-synaptic neurons.
+    kind:
+        Projection layout, usually ``"sparse"`` or ``"dense"``.
+    weight_matrix:
+        Dense matrix ``[N_pre, N_post]`` or squeezed ``[N_pre]`` for single-output
+        dense projections. Sparse projections leave this ``None``.
     """
 
     pre_idx: Tensor
@@ -47,6 +52,8 @@ class SynapseTopology:
     delays: Tensor
     n_pre: int
     n_post: int
+    kind: str = "sparse"
+    weight_matrix: Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)

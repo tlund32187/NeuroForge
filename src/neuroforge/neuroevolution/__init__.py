@@ -3,6 +3,7 @@
 from neuroforge.neuroevolution.fitness.evaluators import (
     CallableFitnessEvaluator,
     GameTrainingFitnessEvaluator,
+    ThreadLocalFitnessEvaluatorPool,
 )
 from neuroforge.neuroevolution.fitness.objectives import (
     PolicyObjective,
@@ -82,6 +83,7 @@ __all__ = [
     "SimpleReproduction",
     "Substrate",
     "SubstrateConfig",
+    "ThreadLocalFitnessEvaluatorPool",
     "default_seed_population",
     "evaluate_proxy_policy_gene_target",
     "evolution_config_to_dict",

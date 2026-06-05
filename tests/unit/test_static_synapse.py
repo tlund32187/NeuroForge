@@ -42,11 +42,28 @@ def _make_topology(
     )
 
 
+def _make_dense_topology(weight_matrix: torch.Tensor) -> SynapseTopology:
+    """Helper to build a dense matrix-backed SynapseTopology."""
+    n_pre = int(weight_matrix.shape[0])
+    n_post = 1 if int(weight_matrix.ndim) == 1 else int(weight_matrix.shape[1])
+    empty_idx = torch.zeros(0, dtype=torch.long)
+    return SynapseTopology(
+        pre_idx=empty_idx,
+        post_idx=empty_idx,
+        weights=weight_matrix.reshape(-1),
+        delays=torch.zeros(0, dtype=torch.long),
+        n_pre=n_pre,
+        n_post=n_post,
+        kind="dense",
+        weight_matrix=weight_matrix,
+    )
+
+
 #
 
 
 class TestStaticSynapseSingleEdge:
-    """Test with a single edge: pre=0 â†’ post=0, w=0.5."""
+    """Test with a single edge: pre=0 -> post=0, w=0.5."""
 
     def test_fire_produces_current(self, synapse: StaticSynapseModel) -> None:
         """When pre fires, post current = weight."""
@@ -96,7 +113,7 @@ class TestStaticSynapseMultiEdge:
     """Test with multiple edges demonstrating summation."""
 
     def test_two_pre_one_post_both_fire(self, synapse: StaticSynapseModel) -> None:
-        """Two pre-neurons both fire â†’ post gets sum of weights."""
+        """Two pre-neurons both fire -> post gets sum of weights."""
         edges = [(0, 0, 0.3), (1, 0, 0.7)]
         topo = _make_topology(edges, n_pre=2, n_post=1)
         state = synapse.init_state(topo, "cpu", "float64")
@@ -114,7 +131,7 @@ class TestStaticSynapseMultiEdge:
         assert result.post_current[Compartment.SOMA].item() == pytest.approx(1.0)
 
     def test_two_pre_one_post_one_fires(self, synapse: StaticSynapseModel) -> None:
-        """Only neuron 1 fires â†’ post gets only w_1."""
+        """Only neuron 1 fires -> post gets only w_1."""
         edges = [(0, 0, 0.3), (1, 0, 0.7)]
         topo = _make_topology(edges, n_pre=2, n_post=1)
         state = synapse.init_state(topo, "cpu", "float64")
@@ -133,7 +150,7 @@ class TestStaticSynapseMultiEdge:
 
     def test_fan_out(self, synapse: StaticSynapseModel) -> None:
         """One pre-neuron connects to multiple post-neurons."""
-        # pre=0 â†’ post=0 (w=0.4), pre=0 â†’ post=1 (w=0.6)
+        # pre=0 -> post=0 (w=0.4), pre=0 -> post=1 (w=0.6)
         edges = [(0, 0, 0.4), (0, 1, 0.6)]
         topo = _make_topology(edges, n_pre=1, n_post=2)
         state = synapse.init_state(topo, "cpu", "float64")
@@ -152,6 +169,30 @@ class TestStaticSynapseMultiEdge:
         assert actual[0].item() == pytest.approx(0.4)
         assert actual[1].item() == pytest.approx(0.6)
 
+    def test_dense_matrix_topology_uses_matmul(self, synapse: StaticSynapseModel) -> None:
+        """Dense matrix-backed topology produces ``pre @ W`` current."""
+        weights = torch.tensor(
+            [
+                [0.4, -0.2],
+                [0.1, 0.7],
+                [-0.5, 0.3],
+            ],
+            dtype=torch.float64,
+        )
+        topo = _make_dense_topology(weights)
+        state = synapse.init_state(topo, "cpu", "float64")
+        inputs = SynapseInputs(
+            pre_spikes=torch.tensor([1.0, 0.5, 0.0], dtype=torch.float64),
+            post_spikes=torch.tensor([False, False]),
+        )
+
+        result = synapse.step(state, topo, inputs, None)
+        actual = result.post_current[Compartment.SOMA]
+
+        assert topo.pre_idx.numel() == 0
+        assert topo.post_idx.numel() == 0
+        assert torch.allclose(actual, inputs.pre_spikes @ weights)
+
 
 #
 
@@ -160,7 +201,7 @@ class TestStaticSynapseInhibitory:
     """Negative weights model inhibition."""
 
     def test_inhibitory_current(self, synapse: StaticSynapseModel) -> None:
-        """Negative weight â†’ negative post-synaptic current."""
+        """Negative weight -> negative post-synaptic current."""
         edges = [(0, 0, -0.8)]
         topo = _make_topology(edges, n_pre=1, n_post=1)
         state = synapse.init_state(topo, "cpu", "float64")
@@ -179,7 +220,7 @@ class TestStaticSynapseInhibitory:
 
     def test_mixed_excitatory_inhibitory(self, synapse: StaticSynapseModel) -> None:
         """Mixed excitatory/inhibitory: net current is sum of all weights."""
-        # pre=0 â†’ post=0 (w=+0.5), pre=1 â†’ post=0 (w=-0.3)
+        # pre=0 -> post=0 (w=+0.5), pre=1 -> post=0 (w=-0.3)
         edges = [(0, 0, 0.5), (1, 0, -0.3)]
         topo = _make_topology(edges, n_pre=2, n_post=1)
         state = synapse.init_state(topo, "cpu", "float64")
@@ -226,7 +267,7 @@ class TestStaticSynapseRegistry:
         assert isinstance(model, StaticSynapseModel)
 
     def test_determinism(self, synapse: StaticSynapseModel) -> None:
-        """Same inputs â†’ same outputs (determinism check)."""
+        """Same inputs -> same outputs (determinism check)."""
         edges = [(0, 0, 0.3), (1, 0, 0.7), (0, 1, 0.2)]
         topo = _make_topology(edges, n_pre=2, n_post=2)
         state = synapse.init_state(topo, "cpu", "float64")

@@ -1,4 +1,4 @@
-"""TrainingMonitor â€” records per-trial training metrics.
+"""TrainingMonitor - records per-trial training metrics.
 
 Captures accuracy, error, convergence status, and truth-table
 confidence emitted on ``EventTopic.TRAINING_TRIAL`` and related

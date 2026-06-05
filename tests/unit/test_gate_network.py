@@ -73,7 +73,7 @@ class TestDalesStaticSynapseModel:
         sign_pre = torch.tensor([1.0, -1.0])
         model = DalesStaticSynapseModel(sign_pre=sign_pre)
 
-        # Edges: (0â†’0), (0â†’1), (1â†’0), (1â†’1)
+        # Edges: (0->0), (0->1), (1->0), (1->1)
         pre_idx = torch.tensor([0, 0, 1, 1])
         post_idx = torch.tensor([0, 1, 0, 1])
         weights = torch.tensor([0.5, 0.3, -0.4, 0.2])
@@ -97,7 +97,7 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([False, False]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # Only neuron 0 spiked (sign +1), edges 0â†’0 and 0â†’1 fire.
+        # Only neuron 0 spiked (sign +1), edges 0->0 and 0->1 fire.
         assert psc[0].item() == pytest.approx(0.5, abs=1e-6)
         assert psc[1].item() == pytest.approx(0.3, abs=1e-6)
 
@@ -109,7 +109,7 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([False, False]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # Only neuron 1 spiked (sign âˆ’1).  w_eff = |w| Ã— (âˆ’1).
+        # Only neuron 1 spiked (sign -1).  w_eff = |w| x (-1).
         assert psc[0].item() == pytest.approx(-0.4, abs=1e-6)
         assert psc[1].item() == pytest.approx(-0.2, abs=1e-6)
 
@@ -121,9 +121,40 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([0.0, 0.0]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # 0.8 Ã— |0.5| Ã— +1 = 0.4, 0.8 Ã— |0.3| Ã— +1 = 0.24
+        # 0.8 x |0.5| x +1 = 0.4, 0.8 x |0.3| x +1 = 0.24
         assert psc[0].item() == pytest.approx(0.4, abs=1e-5)
         assert psc[1].item() == pytest.approx(0.24, abs=1e-5)
+
+    def test_dense_matrix_topology_applies_dales_signs(self) -> None:
+        sign_pre = torch.tensor([1.0, -1.0])
+        model = DalesStaticSynapseModel(sign_pre=sign_pre)
+        weights = torch.tensor(
+            [
+                [0.5, -0.3],
+                [-0.4, 0.2],
+            ],
+            dtype=torch.float32,
+        )
+        empty_idx = torch.zeros(0, dtype=torch.int64)
+        topo = SynapseTopology(
+            pre_idx=empty_idx,
+            post_idx=empty_idx,
+            weights=weights.reshape(-1),
+            delays=torch.zeros(0, dtype=torch.int64),
+            n_pre=2,
+            n_post=2,
+            kind="dense",
+            weight_matrix=weights,
+        )
+
+        inputs = SynapseInputs(
+            pre_spikes=torch.tensor([True, True]),
+            post_spikes=torch.tensor([False, False]),
+        )
+        result = model.step({}, topo, inputs, ctx=None)
+        psc = result.post_current[Compartment.SOMA]
+
+        assert torch.allclose(psc, torch.tensor([0.1, 0.1]))
 
     def test_no_sign_acts_as_identity(self) -> None:
         """When sign_pre is None, w_eff = weights (no reparameterisation)."""
@@ -158,11 +189,11 @@ class TestSpikeCountReadout:
 
     def test_basic_count(self) -> None:
         readout = SpikeCountReadout(threshold=3.0)
-        spikes = torch.ones(5, 2)  # 5 timesteps, 2 output neurons â†’ count = 5 each
+        spikes = torch.ones(5, 2)  # 5 timesteps, 2 output neurons -> count = 5 each
         result = readout(spikes)
         assert isinstance(result, ReadoutResult)
         assert result.count.tolist() == pytest.approx([5.0, 5.0])
-        assert result.logits.tolist() == pytest.approx([2.0, 2.0])  # 5âˆ’3
+        assert result.logits.tolist() == pytest.approx([2.0, 2.0])  # 5-3
 
     def test_zero_spikes(self) -> None:
         readout = SpikeCountReadout(threshold=3.0)
@@ -207,7 +238,7 @@ class TestMseCountLoss:
         loss_fn = MseCountLoss(reduction="sum")
         c = torch.tensor([4.0, 6.0])
         t = torch.tensor([2.0, 3.0])
-        # (4âˆ’2)^2 + (6âˆ’3)^2 = 4 + 9 = 13
+        # (4-2)^2 + (6-3)^2 = 4 + 9 = 13
         assert loss_fn(c, t).item() == pytest.approx(13.0)
 
     def test_gradient_flows(self) -> None:
@@ -226,7 +257,7 @@ class TestBceLogitsLoss:
         logits = torch.tensor([0.0])
         target = torch.tensor([1.0])
         loss = loss_fn(logits, target)
-        # âˆ’log(Ïƒ(0)) = âˆ’log(0.5) â‰ˆ 0.6931
+        # -log(sigma(0)) = -log(0.5) approx 0.6931
         assert loss.item() == pytest.approx(0.6931, abs=1e-3)
 
     def test_gradient_flows(self) -> None:
@@ -312,7 +343,7 @@ class TestBuildGateNetwork:
         spec = GateNetworkSpec(init_scale=0.01, hidden_size=0)
         gn = build_gate_network(spec)
         w = gn.trainables["raw_w_in_to_out"]
-        # All weights should be within [âˆ’0.01, 0.01].
+        # All weights should be within [-0.01, 0.01].
         assert w.abs().max().item() <= 0.01 + 1e-7
 
     def test_output_size_respected(self) -> None:
@@ -402,7 +433,7 @@ class TestGateNetworkSpecModelKeys:
         assert isinstance(gn, GateNetwork)
 
     def test_custom_synapse_model_accepted(self) -> None:
-        """Use 'static' (no Dale's) â€” sign_pre should be ignored."""
+        """Use 'static' (no Dale's) - sign_pre should be ignored."""
         spec = GateNetworkSpec(synapse_model="static", hidden_size=0)
         gn = build_gate_network(spec)
         assert isinstance(gn, GateNetwork)
@@ -522,7 +553,12 @@ class TestBuildProjection:
         proj, _ = build_projection(
             "p", "s", "t", 3, 4, sign, **proj_kwargs,
         )
-        assert proj.topology.pre_idx.shape[0] == 12  # 3Ã—4
+        assert proj.topology.kind == "dense"
+        assert proj.topology.weight_matrix is not None
+        assert proj.topology.weights.numel() == 12
+        assert proj.topology.pre_idx.shape[0] == 0
+        assert proj.topology.post_idx.shape[0] == 0
+        assert proj.topology.delays.shape[0] == 0
 
     def test_sparse_fewer_edges(
         self, proj_kwargs: dict[str, Any],

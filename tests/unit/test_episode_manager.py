@@ -81,3 +81,20 @@ def test_stall_can_be_disabled() -> None:
     mgr.begin_episode()
     terminated = [mgr.should_end(_obs(x=0.5), _obs(x=0.5)).terminated for _ in range(5)]
     assert not any(terminated)
+
+
+@pytest.mark.unit
+def test_min_progress_gate_terminates_poor_runs() -> None:
+    mgr = SMB3EpisodeManager(
+        SMB3EpisodeConfig(
+            stall_patience=100,
+            min_progress_frames=3,
+            min_progress=0.05,
+        )
+    )
+    mgr.begin_episode()
+
+    decisions = [mgr.should_end(_obs(x=0.0), _obs(x=0.02)) for _ in range(3)]
+
+    assert [decision.terminated for decision in decisions] == [False, False, True]
+    assert decisions[-1].reason == "min_progress"

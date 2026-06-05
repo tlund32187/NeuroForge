@@ -10,7 +10,7 @@ from neuroforge.simulation.topology.specs import NetworkSpec, PopulationSpec, Pr
 
 
 def _small_spec() -> NetworkSpec:
-    """Input(2) â†’ Hidden(4) â†’ Output(1)."""
+    """Input(2) -> Hidden(4) -> Output(1)."""
     return NetworkSpec(
         populations=[
             PopulationSpec("input", 2, "lif"),
@@ -79,7 +79,7 @@ class TestNetworkFactoryCPU:
         assert ih.state["bias"].shape == (4,)
 
         ho = projs["hidden_output"]
-        # n_post == 1 â†’ weight stored as 1-D [n_pre]
+        # n_post == 1 -> weight stored as 1-D [n_pre]
         assert ho.state["weight_matrix"].shape == (4,)
         assert ho.state["bias"].shape == (1,)
 
@@ -90,6 +90,19 @@ class TestNetworkFactoryCPU:
         for proj in engine.projections.values():
             wm = proj.state["weight_matrix"]
             assert wm.device.type == "cpu"
+
+    def test_dense_topology_keeps_matrix_without_edge_indices(self) -> None:
+        factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
+        engine = factory.build(_small_spec(), device="cpu", dtype="float32", seed=42)
+
+        ih = engine.projections["input_hidden"].topology
+        assert ih.kind == "dense"
+        assert ih.weight_matrix is not None
+        assert ih.weight_matrix.shape == (2, 4)
+        assert ih.weights.numel() == 8
+        assert ih.pre_idx.numel() == 0
+        assert ih.post_idx.numel() == 0
+        assert ih.delays.numel() == 0
 
     def test_engine_is_built(self) -> None:
         factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
@@ -103,7 +116,7 @@ class TestNetworkFactoryCPU:
 
 @pytest.mark.unit
 class TestNetworkFactoryDeterminism:
-    """Same seed â†’ identical weights."""
+    """Same seed -> identical weights."""
 
     def test_same_seed_same_weights(self) -> None:
         import torch

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -70,6 +70,10 @@ def test_evolve_script_reads_env_overrides(
     assert pytest.approx(0.75) == module.MUTATION_POWER
     assert pytest.approx(0.55) == module.SPECIES_THRESHOLD
     assert module.EVAL_REPEATS == 3
+    assert module.EVOLVE_PROFILE == "explore"
+    assert module.EVOLVE_STALL_PATIENCE == 240
+    assert module.EVOLVE_MIN_PROGRESS_FRAMES == 240
+    assert module.EVOLVE_MAX_DECIDE_TICKS == 16
     assert pytest.approx(120.0) == module.FITNESS_PROGRESS_SCALE
     assert pytest.approx(2.0) == module.FITNESS_SURVIVAL_SCALE
     assert pytest.approx(1.5) == module.FITNESS_DURABLE_PROGRESS_WEIGHT
@@ -90,9 +94,66 @@ def test_evolve_script_rejects_invalid_small_env_values(
 
     assert module.POPULATION_SIZE == 32
     assert module.GENERATIONS == 40
-    assert module.EVAL_FRAMES_PER_EPISODE == 3600
+    assert module.EVAL_FRAMES_PER_EPISODE == 900
     assert pytest.approx(0.5) == module.SPECIES_THRESHOLD
+    assert module.EVAL_REPEATS == 1
+
+
+@pytest.mark.unit
+def test_evolve_script_validate_profile_uses_fuller_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_PROFILE", "validate")
+
+    module = _load_evolve_script(monkeypatch)
+
+    assert module.EVOLVE_PROFILE == "validate"
+    assert module.EVAL_FRAMES_PER_EPISODE == 3600
     assert module.EVAL_REPEATS == 2
+    assert module.EVOLVE_STALL_PATIENCE == 600
+    assert module.EVOLVE_MIN_PROGRESS_FRAMES == 0
+    assert module.EVOLVE_MAX_DECIDE_TICKS == 0
+
+
+@pytest.mark.unit
+def test_evolve_script_caps_live_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_WORKERS", "9")
+
+    module = _load_evolve_script(monkeypatch)
+
+    assert module.REQUESTED_EVOLUTION_WORKERS == 9
+    assert module.EVOLUTION_WORKERS == 4
+    assert module.EVOLUTION_WORKER_PORTS == (8650, 8651, 8652, 8653)
+
+
+@pytest.mark.unit
+def test_worker_evaluator_uses_unique_port_and_error_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_evolve_script(monkeypatch)
+    captured: list[object] = []
+
+    def fake_builder(config: object, **_kwargs: object) -> object:
+        captured.append(config)
+        return object()
+
+    monkeypatch.setattr(module, "build_live_smb3_fitness_evaluator", fake_builder)
+    live_cfg = module.SMB3LiveFitnessConfig(
+        emuhawk_path="emu",
+        rom_path="rom",
+        lua_script="lua",
+        port=9100,
+    )
+
+    module._build_evaluator_for_worker(live_cfg, run_dir=tmp_path, worker_index=2)
+
+    assert captured
+    cfg = cast("Any", captured[0])
+    assert cfg.port == 9102
+    assert str(tmp_path / "bizhawk" / "bridge_error_worker_2.log") == cfg.bridge_error_path
 
 
 @pytest.mark.unit

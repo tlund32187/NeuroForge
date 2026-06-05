@@ -1,4 +1,4 @@
-"""NeuroForge CLI â€” `
+"""NeuroForge CLI - `
 euroforge run | ui | list-runs``.
 
 Entrypoint registered in ``pyproject.toml``::
@@ -53,7 +53,7 @@ def _run_task(
     emit("run_start", {"run_meta": ctx.to_dict(), "config": config_dict(cfg)})
     task = task_cls(cfg, event_bus=bus, **(task_kwargs or {}))
 
-    log("Training startedâ€¦")
+    log("Training started...")
     t0 = time.perf_counter()
     try:
         result = task.run()
@@ -926,7 +926,7 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neuroforge",
-        description="NeuroForge â€” spiking neural network toolkit",
+        description="NeuroForge - spiking neural network toolkit",
     )
     parser.add_argument(
         "--version", action="version", version=f"neuroforge {__version__}",

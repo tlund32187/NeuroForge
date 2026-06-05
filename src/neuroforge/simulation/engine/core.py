@@ -1,4 +1,4 @@
-"""Core simulation engine â€” orchestrates populations and projections.
+"""Core simulation engine - orchestrates populations and projections.
 
 The engine manages a graph of neuron *populations* (nodes) connected
 by synapse *projections* (edges).  Each ``step()`` call:
@@ -228,7 +228,7 @@ class CoreEngine:
             target_pop = self._populations[proj.target]
 
             # Get pre-synaptic spikes (from state, not from "this step" which hasn't happened)
-            # On step 0, use zeros â€” allocated on the correct device.
+            # On step 0, use zeros - allocated on the correct device.
             # The dtype mirrors last_spikes when available; otherwise
             # defaults to bool (the standard LIF model returns bools).
             if "last_spikes" in source_pop.state:
