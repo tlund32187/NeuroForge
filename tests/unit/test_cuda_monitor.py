@@ -1,10 +1,10 @@
 # pyright: basic, reportMissingImports=false
-"""Unit tests for CudaMetricsMonitor — works on CPU-only systems."""
+"""Unit tests for CudaMetricsMonitor â€” works on CPU-only systems."""
 
 from __future__ import annotations
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.observability.monitors.resource_monitor import CudaMetricsMonitor
 
 
 class TestCudaMetricsMonitorCpu:

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.network.factory import NetworkFactory, to_topology_json
-from neuroforge.network.specs import NetworkSpec, PopulationSpec, ProjectionSpec
-from neuroforge.neurons.registry import NEURON_MODELS
-from neuroforge.synapses.registry import SYNAPSE_MODELS
+from neuroforge.construction.composition_root import DEFAULT_HUB
+from neuroforge.construction.network_factory import NetworkFactory, to_topology_json
+from neuroforge.simulation.topology.specs import NetworkSpec, PopulationSpec, ProjectionSpec
 
 
 def _large_dense_spec() -> NetworkSpec:
@@ -36,7 +35,7 @@ def _large_dense_spec() -> NetworkSpec:
 
 @pytest.mark.unit
 def test_to_topology_json_uses_summary_for_large_projection() -> None:
-    factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
+    factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
     engine = factory.build(_large_dense_spec(), device="cpu", dtype="float32", seed=7)
     topo = to_topology_json(engine)
 

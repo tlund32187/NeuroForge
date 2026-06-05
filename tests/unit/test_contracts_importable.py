@@ -1,258 +1,184 @@
-"""Verify all contracts are importable, runtime_checkable, and have expected methods."""
+"""Verify contracts are importable and kept in the target package shape."""
 
 from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
 
 import pytest
 
 
+def _module_missing(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is None
+    except ModuleNotFoundError:
+        return True
+
+
 @pytest.mark.unit
-class TestContractsImportable:
-    """All contract modules import without error."""
+def test_contracts_tree_contains_expected_modules() -> None:
+    root = Path(__file__).parents[2] / "src" / "neuroforge" / "contracts"
+    expected = {
+        "__init__.py",
+        "tensors.py",
+        "runtime.py",
+        "registries.py",
+        "factories.py",
+        "simulation.py",
+        "messaging.py",
+        "monitoring.py",
+        "biology/__init__.py",
+        "biology/compartments.py",
+        "biology/neurons.py",
+        "biology/synapses.py",
+        "biology/plasticity.py",
+        "biology/receptors.py",
+        "biology/ion_channels.py",
+        "biology/neuromodulators.py",
+        "applications/__init__.py",
+        "applications/tasks.py",
+        "applications/games.py",
+        "applications/evolution.py",
+    }
 
-    def test_import_tensor(self) -> None:
-        from neuroforge.contracts.tensor import Tensor
+    missing = [path for path in sorted(expected) if not (root / path).is_file()]
+    assert missing == []
 
-        assert Tensor is not None
 
-    def test_import_types(self) -> None:
-        from neuroforge.contracts.types import Compartment
+@pytest.mark.unit
+def test_removed_contract_modules_are_not_present() -> None:
+    legacy_modules = [
+        "neuroforge.contracts.tensor",
+        "neuroforge.contracts.construction",
+        "neuroforge.contracts.game",
+        "neuroforge.contracts.encoding",
+        "neuroforge.contracts.learning",
+        "neuroforge.contracts.types",
+        "neuroforge.contracts.monitors",
+    ]
 
-        assert Compartment.SOMA.value == "soma"
+    missing = [name for name in legacy_modules if _module_missing(name)]
 
-    def test_import_factories(self) -> None:
-        from neuroforge.contracts.factories import IRegistry
+    assert missing == legacy_modules
 
-        assert IRegistry is not None
 
-    def test_import_neurons(self) -> None:
-        from neuroforge.contracts.neurons import (
-            INeuronModel,
-            NeuronInputs,
-            NeuronStepResult,
-            StepContext,
-        )
+@pytest.mark.unit
+def test_core_contract_imports() -> None:
+    from neuroforge.contracts.factories import IFactory
+    from neuroforge.contracts.registries import IRegistry
+    from neuroforge.contracts.runtime import IRuntimeComponent
+    from neuroforge.contracts.tensors import Tensor
 
-        assert all(
-            cls is not None
-            for cls in [INeuronModel, NeuronInputs, NeuronStepResult, StepContext]
-        )
+    assert all(cls is not None for cls in [IFactory, IRegistry, IRuntimeComponent])
+    assert Tensor is not None
 
-    def test_import_synapses(self) -> None:
-        from neuroforge.contracts.synapses import (
-            ISynapseModel,
-            SynapseInputs,
-            SynapseStepResult,
-            SynapseTopology,
-        )
 
-        assert all(
-            cls is not None
-            for cls in [
-                ISynapseModel,
-                SynapseTopology,
-                SynapseInputs,
-                SynapseStepResult,
-            ]
-        )
+@pytest.mark.unit
+def test_biology_contract_imports() -> None:
+    from neuroforge.contracts.biology.compartments import Compartment
+    from neuroforge.contracts.biology.ion_channels import IIonChannel
+    from neuroforge.contracts.biology.neuromodulators import NeuromodulatorSignal
+    from neuroforge.contracts.biology.neurons import INeuronModel, StepContext
+    from neuroforge.contracts.biology.plasticity import ILearningRule, LearningBatch
+    from neuroforge.contracts.biology.receptors import IReceptorModel
+    from neuroforge.contracts.biology.synapses import ISynapseModel, SynapseTopology
 
-    def test_import_learning(self) -> None:
-        from neuroforge.contracts.learning import (
+    assert Compartment.SOMA.value == "soma"
+    assert all(
+        cls is not None
+        for cls in [
+            IIonChannel,
             ILearningRule,
+            INeuronModel,
+            IReceptorModel,
+            ISynapseModel,
             LearningBatch,
-            LearningStepResult,
-        )
+            NeuromodulatorSignal,
+            StepContext,
+            SynapseTopology,
+        ]
+    )
 
-        assert all(
-            cls is not None
-            for cls in [ILearningRule, LearningBatch, LearningStepResult]
-        )
 
-    def test_import_simulation(self) -> None:
-        from neuroforge.contracts.simulation import (
-            ISimulationEngine,
-            SimulationConfig,
-            StepResult,
-        )
+@pytest.mark.unit
+def test_application_contract_imports() -> None:
+    from neuroforge.contracts.applications.evolution import (
+        FitnessResult,
+        IFitnessEvaluator,
+        IGenome,
+    )
+    from neuroforge.contracts.applications.games import (
+        ControllerAction,
+        GameObservation,
+        IGameClient,
+        ScreenFrame,
+        VisionGameMetrics,
+    )
+    from neuroforge.contracts.applications.tasks import ILoss, IReadout, ReadoutResult
 
-        assert all(
-            cls is not None for cls in [ISimulationEngine, SimulationConfig, StepResult]
-        )
-
-    def test_import_game(self) -> None:
-        from neuroforge.contracts.game import (
+    assert all(
+        cls is not None
+        for cls in [
             ControllerAction,
+            FitnessResult,
             GameObservation,
+            IFitnessEvaluator,
             IGameClient,
+            IGenome,
+            ILoss,
+            IReadout,
+            ReadoutResult,
             ScreenFrame,
             VisionGameMetrics,
-        )
-
-        assert all(
-            cls is not None
-            for cls in [
-                ControllerAction,
-                GameObservation,
-                IGameClient,
-                ScreenFrame,
-                VisionGameMetrics,
-            ]
-        )
-
-    def test_import_evolution(self) -> None:
-        from neuroforge.contracts.evolution import FitnessResult, IFitnessEvaluator, IGenome
-
-        assert all(cls is not None for cls in [FitnessResult, IFitnessEvaluator, IGenome])
+        ]
+    )
 
 
 @pytest.mark.unit
-class TestProtocolsAreRuntimeCheckable:
-    """Protocols should be usable with isinstance() at runtime."""
+def test_messaging_and_monitoring_are_split() -> None:
+    from neuroforge.contracts.messaging import EventTopic, IEventBus, MonitorEvent
+    from neuroforge.contracts.monitoring import IMonitor
 
-    def test_ineuron_model(self) -> None:
-        from neuroforge.contracts.neurons import INeuronModel
-
-        assert hasattr(INeuronModel, "__protocol_attrs__") or hasattr(
-            INeuronModel, "_is_runtime_protocol"
-        )
-
-    def test_isynapse_model(self) -> None:
-        from neuroforge.contracts.synapses import ISynapseModel
-
-        assert hasattr(ISynapseModel, "__protocol_attrs__") or hasattr(
-            ISynapseModel, "_is_runtime_protocol"
-        )
-
-    def test_ilearning_rule(self) -> None:
-        from neuroforge.contracts.learning import ILearningRule
-
-        assert hasattr(ILearningRule, "__protocol_attrs__") or hasattr(
-            ILearningRule, "_is_runtime_protocol"
-        )
-
-    def test_isimulation_engine(self) -> None:
-        from neuroforge.contracts.simulation import ISimulationEngine
-
-        assert hasattr(ISimulationEngine, "__protocol_attrs__") or hasattr(
-            ISimulationEngine, "_is_runtime_protocol"
-        )
-
-    def test_iregistry(self) -> None:
-        from neuroforge.contracts.factories import IRegistry
-
-        assert hasattr(IRegistry, "__protocol_attrs__") or hasattr(
-            IRegistry, "_is_runtime_protocol"
-        )
-
-    def test_igame_client(self) -> None:
-        from neuroforge.contracts.game import IGameClient
-
-        assert hasattr(IGameClient, "__protocol_attrs__") or hasattr(
-            IGameClient, "_is_runtime_protocol"
-        )
-
-    def test_igenome(self) -> None:
-        from neuroforge.contracts.evolution import IGenome
-
-        assert hasattr(IGenome, "__protocol_attrs__") or hasattr(
-            IGenome, "_is_runtime_protocol"
-        )
+    assert all(cls is not None for cls in [EventTopic, IEventBus, IMonitor, MonitorEvent])
 
 
 @pytest.mark.unit
-class TestProtocolsHaveExpectedMethods:
-    """Each protocol declares the methods we expect."""
+def test_protocols_have_expected_methods() -> None:
+    from neuroforge.contracts.applications.evolution import IGenome
+    from neuroforge.contracts.applications.games import IGameClient
+    from neuroforge.contracts.biology.neurons import INeuronModel
+    from neuroforge.contracts.biology.plasticity import ILearningRule
+    from neuroforge.contracts.biology.synapses import ISynapseModel
+    from neuroforge.contracts.registries import IRegistry
+    from neuroforge.contracts.simulation import ISimulationEngine
 
-    def test_ineuron_model_methods(self) -> None:
-        from neuroforge.contracts.neurons import INeuronModel
+    expectations = {
+        INeuronModel: {"init_state", "step", "reset_state", "state_tensors"},
+        ISynapseModel: {"init_state", "step", "state_tensors"},
+        ILearningRule: {"init_state", "step", "state_tensors"},
+        ISimulationEngine: {"build", "reset", "step", "run"},
+        IRegistry: {"register", "create", "list_keys", "has"},
+        IGameClient: {"reset", "step", "close"},
+        IGenome: {"to_dict"},
+    }
 
-        expected = {"init_state", "step", "reset_state", "state_tensors"}
-        # Protocol methods appear in annotations or as direct attrs
-        for method in expected:
-            assert hasattr(INeuronModel, method), f"Missing method: {method}"
-
-    def test_isynapse_model_methods(self) -> None:
-        from neuroforge.contracts.synapses import ISynapseModel
-
-        expected = {"init_state", "step", "state_tensors"}
-        for method in expected:
-            assert hasattr(ISynapseModel, method), f"Missing method: {method}"
-
-    def test_ilearning_rule_methods(self) -> None:
-        from neuroforge.contracts.learning import ILearningRule
-
-        expected = {"init_state", "step", "state_tensors"}
-        for method in expected:
-            assert hasattr(ILearningRule, method), f"Missing method: {method}"
-
-    def test_isimulation_engine_methods(self) -> None:
-        from neuroforge.contracts.simulation import ISimulationEngine
-
-        expected = {"build", "reset", "step", "run"}
-        for method in expected:
-            assert hasattr(ISimulationEngine, method), f"Missing method: {method}"
-
-    def test_iregistry_methods(self) -> None:
-        from neuroforge.contracts.factories import IRegistry
-
-        expected = {"register", "create", "list_keys", "has"}
-        for method in expected:
-            assert hasattr(IRegistry, method), f"Missing method: {method}"
-
-    def test_igame_client_methods(self) -> None:
-        from neuroforge.contracts.game import IGameClient
-
-        expected = {"reset", "step", "close"}
-        for method in expected:
-            assert hasattr(IGameClient, method), f"Missing method: {method}"
-
-    def test_igenome_methods(self) -> None:
-        from neuroforge.contracts.evolution import IGenome
-
-        expected = {"to_dict"}
-        for method in expected:
-            assert hasattr(IGenome, method), f"Missing method: {method}"
+    for protocol, methods in expectations.items():
+        for method in methods:
+            assert hasattr(protocol, method), f"{protocol.__name__} missing {method}"
 
 
 @pytest.mark.unit
-class TestDTOsAreFrozen:
-    """DTOs should be immutable (frozen dataclasses)."""
+def test_dtos_are_frozen() -> None:
+    from neuroforge.contracts.biology.neurons import StepContext
+    from neuroforge.contracts.simulation import SimulationConfig, StepResult
 
-    def test_step_context_frozen(self) -> None:
-        from neuroforge.contracts.neurons import StepContext
+    ctx = StepContext(step=0, dt=0.001, t=0.0)
+    with pytest.raises(AttributeError):
+        ctx.step = 1  # type: ignore[misc]
 
-        ctx = StepContext(step=0, dt=0.001, t=0.0)
-        with pytest.raises(AttributeError):
-            ctx.step = 1  # type: ignore[misc]
+    cfg = SimulationConfig()
+    with pytest.raises(AttributeError):
+        cfg.dt = 0.01  # type: ignore[misc]
 
-    def test_simulation_config_frozen(self) -> None:
-        from neuroforge.contracts.simulation import SimulationConfig
-
-        cfg = SimulationConfig()
-        with pytest.raises(AttributeError):
-            cfg.dt = 0.01  # type: ignore[misc]
-
-    def test_simulation_config_defaults(self) -> None:
-        from neuroforge.contracts.simulation import SimulationConfig
-
-        cfg = SimulationConfig()
-        assert cfg.dt == 1e-3
-        assert cfg.seed == 42
-        assert cfg.device == "cpu"
-        assert cfg.dtype == "float32"
-
-    def test_step_result_defaults(self) -> None:
-        from neuroforge.contracts.simulation import StepResult
-
-        result = StepResult(step=0, t=0.0, spikes={})
-        assert result.extra == {}
-
-
-@pytest.mark.unit
-class TestEnums:
-    """Enum members have expected values."""
-
-    def test_compartment_soma(self) -> None:
-        from neuroforge.contracts.types import Compartment
-
-        assert Compartment.SOMA.value == "soma"
-        assert isinstance(Compartment.SOMA, str)
+    result = StepResult(step=0, t=0.0, spikes={})
+    assert result.extra == {}

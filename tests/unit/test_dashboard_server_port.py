@@ -6,7 +6,7 @@ import socket
 
 
 def test_resolve_dashboard_port_skips_busy_port() -> None:
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     host = "127.0.0.1"
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

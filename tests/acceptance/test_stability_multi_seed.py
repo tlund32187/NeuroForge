@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from neuroforge.runners.stability_harness import run_multi_seed
+from neuroforge.interfaces.cli.commands.stability_harness import run_multi_seed
 
 
 @pytest.mark.acceptance

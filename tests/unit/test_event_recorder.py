@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.event_recorder import EventRecorderMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.observability.events.recorder import EventRecorderMonitor
 
 if TYPE_CHECKING:
     from pathlib import Path

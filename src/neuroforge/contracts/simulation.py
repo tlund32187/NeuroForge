@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from neuroforge.contracts.tensor import Tensor
+    from neuroforge.contracts.tensors import Tensor
 
 __all__ = [
     "ISimulationEngine",

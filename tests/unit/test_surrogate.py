@@ -5,15 +5,16 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.contracts.neurons import NeuronInputs, StepContext
-from neuroforge.contracts.synapses import SynapseInputs, SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.core.surrogate import surrogate_spike
-from neuroforge.engine.core_engine import CoreEngine, Population, Projection
-from neuroforge.neurons.lif.surrogate import SurrogateLIFModel
-from neuroforge.synapses.static import StaticSynapseModel
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.neurons.models.lif.surrogate import SurrogateLIFModel
+from neuroforge.biology.neurons.state import NeuronInputs, StepContext
+from neuroforge.biology.synapses.models.static import StaticSynapseModel
+from neuroforge.biology.synapses.state import SynapseInputs
+from neuroforge.biology.synapses.topology import SynapseTopology
+from neuroforge.kernel.surrogate import surrogate_spike
+from neuroforge.simulation.engine.core import CoreEngine, Population, Projection
 
-# ── surrogate_spike unit tests ──────────────────────────────────────
+#
 
 
 class TestSurrogateSpike:
@@ -48,7 +49,7 @@ class TestSurrogateSpike:
         assert x.grad.item() > 0.0
 
 
-# ── SurrogateLIFModel unit tests ───────────────────────────────────
+#
 
 
 class TestSurrogateLIFModel:
@@ -67,7 +68,7 @@ class TestSurrogateLIFModel:
     def test_no_spikes_below_threshold(self) -> None:
         model = SurrogateLIFModel()
         state = model.init_state(2, "cpu", "float32")
-        # Tiny drive — voltage stays below threshold.
+        # Tiny drive â€” voltage stays below threshold.
         inp = NeuronInputs(drive={Compartment.SOMA: torch.full((2,), 0.01)})
         ctx = StepContext(dt=1e-3, step=0, t=0.0)
         result = model.step(state, inp, ctx)
@@ -86,14 +87,14 @@ class TestSurrogateLIFModel:
         assert v.item() == pytest.approx(0.0, abs=1e-6)
 
 
-# ── StaticSynapseModel float-spike tests ───────────────────────────
+#
 
 
 class TestStaticSynapseFloat:
     """Verify synapse handles float spikes while preserving bool behavior."""
 
     def _make_topology(self, w: torch.Tensor) -> SynapseTopology:
-        """Build a 2-pre → 1-post fully-connected topology."""
+        """Build a 2-pre â†’ 1-post fully-connected topology."""
         pre_idx = torch.tensor([0, 1], dtype=torch.long)
         post_idx = torch.tensor([0, 0], dtype=torch.long)
         delays = torch.zeros(2, dtype=torch.long)
@@ -146,7 +147,7 @@ class TestStaticSynapseFloat:
         assert current.item() == pytest.approx(0.5, abs=1e-6)
 
 
-# ── End-to-end gradient flow test ──────────────────────────────────
+#
 
 
 class TestSurrogateGradientFlow:
@@ -156,7 +157,7 @@ class TestSurrogateGradientFlow:
         """A trainable synapse weight must receive nonzero gradient."""
         from neuroforge.contracts.simulation import SimulationConfig
 
-        # 1-neuron input pop → 1-neuron output pop via one synapse.
+        # 1-neuron input pop â†’ 1-neuron output pop via one synapse.
         w = torch.tensor([0.8], requires_grad=True)
         topo = SynapseTopology(
             pre_idx=torch.tensor([0], dtype=torch.long),
@@ -190,20 +191,20 @@ class TestSurrogateGradientFlow:
         assert w.grad.abs().item() > 0.0, "gradient should be nonzero"
 
 
-# ── Registry tests ─────────────────────────────────────────────────
+#
 
 
 class TestSurrogateRegistry:
     """Ensure surrogate LIF is discoverable via the factory hub."""
 
     def test_lif_surr_registered(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
         model = DEFAULT_HUB.neurons.create("lif_surr")
         assert isinstance(model, SurrogateLIFModel)
 
     def test_lif_surrogate_alias(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
         model = DEFAULT_HUB.neurons.create("lif_surrogate")
         assert isinstance(model, SurrogateLIFModel)

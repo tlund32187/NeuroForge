@@ -7,13 +7,13 @@ and a calibrated end-to-end extract.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pytest
 
-from neuroforge.contracts.game import ScreenFrame
-from neuroforge.game.vision import (
+from neuroforge.contracts.applications.games import ScreenFrame
+from neuroforge.environments.games.smb3.hud import (
     DigitGlyphAtlas,
     HudField,
     HudLayout,
@@ -48,7 +48,7 @@ def _render_digits(gray: NDArray[np.uint8], field: HudField, digits: str) -> Non
         gray[cy : cy + field.cell_h, cx : cx + field.cell_w] = _glyph(int(ch))
 
 
-# ── digit reading ──────────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -81,7 +81,7 @@ def test_blank_cell_reads_as_blank() -> None:
     assert conf == pytest.approx(1.0)
 
 
-# ── scroll progress ──────────────────────────────────────────────────────
+#
 
 
 def _striped(width: int, height: int = 120, phase: int = 0) -> NDArray[np.uint8]:
@@ -111,7 +111,7 @@ def test_progress_tracks_max_and_resets() -> None:
     assert est.forward_px == 0.0
 
 
-# ── layout scaling ───────────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -128,7 +128,7 @@ def test_layout_scaled_to_rescales_coordinates() -> None:
     assert layout.scaled_to(256, 224) is layout
 
 
-# ── extractor: graceful degradation + calibrated read ────────────────────
+#
 
 
 def _frame_from_gray(gray: NDArray[np.uint8]) -> ScreenFrame:
@@ -155,7 +155,8 @@ def test_extractor_degrades_gracefully_without_atlas() -> None:
 def test_extractor_reads_score_when_calibrated(tmp_path: Path) -> None:
     # Write a temp atlas the extractor will load.
     atlas_path = tmp_path / "atlas.npz"
-    np.savez(atlas_path, **{str(d): _glyph(d) for d in range(10)})
+    savez = cast("Any", np.savez)
+    savez(atlas_path, **{str(d): _glyph(d) for d in range(10)})
 
     layout = smb3_map_layout()
     score_field = layout.field("score")
@@ -173,7 +174,7 @@ def test_extractor_reads_score_when_calibrated(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_extractor_satisfies_protocol() -> None:
-    from neuroforge.contracts.game import IFrameMetricExtractor
+    from neuroforge.contracts.applications.games import IFrameMetricExtractor
 
     extractor = SMB3HudExtractor(SMB3HudConfig(atlas_path="none.npz"))
     assert isinstance(extractor, IFrameMetricExtractor)
@@ -184,8 +185,8 @@ def test_packaged_atlas_reads_inlevel_hud() -> None:
     # Locks in the real (packaged) atlas + verified in-level ROIs + threshold,
     # using a synthetic cyan-background frame rendered from the atlas glyphs
     # (no copyrighted ROM image committed).
-    from neuroforge.game.vision.hud_extractor import _DEFAULT_ATLAS
-    from neuroforge.game.vision.rois import smb3_level_layout
+    from neuroforge.environments.games.smb3.hud.extractor import _DEFAULT_ATLAS
+    from neuroforge.environments.games.smb3.hud.rois import smb3_level_layout
 
     ext = SMB3HudExtractor(SMB3HudConfig(track_progress=False))
     if not ext.is_calibrated:

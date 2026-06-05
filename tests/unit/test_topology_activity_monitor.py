@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.topology_activity_monitor import TopologyActivityMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.topology_activity_monitor import TopologyActivityMonitor
 
 
 class _CaptureMonitor:

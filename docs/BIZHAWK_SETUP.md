@@ -37,7 +37,7 @@ launches EmuHawk, then passes the endpoints through `NEUROFORGE_BRIDGE_HOST`,
 `NEUROFORGE_BRIDGE_PORT`, `NEUROFORGE_BRIDGE_SCREENSHOT_HOST`,
 `NEUROFORGE_BRIDGE_SCREENSHOT_PORT`, and `NEUROFORGE_BRIDGE_TRANSPORT=socket`.
 
-On the Lua side, [neuroforge_bridge.lua](../bizhawk/neuroforge_bridge.lua) tries:
+On the Lua side, [neuroforge_bridge.lua](../scripts/bizhawk/neuroforge_bridge.lua) tries:
 
 - **LuaSocket** via `require("socket")`, then `require("socket.core")`.
   This covers installs where BizHawk has `C:\BizHawk\Lua\socket\core.dll` but
@@ -77,8 +77,8 @@ network happens later in the policy's preprocessor.
 1. Start Python first so it creates the comm dirs and waits:
 
    ```python
-   from neuroforge.game import BizHawkClient, BizHawkClientConfig, VisionOnlyGameLoop
-   from neuroforge.contracts.game import ControllerAction
+   from neuroforge.environments.games.smb3 import BizHawkClient, BizHawkClientConfig, VisionOnlyGameLoop
+   from neuroforge.contracts.applications.games import ControllerAction
 
    client = BizHawkClient(BizHawkClientConfig(transport="file"))
    class HoldRight:
@@ -90,14 +90,14 @@ network happens later in the policy's preprocessor.
    ```
 
 2. In EmuHawk: load the ROM, then **Tools → Lua Console → Open Script** and run
-   [bizhawk/neuroforge_bridge.lua](../bizhawk/neuroforge_bridge.lua). It reads the
+   [scripts/bizhawk/neuroforge_bridge.lua](../scripts/bizhawk/neuroforge_bridge.lua). It reads the
    comm dir from `NEUROFORGE_BRIDGE_DIR` or falls back to
    `%TEMP%\neuroforge_bridge`.
 
 ## Verify-on-your-BizHawk
 
 These Lua APIs vary by EmuHawk version — the spots are commented in
-[neuroforge_bridge.lua](../bizhawk/neuroforge_bridge.lua):
+[neuroforge_bridge.lua](../scripts/bizhawk/neuroforge_bridge.lua):
 
 - `client.screenshot(path)` writes the current frame as PNG synchronously.
 - `client.bufferwidth()/bufferheight()` return the native frame size (NES = 256×240).

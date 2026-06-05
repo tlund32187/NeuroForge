@@ -9,13 +9,18 @@ and that it chains onto A0's contrast output.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
-from neuroforge.contracts.game import ScreenFrame
+from neuroforge.contracts.applications.games import ScreenFrame
 
 torch = pytest.importorskip("torch")
 
-from neuroforge.vision.encoding import (  # noqa: E402
+if TYPE_CHECKING:
+    from torch import Tensor
+
+from neuroforge.perception.vision.encoding import (  # noqa: E402
     RetinaEncoder,
     STDPFeatureConfig,
     STDPFeatureLayer,
@@ -27,7 +32,7 @@ _CH = 2
 _DIM = _CH * _PATCH * _PATCH  # 50
 
 
-def _disjoint_patterns(k: int) -> torch.Tensor:
+def _disjoint_patterns(k: int) -> Tensor:
     """k maximally-separable patterns: each lights a disjoint block of inputs."""
     pats = torch.zeros(k, _DIM)
     chunk = _DIM // k
@@ -36,7 +41,7 @@ def _disjoint_patterns(k: int) -> torch.Tensor:
     return pats
 
 
-def _train(layer: STDPFeatureLayer, patterns: torch.Tensor, *, batches: int, seed: int) -> None:
+def _train(layer: STDPFeatureLayer, patterns: Tensor, *, batches: int, seed: int) -> None:
     gen = torch.Generator().manual_seed(seed)
     k = patterns.shape[0]
     for _ in range(batches):

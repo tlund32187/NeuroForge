@@ -10,32 +10,33 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.contracts.game import (
+from neuroforge.agents.actuators.action_commitment import (
+    TemporalCommitment,
+    TemporalCommitmentConfig,
+)
+from neuroforge.agents.actuators.action_decoder import ActionDecodeConfig, ActionDecoder
+from neuroforge.agents.brains.policy_network import PolicyNetworkConfig, build_policy_network
+from neuroforge.agents.brains.stateful_engine import CoreEnginePolicyEngine
+from neuroforge.agents.policies.snn_policy import build_snn_game_policy
+from neuroforge.contracts.applications.games import (
     ControllerAction,
     GameObservation,
     IVisionGamePolicy,
     ScreenFrame,
 )
-from neuroforge.game.clients.scripted import ScriptedGameClient
-from neuroforge.game.loop import VisionOnlyGameLoop
-from neuroforge.game.policies import (
-    ActionDecodeConfig,
-    ActionDecoder,
-    CoreEnginePolicyEngine,
+from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+from neuroforge.environments.games.smb3.environment import VisionOnlyGameLoop
+from neuroforge.perception.vision.encoding.frame_preprocess import (
     FramePreprocessConfig,
     FramePreprocessor,
-    PolicyNetworkConfig,
-    build_policy_network,
-    build_snn_game_policy,
 )
-from neuroforge.game.policies.commitment import TemporalCommitment, TemporalCommitmentConfig
 
 
 def _frame(fill: int, *, w: int = 64, h: int = 56, c: int = 3) -> ScreenFrame:
     return ScreenFrame(width=w, height=h, channels=c, data=bytes([fill % 256]) * (w * h * c))
 
 
-# ── frame preprocessing ────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -63,7 +64,7 @@ def test_preprocessor_motion_first_frame_is_zero() -> None:
     assert float(drive[9:].abs().max()) == pytest.approx(0.0, abs=1e-4)  # diff half = 0
 
 
-# ── network construction ─────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -117,7 +118,7 @@ def test_build_policy_network_supports_deep_and_skip_pathways() -> None:
     }
 
 
-# ── stateful inference ───────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -147,7 +148,7 @@ def test_decide_rejects_nonpositive_ticks() -> None:
         engine.decide(torch.zeros(8), ticks=0)
 
 
-# ── action decoding ──────────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -231,7 +232,7 @@ def test_temporal_commitment_can_hold_full_action() -> None:
     assert commitment.apply(second) == second
 
 
-# ── full policy through the loop ─────────────────────────────────────────
+#
 
 
 @pytest.mark.unit

@@ -5,29 +5,32 @@ from __future__ import annotations
 import json
 import math
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-import neuroforge.runners.cli as cli
-from neuroforge.contracts.evolution import FitnessResult
-from neuroforge.contracts.monitors import EventTopic
-from neuroforge.evolution import (
+import neuroforge.interfaces.cli.main as cli
+from neuroforge.applications.smb3.fitness import (
+    ScriptedGameFitnessConfig,
+    build_scripted_progress_fitness_evaluator,
+)
+from neuroforge.applications.tasks.evolution import EvolutionTask
+from neuroforge.applications.tasks.game_training import GameTrainingConfig
+from neuroforge.contracts.applications.evolution import FitnessResult
+from neuroforge.contracts.messaging import EventTopic
+from neuroforge.messaging.bus import EventBus
+from neuroforge.neuroevolution import (
     BestGenomeCheckpoint,
     CallableFitnessEvaluator,
     EvolutionConfig,
     Gene,
     PolicyGenome,
-    ScriptedGameFitnessConfig,
-    build_scripted_progress_fitness_evaluator,
+    decode_genome,
     find_latest_evolution_checkpoint,
     get_policy_objective,
     load_best_genome_checkpoint,
     policy_objective_names,
 )
-from neuroforge.monitors.bus import EventBus
-from neuroforge.tasks.evolution import EvolutionTask
-from neuroforge.tasks.game_training import GameTrainingConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -315,6 +318,7 @@ def test_evolution_task_improves_toy_objective_and_emits_events(tmp_path: Path) 
         "checkpoint_path": str(checkpoint),
         "resume": False,
         "max_workers": 1,
+        "preserve_global_best": True,
     }
     loaded_checkpoint = load_best_genome_checkpoint(checkpoint)
     assert loaded_checkpoint.schema_version == 2
@@ -489,9 +493,9 @@ def test_cli_run_evolution_supports_scripted_game_backend(tmp_path: Path) -> Non
 
 @pytest.mark.unit
 def test_evaluator_reuses_one_client_across_genomes_when_requested() -> None:
-    from neuroforge.evolution.evaluators import GameTrainingFitnessEvaluator
-    from neuroforge.game.clients.scripted import ScriptedGameClient
-    from neuroforge.game.policies.preprocess import FramePreprocessConfig
+    from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+    from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
+    from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
 
     created = {"count": 0}
 
@@ -510,11 +514,70 @@ def test_evaluator_reuses_one_client_across_genomes_when_requested() -> None:
         eval_repeats=2,
     )
     genome = PolicyGenome.seed("g0", generation=0, randomise=False)
-    evaluator.evaluate(genome)
+    result = evaluator.evaluate(genome)
     evaluator.evaluate(genome)
     evaluator.close()
 
     assert created["count"] == 1  # one client served all genomes/rollouts
+    assert result.metrics["rollout_count"] == pytest.approx(2.0)
+    assert "fitness_std" in result.metrics
+    assert "max_x_progress_std" in result.metrics
+    assert "survival_frac" in result.metrics
+
+
+@pytest.mark.unit
+def test_evolution_preserves_global_raw_best_in_next_population(tmp_path: Path) -> None:
+    champion = PolicyGenome.seed("champion", generation=0, randomise=False)
+    challenger = champion.mutate(
+        child_id="challenger",
+        generation=0,
+        rng=random.Random(3),
+        rate=1.0,
+    )
+    checkpoint = tmp_path / "evolution.json"
+
+    def objective(genome: PolicyGenome) -> float:
+        return 10.0 if genome.content_key() == champion.content_key() else 0.0
+
+    class _DropsBestReproduction:
+        def next_generation(
+            self,
+            evaluated: list[Any],
+            *,
+            generation: int,
+            rng: Any,
+        ) -> list[Any]:
+            del evaluated
+            return [
+                challenger.mutate(
+                    child_id=f"g{generation}_{idx}",
+                    generation=generation,
+                    rng=rng,
+                    rate=1.0,
+                )
+                for idx in range(4)
+            ]
+
+    EvolutionTask(
+        EvolutionConfig(
+            population_size=4,
+            generations=2,
+            elite_count=1,
+            checkpoint_path=str(checkpoint),
+            seed=19,
+        ),
+        evaluator=CallableFitnessEvaluator(objective),
+        reproduction=_DropsBestReproduction(),
+        seed_population=lambda _size, _rng: [champion, challenger, challenger, challenger],
+    ).run()
+
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    population_keys = [
+        decode_genome(item).content_key()
+        for item in payload["population"]
+    ]
+
+    assert champion.content_key() in population_keys
 
 
 @pytest.mark.unit
@@ -646,38 +709,35 @@ def test_resume_restores_rng_stream_for_deterministic_continuation(
 
     full_checkpoint = tmp_path / "full.json"
     split_checkpoint = tmp_path / "split.json"
-    common = {
-        "population_size": 6,
-        "elite_count": 1,
-        "mutation_rate": 0.8,
-        "mutation_power": 0.9,
-        "crossover_rate": 0.75,
-        "seed": 17,
-    }
+
+    def config(
+        generations: int,
+        checkpoint_path: Path,
+        *,
+        resume: bool = False,
+    ) -> EvolutionConfig:
+        return EvolutionConfig(
+            generations=generations,
+            checkpoint_path=str(checkpoint_path),
+            population_size=6,
+            elite_count=1,
+            mutation_rate=0.8,
+            mutation_power=0.9,
+            crossover_rate=0.75,
+            seed=17,
+            resume=resume,
+        )
 
     EvolutionTask(
-        EvolutionConfig(
-            generations=4,
-            checkpoint_path=str(full_checkpoint),
-            **common,
-        ),
+        config(4, full_checkpoint),
         evaluator=CallableFitnessEvaluator(objective),
     ).run()
     EvolutionTask(
-        EvolutionConfig(
-            generations=2,
-            checkpoint_path=str(split_checkpoint),
-            **common,
-        ),
+        config(2, split_checkpoint),
         evaluator=CallableFitnessEvaluator(objective),
     ).run()
     EvolutionTask(
-        EvolutionConfig(
-            generations=4,
-            checkpoint_path=str(split_checkpoint),
-            resume=True,
-            **common,
-        ),
+        config(4, split_checkpoint, resume=True),
         evaluator=CallableFitnessEvaluator(objective),
     ).run()
 

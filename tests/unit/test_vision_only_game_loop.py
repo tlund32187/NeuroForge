@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.contracts.game import (
+from neuroforge.contracts.applications.games import (
     ControllerAction,
     EpisodeDecision,
     GameClientStep,
@@ -12,9 +12,12 @@ from neuroforge.contracts.game import (
     ScreenFrame,
     VisionGameMetrics,
 )
-from neuroforge.game.clients.scripted import ScriptedGameClient
-from neuroforge.game.loop import VisionOnlyGameLoop
-from neuroforge.game.rewards import VisionMetricRewardConfig, VisionMetricRewardModel
+from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+from neuroforge.environments.games.smb3.environment import VisionOnlyGameLoop
+from neuroforge.environments.games.smb3.rewards import (
+    VisionMetricRewardConfig,
+    VisionMetricRewardModel,
+)
 
 
 def _observation(step: int, value: int, *, lives: int = 3) -> GameObservation:

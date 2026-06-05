@@ -13,11 +13,18 @@ if TYPE_CHECKING:
 
 
 def _load_train_script(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-    monkeypatch.syspath_prepend(str(scripts_dir))
+    del monkeypatch
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "neuroforge"
+        / "applications"
+        / "smb3"
+        / "train.py"
+    )
     spec = importlib.util.spec_from_file_location(
         "train_smb3_test_module",
-        scripts_dir / "train_smb3.py",
+        path,
     )
     assert spec is not None
     assert spec.loader is not None

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.contracts.game import GameObservation, ScreenFrame, VisionGameMetrics
-from neuroforge.game.rewards_smb3 import SMB3RewardConfig, SMB3RewardModel
+from neuroforge.contracts.applications.games import GameObservation, ScreenFrame, VisionGameMetrics
+from neuroforge.environments.games.smb3.rewards import SMB3RewardConfig, SMB3RewardModel
 
 
 def _obs(

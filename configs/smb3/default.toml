@@ -1,0 +1,11 @@
+[smb3]
+environment = "neuroforge.environments.games.smb3"
+application = "neuroforge.applications.smb3"
+frameskip = 4
+speed_percent = 400
+
+[smb3.training]
+episodes = 50
+frames_per_episode = 2000
+checkpoint = "artifacts/smb3_policy.pt"
+

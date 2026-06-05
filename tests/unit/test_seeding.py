@@ -9,8 +9,8 @@ import pytest
 class TestSeeding:
     def test_same_seed_same_randn(self) -> None:
         """Setting the same seed twice must produce identical random tensors."""
-        from neuroforge.core.determinism.seeding import set_global_seed
-        from neuroforge.core.torch_utils import require_torch
+        from neuroforge.kernel.determinism.seeding import set_global_seed
+        from neuroforge.kernel.torch_utils import require_torch
 
         torch = require_torch()
 
@@ -24,8 +24,8 @@ class TestSeeding:
 
     def test_different_seed_different_randn(self) -> None:
         """Different seeds should (almost certainly) produce different tensors."""
-        from neuroforge.core.determinism.seeding import set_global_seed
-        from neuroforge.core.torch_utils import require_torch
+        from neuroforge.kernel.determinism.seeding import set_global_seed
+        from neuroforge.kernel.torch_utils import require_torch
 
         torch = require_torch()
 
@@ -39,8 +39,8 @@ class TestSeeding:
 
     def test_seed_is_reproducible_across_calls(self) -> None:
         """Multiple randn calls after seeding reproduce the full sequence."""
-        from neuroforge.core.determinism.seeding import set_global_seed
-        from neuroforge.core.torch_utils import require_torch
+        from neuroforge.kernel.determinism.seeding import set_global_seed
+        from neuroforge.kernel.torch_utils import require_torch
 
         torch = require_torch()
 

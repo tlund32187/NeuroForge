@@ -1,4 +1,4 @@
-"""Tests for the CoreEngine — orchestration of populations and projections.
+"""Tests for the CoreEngine â€” orchestration of populations and projections.
 
 Tests verify that the engine correctly wires neuron populations through
 synaptic projections and produces mathematically predictable results.
@@ -11,14 +11,15 @@ import math
 import pytest
 import torch
 
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.neurons.models.lif.model import LIFModel
+from neuroforge.biology.neurons.models.lif.params import LIFParams
+from neuroforge.biology.synapses.models.static import StaticSynapseModel
+from neuroforge.biology.synapses.topology import SynapseTopology
 from neuroforge.contracts.simulation import SimulationConfig
-from neuroforge.contracts.synapses import SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.engine.core_engine import CoreEngine, Population, Projection
-from neuroforge.neurons.lif.model import LIFModel, LIFParams
-from neuroforge.synapses.static import StaticSynapseModel
+from neuroforge.simulation.engine.core import CoreEngine, Population, Projection
 
-# ── Helpers ─────────────────────────────────────────────────────────
+#
 
 
 def _make_config(dt: float = 1e-3, seed: int = 42) -> SimulationConfig:
@@ -44,7 +45,7 @@ def _make_topology(
     )
 
 
-# ── Basic lifecycle tests ──────────────────────────────────────────
+#
 
 
 class TestEngineLifecycle:
@@ -129,7 +130,7 @@ class TestEngineLifecycle:
         assert torch.allclose(engine._populations["pop"].state["v"], expected)
 
 
-# ── Single population with external drive ──────────────────────────
+#
 
 
 class TestEngineSinglePopulation:
@@ -185,7 +186,7 @@ class TestEngineSinglePopulation:
             assert r.t == pytest.approx(r.step * 1e-3)
 
 
-# ── Two populations with projection ────────────────────────────────
+#
 
 
 class TestEngineTwoPopulations:
@@ -250,7 +251,7 @@ class TestEngineTwoPopulations:
         """Strong inhibitory connection prevents post-neuron from reaching threshold.
 
         We give both pre and post external drive, but the inhibitory synapse
-        from pre→post should counteract the post drive.
+        from preâ†’post should counteract the post drive.
         """
         dt = 1e-3
         lif_params = LIFParams(tau_mem=20e-3, v_thresh=1.0)
@@ -273,7 +274,7 @@ class TestEngineTwoPopulations:
 
         # Drive pre hard (100), post just enough to be near threshold
         drive_pre = torch.tensor([100.0], dtype=torch.float64)
-        # Drive post at 20.0 — steady state = 20*0.05/0.04877 ≈ 20.5 >> threshold,
+        # Drive post at 20.0 â€” steady state = 20*0.05/0.04877 â‰ˆ 20.5 >> threshold,
         # but inhibition should suppress
         drive_post = torch.tensor([20.0], dtype=torch.float64)
 
@@ -296,7 +297,7 @@ class TestEngineTwoPopulations:
         assert v_post < lif_params.v_thresh
 
 
-# ── Voltage trajectory verification ────────────────────────────────
+#
 
 
 class TestEngineVoltageTrajectory:

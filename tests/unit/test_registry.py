@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.core.registry import Registry
+from neuroforge.construction.registry import Registry
 
 
 class _DummyA:

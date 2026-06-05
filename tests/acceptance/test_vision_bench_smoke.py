@@ -49,7 +49,7 @@ def test_vision_bench_multi_seed_sweep_writes_aggregate(tmp_path: Path) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "neuroforge.runners.vision_bench",
+        "neuroforge.interfaces.cli.commands.vision_bench",
         "--config",
         str(config_path),
         "--seeds",

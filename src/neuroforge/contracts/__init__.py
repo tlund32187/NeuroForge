@@ -1,6 +1,13 @@
-"""NeuroForge contracts — interfaces and DTOs.
+"""Protocol and DTO contracts for NeuroForge."""
 
-This package contains all protocol definitions (interfaces) and frozen
-dataclass DTOs used throughout NeuroForge.  It has **zero** runtime
-dependencies — torch types are imported only under TYPE_CHECKING.
-"""
+from neuroforge.contracts.factories import IFactory
+from neuroforge.contracts.registries import IRegistry
+from neuroforge.contracts.runtime import IRuntimeComponent
+from neuroforge.contracts.tensors import Tensor
+
+__all__ = [
+    "IFactory",
+    "IRegistry",
+    "IRuntimeComponent",
+    "Tensor",
+]

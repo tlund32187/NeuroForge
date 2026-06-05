@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-import neuroforge.runners.vision_gate_b as gate_b
+import neuroforge.interfaces.cli.commands.vision_gate_b as gate_b
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from neuroforge.runners.vision_bench import VisionBenchPlan
+    from neuroforge.interfaces.cli.commands.vision_bench import VisionBenchPlan
 
 
 def _write_config(tmp_path: Path, *, dataset: str = "mnist") -> Path:

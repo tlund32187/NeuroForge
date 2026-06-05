@@ -7,11 +7,12 @@ from typing import Any, cast
 import pytest
 import torch
 
-from neuroforge.contracts.synapses import SynapseInputs, SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.factories.hub import DEFAULT_HUB
-from neuroforge.synapses.dales_static import DalesStaticSynapseModel
-from neuroforge.synapses.static import StaticSynapseModel
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.synapses.models.dales_static import DalesStaticSynapseModel
+from neuroforge.biology.synapses.models.static import StaticSynapseModel
+from neuroforge.biology.synapses.state import SynapseInputs
+from neuroforge.biology.synapses.topology import SynapseTopology
+from neuroforge.construction.composition_root import DEFAULT_HUB
 
 
 def _build_dense_topology(

@@ -1,0 +1,9 @@
+[agent]
+package = "neuroforge.agents"
+brain = "neuroforge.agents.brains.policy_network"
+policy = "neuroforge.agents.policies.snn_policy"
+
+[agent.action]
+decoder = "neuroforge.agents.actuators.action_decoder"
+commitment = "neuroforge.agents.actuators.action_commitment"
+

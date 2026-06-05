@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.datasets import DatasetLoaders, DatasetMeta
-from neuroforge.monitors.bus import EventBus
-from neuroforge.tasks.vision_classification import (
+from neuroforge.applications.tasks.vision_classification import (
     VisionClassificationConfig,
     VisionClassificationTask,
 )
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.environments.datasets.datasets import DatasetLoaders, DatasetMeta
+from neuroforge.kernel.torch_utils import require_torch
+from neuroforge.messaging.bus import EventBus
 
 torch = require_torch()
 
@@ -134,7 +134,7 @@ def test_vision_classification_task_mnist_mode_runs_multiple_steps(
         return DatasetLoaders(train=loader, val=loader, test=loader, meta=meta)
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.DatasetFactory.build_loaders",
+        "neuroforge.environments.datasets.datasets.DatasetFactory.build_loaders",
         _fake_build_loaders,
     )
 
@@ -193,7 +193,7 @@ def test_vision_classification_task_nmnist_event_frames_runs(
         return DatasetLoaders(train=loader, val=loader, test=loader, meta=meta)
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.DatasetFactory.build_loaders",
+        "neuroforge.environments.datasets.datasets.DatasetFactory.build_loaders",
         _fake_build_loaders,
     )
 

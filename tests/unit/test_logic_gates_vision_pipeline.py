@@ -14,9 +14,10 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.vision_monitors import (
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.interfaces.cli.commands.vision import VisionRunnerConfig, run_vision_classification
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.vision_monitors import (
     ConfusionMatrixExporter,
     ConfusionMatrixMonitor,
     VisionLayerStatsExporter,
@@ -24,7 +25,6 @@ from neuroforge.monitors.vision_monitors import (
     VisionSampleGridExporter,
     VisionSampleGridMonitor,
 )
-from neuroforge.runners.vision import VisionRunnerConfig, run_vision_classification
 
 
 def _make_config(*, backbone_type: str = "lif_convnet_v1") -> VisionRunnerConfig:

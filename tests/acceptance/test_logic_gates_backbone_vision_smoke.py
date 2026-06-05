@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from neuroforge.runners.vision_bench import build_plan_from_config, run_vision_benchmark
+from neuroforge.interfaces.cli.commands.vision_bench import (
+    build_plan_from_config,
+    run_vision_benchmark,
+)
 
 
 @pytest.mark.acceptance

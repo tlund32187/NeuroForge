@@ -14,7 +14,8 @@ import pytest
 
 @pytest.mark.acceptance
 def test_bench_cli_smoke_writes_summary(tmp_path: Path) -> None:
-    """`neuroforge bench` should complete and write benchmark artifacts."""
+    """
+euroforge bench` should complete and write benchmark artifacts."""
     repo_root = Path(__file__).resolve().parents[2]
     artifacts_dir = tmp_path / "artifacts"
 
@@ -26,7 +27,7 @@ def test_bench_cli_smoke_writes_summary(tmp_path: Path) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "neuroforge.runners.cli",
+        "neuroforge.interfaces.cli.main",
         "bench",
         "--device",
         "cpu",

@@ -5,14 +5,24 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.factories.hub import build_default_hub
-from neuroforge.network.specs import VisionBackboneSpec, VisionBlockSpec, VisionInputSpec
-from neuroforge.vision.factory import (
+from neuroforge.construction.composition_root import build_default_hub
+from neuroforge.perception.vision.factory import (
     LifConvNetV1,
     LIFConvNetV1BackboneFactory,
     ResolvedVisionBackbone,
 )
-from neuroforge.vision.registry import create_vision_backbone
+from neuroforge.simulation.topology.specs import (
+    VisionBackboneSpec,
+    VisionBlockSpec,
+    VisionInputSpec,
+)
+
+
+def _create_vision_backbone(spec: VisionBackboneSpec) -> ResolvedVisionBackbone:
+    hub = build_default_hub()
+    factory = hub.vision_backbones.create(spec.type, spec=spec)
+    assert isinstance(factory, LIFConvNetV1BackboneFactory)
+    return factory.build()
 
 
 @pytest.mark.unit
@@ -60,7 +70,7 @@ def test_create_vision_backbone_helper() -> None:
         blocks=[VisionBlockSpec(type="conv", params={"out_channels": 8, "kernel_size": 3})],
         output_dim=32,
     )
-    backbone = create_vision_backbone(spec)
+    backbone = _create_vision_backbone(spec)
     x = torch.rand(3, 1, 16, 16, dtype=torch.float32)
     features, state = backbone(x)
     assert backbone.backbone_type == "lif_convnet_v1"
@@ -85,7 +95,7 @@ def test_lif_convnet_v1_accepts_prebinned_event_tensor_input() -> None:
         ],
         output_dim=12,
     )
-    backbone = create_vision_backbone(spec)
+    backbone = _create_vision_backbone(spec)
     events = torch.rand(5, 4, 2, 8, 8, dtype=torch.float32)
     features, state = backbone(events)
     assert tuple(features.shape) == (5, 12)
@@ -136,12 +146,12 @@ def test_lif_convnet_v1_reproducible_on_cpu_with_fixed_seed() -> None:
     x = torch.rand(4, 2, 12, 12, dtype=torch.float32)
 
     torch.manual_seed(100)
-    model_a = create_vision_backbone(spec)
+    model_a = _create_vision_backbone(spec)
     torch.manual_seed(777)
     feat_a, state_a = model_a(x)
 
     torch.manual_seed(100)
-    model_b = create_vision_backbone(spec)
+    model_b = _create_vision_backbone(spec)
     torch.manual_seed(777)
     feat_b, state_b = model_b(x)
 

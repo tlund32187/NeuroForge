@@ -2,7 +2,7 @@
 
 Every test computes the expected result analytically FIRST, then
 verifies that the model produces the same result.  No "trust the code"
-tests — only "trust the math" tests.
+tests â€” only "trust the math" tests.
 """
 
 from __future__ import annotations
@@ -12,9 +12,10 @@ import math
 import pytest
 import torch
 
-from neuroforge.contracts.neurons import NeuronInputs, StepContext
-from neuroforge.contracts.types import Compartment
-from neuroforge.neurons.lif.model import LIFModel, LIFParams
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.neurons.models.lif.model import LIFModel
+from neuroforge.biology.neurons.models.lif.params import LIFParams
+from neuroforge.biology.neurons.state import NeuronInputs, StepContext
 
 
 def _ctx(dt: float, step: int) -> StepContext:
@@ -22,7 +23,7 @@ def _ctx(dt: float, step: int) -> StepContext:
     return StepContext(dt=dt, step=step, t=step * dt)
 
 
-# ── Fixtures ────────────────────────────────────────────────────────
+#
 
 
 @pytest.fixture
@@ -40,7 +41,7 @@ def dt() -> float:
     return 1e-3  # 1 ms
 
 
-# ── Pure-math helper tests ──────────────────────────────────────────
+#
 
 
 class TestLIFMathHelpers:
@@ -82,7 +83,7 @@ class TestLIFMathHelpers:
 
     def test_steps_to_fire(self, lif: LIFModel, dt: float) -> None:
         """Predict the exact step on which the neuron fires."""
-        drive = 25.0  # strong drive → should fire quickly
+        drive = 25.0  # strong drive â†’ should fire quickly
         k = lif.steps_to_fire(drive, dt)
         assert k is not None
 
@@ -98,12 +99,12 @@ class TestLIFMathHelpers:
         self, lif: LIFModel, dt: float
     ) -> None:
         """If steady-state < threshold, steps_to_fire returns None."""
-        # steady-state with drive=0.5: v_ss = 0.5 * 0.05/0.04877 ≈ 0.5125 < 1.0
+        # steady-state with drive=0.5: v_ss = 0.5 * 0.05/0.04877 â‰ˆ 0.5125 < 1.0
         drive = 0.5
         assert lif.steps_to_fire(drive, dt) is None
 
 
-# ── Tensor-level simulation tests ──────────────────────────────────
+#
 
 
 class TestLIFSimulation:
@@ -147,12 +148,12 @@ class TestLIFSimulation:
 
     def test_multi_step_trajectory(self, lif: LIFModel, dt: float) -> None:
         """Run k steps and compare final voltage to closed-form prediction."""
-        drive_val = 0.8  # low enough → no spike
+        drive_val = 0.8  # low enough â†’ no spike
         k = 50
 
         # Math prediction (no spike)
         predicted = lif.voltage_after_k_steps(0.0, drive_val, dt, k)
-        assert predicted < lif.params.v_thresh, "Drive too high — would spike"
+        assert predicted < lif.params.v_thresh, "Drive too high â€” would spike"
 
         state = lif.init_state(1, "cpu", "float64")
         drive_tensor = torch.tensor([drive_val], dtype=torch.float64)
@@ -190,7 +191,7 @@ class TestLIFSimulation:
         # Put voltage just above threshold
         state["v"] = torch.tensor([lif.params.v_thresh + 0.1], dtype=torch.float64)
 
-        # Any drive — voltage is already above threshold from last step's update
+        # Any drive â€” voltage is already above threshold from last step's update
         # Actually we need to step so the model detects the spike
         drive_val = 100.0  # strong drive to guarantee spike
         inputs = NeuronInputs(
@@ -287,27 +288,27 @@ class TestLIFSimulation:
         assert abs(state["v"].item() - lif.params.v_rest) < 1e-10
 
 
-# ── Registry tests ──────────────────────────────────────────────────
+#
 
 
 class TestNeuronRegistry:
     """Verify the neuron registry has LIF registered."""
 
     def test_lif_registered(self) -> None:
-        from neuroforge.neurons.registry import NEURON_MODELS
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
-        assert NEURON_MODELS.has("lif")
+        assert DEFAULT_HUB.neurons.has("lif")
 
     def test_create_lif(self) -> None:
-        from neuroforge.neurons.registry import create_neuron_model
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
-        model = create_neuron_model("lif")
+        model = DEFAULT_HUB.neurons.create("lif")
         assert isinstance(model, LIFModel)
 
     def test_list_keys(self) -> None:
-        from neuroforge.neurons.registry import NEURON_MODELS
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
-        keys = NEURON_MODELS.list_keys()
+        keys = DEFAULT_HUB.neurons.list_keys()
         assert "lif" in keys
 
     def test_compartments(self) -> None:

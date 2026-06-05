@@ -7,10 +7,9 @@ from typing import Any
 
 import pytest
 
-from neuroforge.network.factory import NetworkFactory
-from neuroforge.network.specs import NetworkSpec, PopulationSpec, ProjectionSpec
-from neuroforge.neurons.registry import NEURON_MODELS
-from neuroforge.synapses.registry import SYNAPSE_MODELS
+from neuroforge.construction.composition_root import DEFAULT_HUB
+from neuroforge.construction.network_factory import NetworkFactory
+from neuroforge.simulation.topology.specs import NetworkSpec, PopulationSpec, ProjectionSpec
 
 
 def _sparse_spec(topology: dict[str, Any]) -> NetworkSpec:
@@ -77,7 +76,7 @@ def test_sparse_projection_trainable_weight_vector_exact_edge_count(
     topology: dict[str, Any],
     expected_edges: int,
 ) -> None:
-    factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
+    factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
     engine = factory.build(_sparse_spec(topology), device="cpu", dtype="float32", seed=123)
     proj = engine.projections["input_hidden"]
 
@@ -105,7 +104,7 @@ def test_sparse_random_projection_edge_count_is_near_expected() -> None:
     n_post = 30
     n_total = n_pre * n_post
 
-    factory = NetworkFactory(NEURON_MODELS, SYNAPSE_MODELS)
+    factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
     engine = factory.build(_sparse_spec(topology), device="cpu", dtype="float32", seed=123)
     proj = engine.projections["input_hidden"]
 

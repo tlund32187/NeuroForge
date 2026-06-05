@@ -9,16 +9,24 @@ which proves the trace is what creates the invariance.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from neuroforge.vision.encoding import TraceInvariantConfig, TraceInvariantLayer  # noqa: E402
+from neuroforge.perception.vision.encoding import (  # noqa: E402
+    TraceInvariantConfig,
+    TraceInvariantLayer,
+)
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 _N = 12
 
 
-def _trajectory(start: int, end: int, steps: int) -> list[torch.Tensor]:
+def _trajectory(start: int, end: int, steps: int) -> list[Tensor]:
     """A sequence morphing from a block at *start* to a block at *end*."""
     a = torch.zeros(_N)
     a[start : start + 4] = 1.0
@@ -27,7 +35,13 @@ def _trajectory(start: int, end: int, steps: int) -> list[torch.Tensor]:
     return [(1 - t) * a + t * b for t in torch.linspace(0.0, 1.0, steps)]
 
 
-def _train(layer: TraceInvariantLayer, traj_a: list, traj_b: list, *, epochs: int) -> None:
+def _train(
+    layer: TraceInvariantLayer,
+    traj_a: list[Tensor],
+    traj_b: list[Tensor],
+    *,
+    epochs: int,
+) -> None:
     for _ in range(epochs):
         layer.reset()
         for frame in traj_a:

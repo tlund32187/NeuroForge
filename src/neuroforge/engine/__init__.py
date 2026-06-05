@@ -1,1 +1,0 @@
-"""NeuroForge simulation engine."""

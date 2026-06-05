@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from neuroforge.tasks.registry import TASK_REGISTRY, get_task_spec
+from neuroforge.applications.tasks.registry import TASK_REGISTRY, get_task_spec
 
 
 def test_known_keys_present() -> None:
@@ -10,7 +10,7 @@ def test_known_keys_present() -> None:
 
 
 def test_game_training_spec_loads_classes() -> None:
-    from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+    from neuroforge.applications.tasks.game_training import GameTrainingConfig, GameTrainingTask
 
     spec = get_task_spec("game_training")
     assert spec is not None
@@ -20,7 +20,7 @@ def test_game_training_spec_loads_classes() -> None:
 
 
 def test_evolution_spec_loads_classes() -> None:
-    from neuroforge.tasks.evolution import EvolutionConfig, EvolutionTask
+    from neuroforge.applications.tasks.evolution import EvolutionConfig, EvolutionTask
 
     spec = get_task_spec("evolution")
     assert spec is not None
@@ -34,7 +34,7 @@ def test_get_task_spec_unknown_returns_none() -> None:
 
 
 def test_logic_gate_spec_loads_classes() -> None:
-    from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+    from neuroforge.applications.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
     spec = get_task_spec("logic_gate")
     assert spec is not None
@@ -44,7 +44,7 @@ def test_logic_gate_spec_loads_classes() -> None:
 
 
 def test_multi_gate_spec_loads_classes() -> None:
-    from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+    from neuroforge.applications.tasks.multi_gate import MultiGateConfig, MultiGateTask
 
     spec = get_task_spec("multi_gate")
     assert spec is not None

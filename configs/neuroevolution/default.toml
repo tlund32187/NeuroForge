@@ -1,0 +1,10 @@
+[neuroevolution]
+package = "neuroforge.neuroevolution"
+genome = "graph"
+population_size = 16
+generations = 25
+
+[neuroevolution.mutation]
+rate = 0.35
+power = 1.0
+

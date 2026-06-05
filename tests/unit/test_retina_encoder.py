@@ -9,19 +9,24 @@ emulator, no labels in training.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
-from neuroforge.contracts.game import ScreenFrame
+from neuroforge.contracts.applications.games import ScreenFrame
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 torch = pytest.importorskip("torch")
 
-from neuroforge.vision.encoding import RetinaEncoder, RetinaEncoderConfig  # noqa: E402
+from neuroforge.perception.vision.encoding import RetinaEncoder, RetinaEncoderConfig  # noqa: E402
 
 _H, _W = 56, 64
 
 
-def _scene(hole_col: int, *, block: bool = True) -> np.ndarray:
+def _scene(hole_col: int, *, block: bool = True) -> NDArray[np.float32]:
     """A luminance map with a floor, a hole in it, and an optional floating block."""
     luma = np.full((_H, _W), 0.20, dtype=np.float32)  # background
     luma[44:, :] = 0.80                                # floor
@@ -32,7 +37,7 @@ def _scene(hole_col: int, *, block: bool = True) -> np.ndarray:
 
 
 def _frame(
-    luma: np.ndarray,
+    luma: NDArray[np.float32],
     *,
     contrast: float = 1.0,
     bright: float = 0.0,

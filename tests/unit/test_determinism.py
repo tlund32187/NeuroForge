@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.core.determinism.mode import DeterminismConfig, apply_determinism
-from neuroforge.core.torch_utils import require_torch
+from neuroforge.kernel.determinism.mode import DeterminismConfig, apply_determinism
+from neuroforge.kernel.torch_utils import require_torch
 
 
 def test_torch_repeatability() -> None:

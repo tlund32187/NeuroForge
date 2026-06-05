@@ -10,8 +10,8 @@ import math
 import pytest
 import torch
 
-from neuroforge.contracts.learning import LearningBatch, LearningStepResult
-from neuroforge.learning.rstdp import RSTDPParams, RSTDPRule
+from neuroforge.biology.plasticity.rules.rstdp import RSTDPParams, RSTDPRule
+from neuroforge.contracts.biology.plasticity import LearningBatch, LearningStepResult
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def dt() -> float:
     return 1e-3
 
 
-# ── Pure-math helper tests ──────────────────────────────────────────
+#
 
 
 class TestRSTDPMathHelpers:
@@ -87,7 +87,7 @@ class TestRSTDPMathHelpers:
         assert rule.predict_clamped_weight(0.5, 0.1) == pytest.approx(0.6)  # no clamp
 
 
-# ── Tensor-level simulation tests ──────────────────────────────────
+#
 
 
 class TestRSTDPSimulation:
@@ -96,7 +96,7 @@ class TestRSTDPSimulation:
     def test_single_edge_pre_spike_positive_reward(
         self, rule: RSTDPRule, dt: float
     ) -> None:
-        """Pre-spike + positive reward → positive dw."""
+        """Pre-spike + positive reward â†’ positive dw."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -119,7 +119,7 @@ class TestRSTDPSimulation:
         assert result.new_eligibility.item() == pytest.approx(e_expected)
 
     def test_single_edge_negative_reward(self, rule: RSTDPRule, dt: float) -> None:
-        """Pre-spike + negative reward → negative dw (anti-Hebbian)."""
+        """Pre-spike + negative reward â†’ negative dw (anti-Hebbian)."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -138,7 +138,7 @@ class TestRSTDPSimulation:
         assert result.dw.item() == pytest.approx(dw_expected)
 
     def test_zero_reward_no_weight_change(self, rule: RSTDPRule, dt: float) -> None:
-        """Zero reward → dw = 0 regardless of spikes."""
+        """Zero reward â†’ dw = 0 regardless of spikes."""
         state = rule.init_state(1, "cpu", "float64")
 
         batch = LearningBatch(
@@ -216,11 +216,11 @@ class TestRSTDPSimulation:
 
         result = rule.step(state, batch, dt)
 
-        # Edge 0: pre=T, post=F → e += a_plus
+        # Edge 0: pre=T, post=F â†’ e += a_plus
         e0 = rule.predict_eligibility_update(0.0, True, False, dt)
-        # Edge 1: pre=F, post=T → e -= a_minus
+        # Edge 1: pre=F, post=T â†’ e -= a_minus
         e1 = rule.predict_eligibility_update(0.0, False, True, dt)
-        # Edge 2: pre=T, post=T → e += a_plus - a_minus
+        # Edge 2: pre=T, post=T â†’ e += a_plus - a_minus
         e2 = rule.predict_eligibility_update(0.0, True, True, dt)
 
         assert result.new_eligibility is not None
@@ -233,17 +233,17 @@ class TestRSTDPSimulation:
         assert result.dw[2].item() == pytest.approx(rule.predict_dw(1.0, e2))
 
 
-# ── Registry tests ──────────────────────────────────────────────────
+#
 
 
 class TestRSTDPRegistry:
     def test_registered(self) -> None:
-        from neuroforge.learning.registry import LEARNING_RULES
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
-        assert LEARNING_RULES.has("rstdp")
+        assert DEFAULT_HUB.learning_rules.has("rstdp")
 
     def test_create(self) -> None:
-        from neuroforge.learning.registry import create_learning_rule
+        from neuroforge.construction.composition_root import DEFAULT_HUB
 
-        rule = create_learning_rule("rstdp")
+        rule = DEFAULT_HUB.learning_rules.create("rstdp")
         assert isinstance(rule, RSTDPRule)

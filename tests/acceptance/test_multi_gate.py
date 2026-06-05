@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.tasks.multi_gate import ALL_GATES, MultiGateConfig, MultiGateTask
+from neuroforge.applications.tasks.multi_gate import ALL_GATES, MultiGateConfig, MultiGateTask
 
 
 @pytest.mark.acceptance

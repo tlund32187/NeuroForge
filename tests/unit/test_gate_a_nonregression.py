@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+from neuroforge.applications.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
 
 @pytest.mark.parametrize("gate", ["AND", "OR"])
@@ -31,7 +31,7 @@ def test_gate_a_still_runs(gate: str) -> None:
 
 def test_multi_gate_still_runs() -> None:
     """Multi-gate task completes without errors (not testing convergence)."""
-    from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+    from neuroforge.applications.tasks.multi_gate import MultiGateConfig, MultiGateTask
 
     config = MultiGateConfig(
         max_epochs=1,

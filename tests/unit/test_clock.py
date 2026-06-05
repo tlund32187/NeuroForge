@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.core.time.clock import SimulationClock
+from neuroforge.kernel.time.clock import SimulationClock
 
 
 @pytest.mark.unit

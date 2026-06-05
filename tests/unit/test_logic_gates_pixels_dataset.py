@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.logic_gates_pixels import (
+from neuroforge.environments.datasets.logic_gates_pixels import (
     LogicGatesPixelsConfig,
     LogicGatesPixelsSplits,
     build_logic_gates_pixels_splits,
 )
+from neuroforge.kernel.torch_utils import require_torch
 
 torch = require_torch()
 

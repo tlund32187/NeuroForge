@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.contracts.game import (
+from neuroforge.contracts.applications.games import (
     GameObservation,
     IEpisodeManager,
     ScreenFrame,
     VisionGameMetrics,
 )
-from neuroforge.game.episode import SMB3EpisodeConfig, SMB3EpisodeManager
+from neuroforge.environments.games.smb3.episode import SMB3EpisodeConfig, SMB3EpisodeManager
 
 
 def _obs(

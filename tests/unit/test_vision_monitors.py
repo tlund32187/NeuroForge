@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.vision_monitors import (
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.kernel.torch_utils import require_torch
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.vision_monitors import (
     ConfusionMatrixExporter,
     ConfusionMatrixMonitor,
     VisionLayerStatsExporter,

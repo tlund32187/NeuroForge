@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.game.curriculum import ICurriculum, SMB3Curriculum
+from neuroforge.environments.games.smb3.curriculum import ICurriculum, SMB3Curriculum
 
 
 @pytest.mark.unit

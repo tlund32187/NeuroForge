@@ -2,34 +2,23 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
-from neuroforge.evolution import Gene, PolicyGenome
-from neuroforge.tasks.game_training import GameTrainingConfig
+from neuroforge.applications.tasks.game_training import GameTrainingConfig
+from neuroforge.neuroevolution import Gene, PolicyGenome
 
 if TYPE_CHECKING:
     from types import ModuleType
 
 
 def _load_evolved_config_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-    monkeypatch.syspath_prepend(str(scripts_dir))
-    spec = importlib.util.spec_from_file_location(
-        "smb3_evolved_config",
-        scripts_dir / "smb3_evolved_config.py",
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+    del monkeypatch
+    return importlib.import_module("neuroforge.applications.smb3.evolved_config")
 
 
 def _genome_with(replacements: dict[str, int | float | bool]) -> PolicyGenome:
@@ -212,3 +201,58 @@ def test_apply_evolved_config_reports_missing_and_invalid_modes(
     assert invalid.config.decide_ticks == 9
     assert invalid.config.n_hidden_layers == 1
     assert invalid.warnings == ("unknown evolved mode 'wide'; using compatible mode.",)
+
+
+def _write_graph_checkpoint(path: Path, genome: object) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "generation": 0,
+                "evaluations": 1,
+                "population": [genome.to_dict()],  # type: ignore[attr-defined]
+                "best": {
+                    "genome": genome.to_dict(),  # type: ignore[attr-defined]
+                    "fitness": 9.0,
+                    "metrics": {},
+                    "episodes": 1,
+                    "frames": 4,
+                    "species_id": 0,
+                    "adjusted_fitness": 9.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.unit
+def test_apply_evolved_graph_genome_builds_invented_topology(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("torch")
+    from neuroforge.neuroevolution import GraphGenome, InnovationRegistry
+
+    module = _load_evolved_config_module(monkeypatch)
+    genome = GraphGenome.seed("evolved_graph", innovations=InnovationRegistry(), randomise=False)
+    checkpoint = tmp_path / "run" / "evolution" / "checkpoint.json"
+    _write_graph_checkpoint(checkpoint, genome)
+    base = GameTrainingConfig(seed=5)
+
+    full = module.apply_evolved_genome_config(
+        base, use_evolved=True, evolved_mode="full",
+        evolution_checkpoint=str(checkpoint), runs_dir=tmp_path,
+    )
+    assert full.applied is True
+    assert full.network_builder is not None          # graph topology is compiled
+    net = full.network_builder(16)                   # n_input -> PolicyNetwork
+    assert net.input_pop == "input"
+    assert net.motor_pop == "motor"
+
+    compatible = module.apply_evolved_genome_config(
+        base, use_evolved=True, evolved_mode="compatible",
+        evolution_checkpoint=str(checkpoint), runs_dir=tmp_path,
+    )
+    assert compatible.applied is True
+    assert compatible.network_builder is None        # keeps the base network shape

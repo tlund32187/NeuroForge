@@ -14,26 +14,27 @@ from pathlib import Path
 
 import pytest
 
-from neuroforge.contracts.game import NINTENDO_BUTTONS, ControllerAction, IGameClient
-from neuroforge.game.clients import protocol as proto
-from neuroforge.game.clients.bizhawk_client import BizHawkClient, BizHawkClientConfig
-from neuroforge.game.clients.errors import (
+from neuroforge.contracts.applications.games import NINTENDO_BUTTONS, ControllerAction, IGameClient
+from neuroforge.environments.games.clients.bizhawk import protocol as proto
+from neuroforge.environments.games.clients.bizhawk.client import BizHawkClient, BizHawkClientConfig
+from neuroforge.environments.games.clients.bizhawk.errors import (
     BizHawkConnectionError,
     BizHawkProtocolError,
     BizHawkStateError,
 )
-from neuroforge.game.clients.scripted import (
+from neuroforge.environments.games.clients.bizhawk.transport import SocketTransport
+from neuroforge.environments.games.clients.scripted import (
     ActionProgressGameClient,
     ReplayGameClient,
     ScriptedGameClient,
 )
-from neuroforge.game.clients.transport import SocketTransport
-from neuroforge.game.loop import VisionOnlyGameLoop
+from neuroforge.environments.games.smb3.environment import VisionOnlyGameLoop
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_LUA_BRIDGE = _REPO_ROOT / "scripts" / "bizhawk" / "neuroforge_bridge.lua"
 
 
-# ── message builders ─────────────────────────────────────────────────
+#
 
 
 def _hello_msg(w: int, h: int, c: int, *, fmt: str = "raw", version: int = 1) -> bytes:
@@ -98,7 +99,7 @@ class _FakeTransport:
         self.closed = True
 
 
-# ── protocol codec round-trips ────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -173,7 +174,7 @@ def test_frame_payload_roundtrip() -> None:
     assert decoded == pixels
 
 
-# ── client state machine over the fake transport ──────────────────────
+#
 
 
 @pytest.mark.unit
@@ -326,13 +327,13 @@ def test_bizhawk_client_is_game_client() -> None:
     assert isinstance(BizHawkClient(BizHawkClientConfig()), IGameClient)
 
 
-# ── real loopback socket (framing + recv buffer growth) ────────────────
+#
 
 
 @pytest.mark.unit
 def test_client_over_real_socket_loopback() -> None:
     a, b = socket.socketpair()
-    w, h, c = 300, 300, 1  # 90_000 bytes > 64 KiB → forces recv-buffer growth
+    w, h, c = 300, 300, 1  # 90_000 bytes > 64 KiB â†’ forces recv-buffer growth
     captured: dict[str, object] = {}
     errors: list[BaseException] = []
 
@@ -372,12 +373,12 @@ def test_client_over_real_socket_loopback() -> None:
     assert captured["final"] is proto.MsgType.CLOSE
 
 
-# ── file transport (the BizHawk default) ──────────────────────────────
+#
 
 
 @pytest.mark.unit
 def test_client_over_file_transport(tmp_path: Path) -> None:
-    from neuroforge.game.clients.file_transport import FileTransport
+    from neuroforge.environments.games.clients.bizhawk.file_transport import FileTransport
 
     comm = tmp_path / "bridge"
     transport = FileTransport.create(str(comm), timeout=5.0)
@@ -410,19 +411,21 @@ def test_client_over_file_transport(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_file_transport_times_out_when_no_message(tmp_path: Path) -> None:
-    from neuroforge.game.clients.file_transport import FileTransport
+    from neuroforge.environments.games.clients.bizhawk.file_transport import FileTransport
 
     transport = FileTransport.create(str(tmp_path / "bridge"), timeout=0.2)
     with pytest.raises(BizHawkConnectionError, match="timed out"):
         transport.recv_exactly(9)
 
 
-# ── PNG frame path ─────────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
 def test_screenshot_socket_receiver_reads_length_prefixed_payload() -> None:
-    from neuroforge.game.clients.screenshot_socket import ScreenshotSocketReceiver
+    from neuroforge.environments.games.clients.bizhawk.screenshot_socket import (
+        ScreenshotSocketReceiver,
+    )
 
     receiver = ScreenshotSocketReceiver.serve("127.0.0.1", 0)
     errors: list[BaseException] = []
@@ -448,13 +451,13 @@ def test_screenshot_socket_receiver_reads_length_prefixed_payload() -> None:
 def test_png_frame_decoded_by_client() -> None:
     torch = pytest.importorskip("torch")
     torchvision_io = pytest.importorskip("torchvision.io")
-    from neuroforge.game.clients.frame_codec import decode_png_to_raw
+    from neuroforge.environments.games.clients.bizhawk.frame_codec import decode_png_to_raw
 
     w, h, c = 4, 6, 3
     image = torch.arange(c * h * w, dtype=torch.uint8).reshape(c, h, w)
     png_bytes = bytes(torchvision_io.encode_png(image).numpy().tobytes())
 
-    # Direct codec round-trip: PNG → row-major HWC bytes.
+    # Direct codec round-trip: PNG â†’ row-major HWC bytes.
     raw = decode_png_to_raw(png_bytes, width=w, height=h, channels=c)
     expected = bytes(image.permute(1, 2, 0).contiguous().flatten().tolist())
     assert raw == expected
@@ -468,7 +471,7 @@ def test_png_frame_decoded_by_client() -> None:
     assert obs.frame.data == expected
 
 
-# ── scripted / replay clients through the loop ─────────────────────────
+#
 
 
 class _HoldRight:
@@ -533,12 +536,12 @@ def test_replay_client_requires_frames() -> None:
         ReplayGameClient([])
 
 
-# ── vision-only invariant on the Lua side-car ──────────────────────────
+#
 
 
 @pytest.mark.unit
 def test_lua_bridge_has_no_memory_reads() -> None:
-    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    lua_path = _LUA_BRIDGE
     assert lua_path.is_file(), f"missing Lua side-car at {lua_path}"
     # Strip full-line comments, then assert no RAM-access API survives in code.
     code_lines = [
@@ -554,13 +557,13 @@ def test_lua_bridge_has_no_memory_reads() -> None:
 
 @pytest.mark.unit
 def test_lua_bridge_reads_frameskip_env() -> None:
-    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    lua_path = _LUA_BRIDGE
     assert "NEUROFORGE_BRIDGE_FRAMESKIP" in lua_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.unit
 def test_lua_bridge_reads_speed_percent_env() -> None:
-    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    lua_path = _LUA_BRIDGE
     code = lua_path.read_text(encoding="utf-8")
     assert "NEUROFORGE_BRIDGE_SPEED_PERCENT" in code
     assert "client.speedmode" in code
@@ -569,7 +572,7 @@ def test_lua_bridge_reads_speed_percent_env() -> None:
 
 @pytest.mark.unit
 def test_lua_bridge_supports_socket_backends() -> None:
-    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    lua_path = _LUA_BRIDGE
     code = lua_path.read_text(encoding="utf-8")
     assert "NEUROFORGE_BRIDGE_TRANSPORT" in code
     assert "NEUROFORGE_BRIDGE_SOCKET_BACKEND" in code
@@ -587,7 +590,7 @@ def test_lua_bridge_supports_socket_backends() -> None:
 def test_launcher_passes_frameskip_and_speed_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from neuroforge.game.clients import launcher as lmod
+    from neuroforge.environments.games.clients.bizhawk import launcher as lmod
 
     (tmp_path / "EmuHawk.exe").write_text("")
     (tmp_path / "bridge.lua").write_text("")
@@ -620,7 +623,7 @@ def test_launcher_passes_frameskip_and_speed_env(
 def test_launcher_passes_socket_transport_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from neuroforge.game.clients import launcher as lmod
+    from neuroforge.environments.games.clients.bizhawk import launcher as lmod
 
     (tmp_path / "EmuHawk.exe").write_text("")
     (tmp_path / "bridge.lua").write_text("")
@@ -671,13 +674,13 @@ def test_launcher_passes_socket_transport_env(
 def test_lua_bridge_supports_savestate_reset() -> None:
     # Phase 4: RESET may load a savestate (an environment reset, not RAM reading)
     # so training can begin inside a level. savestate.load is not a memory API.
-    lua_path = _REPO_ROOT / "bizhawk" / "neuroforge_bridge.lua"
+    lua_path = _LUA_BRIDGE
     code = lua_path.read_text(encoding="utf-8")
     assert "savestate.load" in code
     assert "reboot_core" in code  # still the fallback when no savestate is given
 
 
-# ── RESET payload codec + savestate curriculum on the client ───────────
+#
 
 
 @pytest.mark.unit

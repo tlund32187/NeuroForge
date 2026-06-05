@@ -1,9 +1,10 @@
 # pyright: basic, reportMissingImports=false
 """Dashboard ``/api/train`` dispatch tests.
 
-These lock in the gate→handler routing that replaced the former if/elif chain
-in :func:`neuroforge.dashboard.server._handle_train`. Real training is faked so
-the test is fast and deterministic — we only assert that the correct branch
+These lock in the gateâ†’handler routing that replaced the former if/elif chain
+in :func:
+euroforge.interfaces.dashboard.server._handle_train`. Real training is faked so
+the test is fast and deterministic â€” we only assert that the correct branch
 ran and emitted a sensible ``run_end`` event.
 """
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 def _make_app() -> Any:
     from aiohttp import web
 
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     app = web.Application()
     app.router.add_post("/api/train", srv._handle_train)
@@ -35,7 +36,7 @@ async def _train_and_collect(body: dict[str, Any], artifacts_root: Path) -> dict
     """POST a train request, wait for the background run, return parsed events."""
     from aiohttp.test_utils import TestClient, TestServer
 
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     app = _make_app()
     async with TestClient(TestServer(app)) as tc:
@@ -63,9 +64,9 @@ async def _train_and_collect(body: dict[str, Any], artifacts_root: Path) -> dict
 @pytest.fixture()
 def _fake_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect run dirs to tmp and replace the real tasks with fast fakes."""
-    import neuroforge.runners.run_context as run_context
-    import neuroforge.tasks.logic_gates as logic_gates
-    import neuroforge.tasks.multi_gate as multi_gate
+    import neuroforge.applications.tasks.logic_gates as logic_gates
+    import neuroforge.applications.tasks.multi_gate as multi_gate
+    import neuroforge.simulation.runtime.run_context as run_context
 
     artifacts_root = tmp_path / "artifacts"
     real_create = run_context.create_run_dir
@@ -125,7 +126,7 @@ def test_multi_gate_dispatch(_fake_training: Path) -> None:
     assert run_end["data"]["trials"] == 24
 
 
-# ── /api/status JSON-safety regression ───────────────────────────────
+#
 
 
 class _FakeTensor:
@@ -153,7 +154,7 @@ async def _get_status() -> tuple[int, Any]:
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     app = web.Application()
     app.router.add_get("/api/status", srv._handle_status)
@@ -165,7 +166,7 @@ async def _get_status() -> tuple[int, Any]:
 
 def test_status_with_tensor_weights_is_json_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     """A live snapshot embedding raw tensors must not 500 the status endpoint."""
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     training = _SnapMonitor({"topology": {"edges": [{"weights": _FakeTensor()}]}})
     monkeypatch.setattr(srv, "_training_monitor", training)

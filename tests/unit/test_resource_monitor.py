@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.resource_monitor import ResourceMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.observability.monitors.resource_monitor import ResourceMonitor
 
 
 def _event(

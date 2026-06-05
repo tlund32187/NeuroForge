@@ -5,8 +5,8 @@ from __future__ import annotations
 import csv
 from typing import TYPE_CHECKING
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.artifact_writer import ArtifactWriter
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.observability.monitors.artifact_writer import ArtifactWriter
 
 if TYPE_CHECKING:
     from pathlib import Path

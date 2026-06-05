@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.datasets import DatasetLoaders, DatasetMeta
-from neuroforge.runners.vision import VisionRunnerConfig, run_vision_classification
+from neuroforge.environments.datasets.datasets import DatasetLoaders, DatasetMeta
+from neuroforge.interfaces.cli.commands.vision import VisionRunnerConfig, run_vision_classification
+from neuroforge.kernel.torch_utils import require_torch
 
 torch = require_torch()
 
@@ -33,7 +33,7 @@ def test_run_vision_classification_with_dataset_mode(monkeypatch: pytest.MonkeyP
         return DatasetLoaders(train=loader, val=loader, test=loader, meta=meta)
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.DatasetFactory.build_loaders",
+        "neuroforge.environments.datasets.datasets.DatasetFactory.build_loaders",
         _fake_build_loaders,
     )
 
@@ -91,7 +91,7 @@ def test_run_vision_classification_with_nmnist_event_dataset(
         return DatasetLoaders(train=loader, val=loader, test=loader, meta=meta)
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.DatasetFactory.build_loaders",
+        "neuroforge.environments.datasets.datasets.DatasetFactory.build_loaders",
         _fake_build_loaders,
     )
 

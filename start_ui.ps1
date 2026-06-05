@@ -94,7 +94,7 @@ if ($ForceInstall -or -not (Test-Imports -Modules $requiredModules)) {
 }
 
 $launchArgs = @(
-    "-m", "neuroforge.runners.cli",
+    "-m", "neuroforge.interfaces.cli.main",
     "ui",
     "--host", $BindHost,
     "--port", $Port

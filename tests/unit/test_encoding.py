@@ -8,17 +8,17 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.encoding.decode import RateDecoder, RateDecoderParams
-from neuroforge.encoding.rate import RateEncoder, RateEncoderParams
+from neuroforge.learning.encoders.rate import RateEncoder, RateEncoderParams
+from neuroforge.learning.readouts.rate_decoder import RateDecoder, RateDecoderParams
 
-# ── Encoder tests ────────────────────────────────────────────────────
+#
 
 
 class TestRateEncoder:
     """Verify rate encoder math."""
 
     def test_encode_one(self) -> None:
-        """Input 1.0 → amplitude."""
+        """Input 1.0 â†’ amplitude."""
         enc = RateEncoder(RateEncoderParams(amplitude=50.0))
         expected = enc.predict_drive(1.0)
         assert expected == 50.0
@@ -27,7 +27,7 @@ class TestRateEncoder:
         assert result.item() == pytest.approx(expected)
 
     def test_encode_zero(self) -> None:
-        """Input 0.0 → 0."""
+        """Input 0.0 â†’ 0."""
         enc = RateEncoder(RateEncoderParams(amplitude=50.0))
         expected = enc.predict_drive(0.0)
         assert expected == 0.0
@@ -36,7 +36,7 @@ class TestRateEncoder:
         assert result.item() == pytest.approx(expected)
 
     def test_encode_half(self) -> None:
-        """Input 0.5 → amplitude / 2."""
+        """Input 0.5 â†’ amplitude / 2."""
         enc = RateEncoder(RateEncoderParams(amplitude=40.0))
         expected = enc.predict_drive(0.5)
         assert expected == 20.0
@@ -66,14 +66,14 @@ class TestRateEncoder:
         assert enc.params.amplitude == 50.0
 
 
-# ── Decoder tests ────────────────────────────────────────────────────
+#
 
 
 class TestRateDecoder:
     """Verify rate decoder math."""
 
     def test_binary_above_threshold(self) -> None:
-        """Spike count >= threshold → True."""
+        """Spike count >= threshold â†’ True."""
         dec = RateDecoder(RateDecoderParams(threshold=5))
         assert dec.predict_binary(5) is True
         assert dec.predict_binary(10) is True
@@ -84,7 +84,7 @@ class TestRateDecoder:
         assert result[1].item() is True
 
     def test_binary_below_threshold(self) -> None:
-        """Spike count < threshold → False."""
+        """Spike count < threshold â†’ False."""
         dec = RateDecoder(RateDecoderParams(threshold=5))
         assert dec.predict_binary(4) is False
         assert dec.predict_binary(0) is False

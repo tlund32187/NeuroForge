@@ -9,6 +9,17 @@
         "src",
         "tests"
     ],
+    "exclude": [
+        "**/node_modules",
+        "**/build",
+        "**/dist",
+        "**/.venv",
+        "**/venv",
+        "**/.pytest_cache",
+        "**/__pycache__",
+        "data", 
+        "**/.*"
+    ],
     "reportMissingTypeStubs": "warning",
     "reportUnusedImport": "error",
     "reportUnusedVariable": "error",

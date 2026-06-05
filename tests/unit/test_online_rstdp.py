@@ -14,27 +14,30 @@ from typing import TYPE_CHECKING
 import pytest
 import torch
 
-from neuroforge.contracts.game import (
+from neuroforge.agents.brains.policy_network import (
+    PolicyNetworkConfig,
+    build_policy_network,
+)
+from neuroforge.applications.tasks.game_training import GameTrainingConfig, GameTrainingTask
+from neuroforge.biology.plasticity.rules.rstdp import RSTDPRule
+from neuroforge.contracts.applications.games import (
     ControllerAction,
     EpisodeDecision,
     GameObservation,
     ScreenFrame,
     VisionGameMetrics,
 )
-from neuroforge.contracts.monitors import EventTopic
-from neuroforge.game.action_energy import ActionEnergyConfig, ActionEnergyModel
-from neuroforge.game.checkpoint import PolicyCheckpoint, resume_status_lines
-from neuroforge.game.clients.scripted import ScriptedGameClient
-from neuroforge.game.policies.network import PolicyNetworkConfig, build_policy_network
-from neuroforge.game.policies.preprocess import FramePreprocessConfig
-from neuroforge.learning.online_rstdp import (
+from neuroforge.contracts.messaging import EventTopic
+from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+from neuroforge.environments.games.smb3.actions import ActionEnergyConfig, ActionEnergyModel
+from neuroforge.environments.games.smb3.state import PolicyCheckpoint, resume_status_lines
+from neuroforge.learning.training_loop import (
     OnlineRSTDPConfig,
     OnlineRSTDPTrainer,
     RewardShaper,
 )
-from neuroforge.learning.rstdp import RSTDPRule
-from neuroforge.monitors.bus import EventBus
-from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+from neuroforge.messaging.bus import EventBus
+from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,7 +73,7 @@ def _metric_observation(step: int, *, x: float = 0.0, score: int = 0) -> GameObs
     )
 
 
-# ── learning mechanics ──────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -170,7 +173,7 @@ def test_reward_shaper_rpe_and_clip() -> None:
     assert first > second  # baseline rises, advantage shrinks
 
 
-# ── checkpointing ─────────────────────────────────────────────────────────
+#
 
 
 @pytest.mark.unit
@@ -352,7 +355,7 @@ def test_checkpoint_round_trips_encoder_state(tmp_path: object) -> None:
     assert torch.allclose(target.loaded["k"], torch.tensor([1.0, 2.0, 3.0]))
 
 
-# ── full task offline ──────────────────────────────────────────────────────
+#
 
 
 def _run_offline_task(
@@ -465,7 +468,7 @@ def test_game_training_requires_client() -> None:
         GameTrainingTask(GameTrainingConfig()).run()
 
 
-# ── Phase 4 wiring: curriculum savestates + vision-derived termination ─────
+#
 
 
 class _RecordingClient(ScriptedGameClient):
@@ -499,7 +502,7 @@ class _TerminateAfter:
 
 @pytest.mark.unit
 def test_task_queues_curriculum_savestate_and_terminates_per_episode() -> None:
-    from neuroforge.game.curriculum import SMB3Curriculum
+    from neuroforge.environments.games.smb3.curriculum import SMB3Curriculum
 
     client = _RecordingClient(width=80, height=70, channels=3)
     cfg = GameTrainingConfig(

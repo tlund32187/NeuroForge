@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.artifact_writer import ArtifactWriter
-from neuroforge.monitors.bus import EventBus
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.artifact_writer import ArtifactWriter
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,7 +35,7 @@ def _event(topic: str, data: dict[str, object], step: int = 0) -> MonitorEvent:
     )
 
 
-# ── RUN_START writes run_meta + config ──────────────────────────────
+#
 
 
 class TestRunStart:
@@ -68,7 +68,7 @@ class TestRunStart:
         assert not (run_dir / "run_meta.json").exists()
 
 
-# ── TOPOLOGY writes topology.json (once) ────────────────────────────
+#
 
 
 class TestTopology:
@@ -125,7 +125,7 @@ class TestTopology:
         assert payload["totals"]["edges_total"] == 10
 
 
-# ── SCALAR writes CSV rows ──────────────────────────────────────────
+#
 
 
 class TestScalar:
@@ -208,7 +208,7 @@ class TestScalar:
         assert rows[1]["resource.gpu.util_percent"] == "88.0"
 
 
-# ── RUN_END flushes and writes summary ──────────────────────────────
+#
 
 
 class TestRunEnd:
@@ -242,7 +242,7 @@ class TestRunEnd:
         assert (run_dir / "training_end.json").exists()
 
 
-# ── Integration with EventBus ───────────────────────────────────────
+#
 
 
 class TestBusIntegration:
@@ -277,7 +277,7 @@ class TestBusIntegration:
         assert (run_dir / "logs" / "run.log").exists()
 
 
-# ── reset / snapshot ────────────────────────────────────────────────
+#
 
 
 class TestResetSnapshot:

@@ -10,11 +10,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neuroforge.contracts.game import ScreenFrame
+from neuroforge.contracts.applications.games import ScreenFrame
 
 pytest.importorskip("torch")
 
-from neuroforge.vision.encoding import MotionFigureGround  # noqa: E402
+from neuroforge.perception.vision.encoding import MotionFigureGround  # noqa: E402
 
 _H, _W = 112, 128
 _RNG = np.random.default_rng(0)

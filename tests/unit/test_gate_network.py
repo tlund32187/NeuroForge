@@ -7,23 +7,24 @@ from typing import Any
 import pytest
 import torch
 
-from neuroforge.contracts.encoding import ILoss, IReadout
-from neuroforge.contracts.synapses import SynapseInputs, SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.encoding.losses import BceLogitsLoss, MseCountLoss
-from neuroforge.encoding.readout import ReadoutResult, SpikeCountReadout
-from neuroforge.factories.hub import DEFAULT_HUB, build_default_hub
-from neuroforge.network.gate_builder import (
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.synapses.models.dales_static import DalesStaticSynapseModel
+from neuroforge.biology.synapses.state import SynapseInputs
+from neuroforge.biology.synapses.topology import SynapseTopology
+from neuroforge.construction.composition_root import DEFAULT_HUB, build_default_hub
+from neuroforge.construction.gate_builder import (
     GateNetwork,
     build_dale_signs,
     build_gate_network,
     build_projection,
     init_projection_weights,
 )
-from neuroforge.network.specs import GateNetworkSpec
-from neuroforge.synapses.dales_static import DalesStaticSynapseModel
+from neuroforge.contracts.applications.tasks import ILoss, IReadout
+from neuroforge.learning.losses import BceLogitsLoss, MseCountLoss
+from neuroforge.learning.readouts.spike_count import ReadoutResult, SpikeCountReadout
+from neuroforge.simulation.topology.specs import GateNetworkSpec
 
-# ── Hub registry look-up tests ─────────────────────────────────────
+#
 
 
 class TestHubRegistrations:
@@ -59,7 +60,7 @@ class TestHubRegistrations:
         assert isinstance(syn, DalesStaticSynapseModel)
 
 
-# ── DalesStaticSynapseModel unit tests ─────────────────────────────
+#
 
 
 class TestDalesStaticSynapseModel:
@@ -72,7 +73,7 @@ class TestDalesStaticSynapseModel:
         sign_pre = torch.tensor([1.0, -1.0])
         model = DalesStaticSynapseModel(sign_pre=sign_pre)
 
-        # Edges: (0→0), (0→1), (1→0), (1→1)
+        # Edges: (0â†’0), (0â†’1), (1â†’0), (1â†’1)
         pre_idx = torch.tensor([0, 0, 1, 1])
         post_idx = torch.tensor([0, 1, 0, 1])
         weights = torch.tensor([0.5, 0.3, -0.4, 0.2])
@@ -96,7 +97,7 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([False, False]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # Only neuron 0 spiked (sign +1), edges 0→0 and 0→1 fire.
+        # Only neuron 0 spiked (sign +1), edges 0â†’0 and 0â†’1 fire.
         assert psc[0].item() == pytest.approx(0.5, abs=1e-6)
         assert psc[1].item() == pytest.approx(0.3, abs=1e-6)
 
@@ -108,7 +109,7 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([False, False]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # Only neuron 1 spiked (sign −1).  w_eff = |w| × (−1).
+        # Only neuron 1 spiked (sign âˆ’1).  w_eff = |w| Ã— (âˆ’1).
         assert psc[0].item() == pytest.approx(-0.4, abs=1e-6)
         assert psc[1].item() == pytest.approx(-0.2, abs=1e-6)
 
@@ -120,7 +121,7 @@ class TestDalesStaticSynapseModel:
         inputs = SynapseInputs(pre_spikes=spikes, post_spikes=torch.tensor([0.0, 0.0]))
         result = model.step({}, topo, inputs, ctx=None)
         psc = result.post_current[Compartment.SOMA]
-        # 0.8 × |0.5| × +1 = 0.4, 0.8 × |0.3| × +1 = 0.24
+        # 0.8 Ã— |0.5| Ã— +1 = 0.4, 0.8 Ã— |0.3| Ã— +1 = 0.24
         assert psc[0].item() == pytest.approx(0.4, abs=1e-5)
         assert psc[1].item() == pytest.approx(0.24, abs=1e-5)
 
@@ -149,7 +150,7 @@ class TestDalesStaticSynapseModel:
         assert state == {}
 
 
-# ── SpikeCountReadout unit tests ───────────────────────────────────
+#
 
 
 class TestSpikeCountReadout:
@@ -157,11 +158,11 @@ class TestSpikeCountReadout:
 
     def test_basic_count(self) -> None:
         readout = SpikeCountReadout(threshold=3.0)
-        spikes = torch.ones(5, 2)  # 5 timesteps, 2 output neurons → count = 5 each
+        spikes = torch.ones(5, 2)  # 5 timesteps, 2 output neurons â†’ count = 5 each
         result = readout(spikes)
         assert isinstance(result, ReadoutResult)
         assert result.count.tolist() == pytest.approx([5.0, 5.0])
-        assert result.logits.tolist() == pytest.approx([2.0, 2.0])  # 5−3
+        assert result.logits.tolist() == pytest.approx([2.0, 2.0])  # 5âˆ’3
 
     def test_zero_spikes(self) -> None:
         readout = SpikeCountReadout(threshold=3.0)
@@ -185,7 +186,7 @@ class TestSpikeCountReadout:
         assert spikes.grad is not None
 
 
-# ── Loss function unit tests ───────────────────────────────────────
+#
 
 
 class TestMseCountLoss:
@@ -206,7 +207,7 @@ class TestMseCountLoss:
         loss_fn = MseCountLoss(reduction="sum")
         c = torch.tensor([4.0, 6.0])
         t = torch.tensor([2.0, 3.0])
-        # (4−2)^2 + (6−3)^2 = 4 + 9 = 13
+        # (4âˆ’2)^2 + (6âˆ’3)^2 = 4 + 9 = 13
         assert loss_fn(c, t).item() == pytest.approx(13.0)
 
     def test_gradient_flows(self) -> None:
@@ -225,7 +226,7 @@ class TestBceLogitsLoss:
         logits = torch.tensor([0.0])
         target = torch.tensor([1.0])
         loss = loss_fn(logits, target)
-        # −log(σ(0)) = −log(0.5) ≈ 0.6931
+        # âˆ’log(Ïƒ(0)) = âˆ’log(0.5) â‰ˆ 0.6931
         assert loss.item() == pytest.approx(0.6931, abs=1e-3)
 
     def test_gradient_flows(self) -> None:
@@ -236,7 +237,7 @@ class TestBceLogitsLoss:
         assert logits.grad is not None and logits.grad.item() != 0.0
 
 
-# ── build_gate_network tests ───────────────────────────────────────
+#
 
 
 class TestBuildGateNetwork:
@@ -311,7 +312,7 @@ class TestBuildGateNetwork:
         spec = GateNetworkSpec(init_scale=0.01, hidden_size=0)
         gn = build_gate_network(spec)
         w = gn.trainables["raw_w_in_to_out"]
-        # All weights should be within [−0.01, 0.01].
+        # All weights should be within [âˆ’0.01, 0.01].
         assert w.abs().max().item() <= 0.01 + 1e-7
 
     def test_output_size_respected(self) -> None:
@@ -332,7 +333,7 @@ class TestBuildGateNetwork:
         assert w.device.type == "cuda"
 
 
-# ── End-to-end gradient flow test ──────────────────────────────────
+#
 
 
 class TestGateNetworkGradientFlow:
@@ -367,7 +368,7 @@ class TestGateNetworkGradientFlow:
         assert gn.trainables["raw_w_in_to_out"].grad is not None
 
 
-# ── Protocol conformance tests ─────────────────────────────────────
+#
 
 
 class TestProtocolConformance:
@@ -383,7 +384,7 @@ class TestProtocolConformance:
         assert isinstance(BceLogitsLoss(), ILoss)
 
 
-# ── GateNetworkSpec model key tests ────────────────────────────────
+#
 
 
 class TestGateNetworkSpecModelKeys:
@@ -401,13 +402,13 @@ class TestGateNetworkSpecModelKeys:
         assert isinstance(gn, GateNetwork)
 
     def test_custom_synapse_model_accepted(self) -> None:
-        """Use 'static' (no Dale's) — sign_pre should be ignored."""
+        """Use 'static' (no Dale's) â€” sign_pre should be ignored."""
         spec = GateNetworkSpec(synapse_model="static", hidden_size=0)
         gn = build_gate_network(spec)
         assert isinstance(gn, GateNetwork)
 
 
-# ── build_dale_signs unit tests ────────────────────────────────────
+#
 
 
 class TestBuildDaleSigns:
@@ -437,7 +438,7 @@ class TestBuildDaleSigns:
         assert (signs["sign_hidden"] == -1.0).all()
 
 
-# ── init_projection_weights unit tests ─────────────────────────────
+#
 
 
 class TestInitProjectionWeights:
@@ -467,7 +468,7 @@ class TestInitProjectionWeights:
         assert (bias == 0.0).all()
 
 
-# ── build_projection unit tests ────────────────────────────────────
+#
 
 
 class TestBuildProjection:
@@ -521,7 +522,7 @@ class TestBuildProjection:
         proj, _ = build_projection(
             "p", "s", "t", 3, 4, sign, **proj_kwargs,
         )
-        assert proj.topology.pre_idx.shape[0] == 12  # 3×4
+        assert proj.topology.pre_idx.shape[0] == 12  # 3Ã—4
 
     def test_sparse_fewer_edges(
         self, proj_kwargs: dict[str, Any],

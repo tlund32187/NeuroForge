@@ -7,7 +7,7 @@ What it does, hands-off:
   4. Saves the first few frames it receives to artifacts/smoke/ as PNGs, so you
      can SEE exactly what the brain sees.
 
-You should NOT need to type any commands: press the Run/▶ button on the
+You should NOT need to type any commands: press the Run/â–¶ button on the
 "NeuroForge: BizHawk smoke test" configuration in the Run and Debug panel.
 
 If your paths differ from the auto-detected ones below, edit the three values
@@ -19,17 +19,21 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from neuroforge.contracts.game import ControllerAction, GameObservation
-from neuroforge.game import BizHawkClient, BizHawkClientConfig, VisionOnlyGameLoop
-from neuroforge.game.clients import BizHawkConnectionError
-from neuroforge.game.clients.launcher import EmuHawkLauncher
-from neuroforge.game.vision import SMB3HudConfig, SMB3HudExtractor
+from neuroforge.contracts.applications.games import ControllerAction, GameObservation
+from neuroforge.environments.games.clients import BizHawkConnectionError
+from neuroforge.environments.games.clients.bizhawk.launcher import EmuHawkLauncher
+from neuroforge.environments.games.smb3 import (
+    BizHawkClient,
+    BizHawkClientConfig,
+    VisionOnlyGameLoop,
+)
+from neuroforge.environments.games.smb3.hud import SMB3HudConfig, SMB3HudExtractor
 
-# ── CONFIG — edit these if your paths differ ──────────────────────────────────
+#
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
 ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 3 (USA) (Rev 1).nes"  # noqa: E501
 PORT = 8650
-# MANUAL_MODE=True: the bridge does NOT inject buttons — YOU play with the
+# MANUAL_MODE=True: the bridge does NOT inject buttons â€” YOU play with the
 # keyboard/controller while we record frames + metrics. Most reliable way to
 # reach an in-level state for HUD calibration. Set False to use the auto-demo.
 MANUAL_MODE = True
@@ -38,7 +42,7 @@ MANUAL_FRAMES = 4000  # manual mode: give yourself time to walk into a level
 # Frames whose received screenshot gets saved (title, map, in-level gameplay...).
 SAVE_AT = frozenset({1, 90, 200, 400, 600, 800, 1000, 1200, 1399})
 MANUAL_SAVE_EVERY = 200  # in manual mode, also save a frame every N frames
-# ──────────────────────────────────────────────────────────────────────────────
+#
 
 _REPO = Path(__file__).resolve().parents[1]
 LUA_SCRIPT = _REPO / "bizhawk" / "neuroforge_bridge.lua"
@@ -107,7 +111,7 @@ def _describe(observation: GameObservation) -> str:
 
 def main() -> int:
     print("=" * 70)
-    print("NeuroForge — BizHawk bridge smoke test")
+    print("NeuroForge â€” BizHawk bridge smoke test")
     print("=" * 70)
     for label, path in (
         ("EmuHawk", EMUHAWK_PATH),
@@ -170,20 +174,23 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n  Interrupted by user.")
     except BizHawkConnectionError as exc:
-        # The emulator stopped sending frames — usually EmuHawk pausing on focus
+        # The emulator stopped sending frames â€” usually EmuHawk pausing on focus
         # loss, or you closed/stopped it. Not fatal: keep what we captured.
         print(f"\n  Emulator stopped sending frames after {received} frames.")
         print(f"  ({exc})")
-        print("  Tip: BizHawk pauses when its window loses focus — keep it focused while playing.")
+        print(
+            "  Tip: BizHawk pauses when its window loses focus; "
+            "keep it focused while playing."
+        )
     finally:
         loop.close()
 
     print("\n" + "=" * 70)
     if received > 0:
         print(f"  SUCCESS: received {received} frames; saved {saved} screenshots.")
-        print(f"  Open {OUT_DIR} — those PNGs are the brain's view (incl. in-level frames).")
+        print(f"  Open {OUT_DIR} â€” those PNGs are the brain's view (incl. in-level frames).")
     else:
-        print("  No frames received. See docs/BIZHAWK_SETUP.md → Troubleshooting.")
+        print("  No frames received. See docs/BIZHAWK_SETUP.md â†’ Troubleshooting.")
     print("=" * 70)
     return 0 if received > 0 else 2
 

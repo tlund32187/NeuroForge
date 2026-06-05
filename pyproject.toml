@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-neuroforge = "neuroforge.runners.cli:main"
+neuroforge = "neuroforge.interfaces.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neuroforge"]

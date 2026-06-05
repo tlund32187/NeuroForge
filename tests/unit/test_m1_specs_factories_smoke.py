@@ -1,235 +1,156 @@
-"""FactoryHub smoke tests — DEFAULT_HUB, per-domain registries, backward compat.
-
-Verifies that:
-- ``FactoryHub`` / ``build_default_hub`` can be imported and used.
-- ``DEFAULT_HUB`` contains the expected built-in registrations.
-- Thin per-domain wrappers (``NEURON_MODELS``, ``SYNAPSE_MODELS``, etc.)
-  point at the same underlying registry instances.
-- ``create_neuron_model`` / ``create_synapse_model`` still work.
-"""
+"""FactoryHub smoke tests for the construction registry bundle."""
 
 from __future__ import annotations
 
-import pytest  # noqa: TC002
+from pathlib import Path
 
-# ── Hub construction ────────────────────────────────────────────────
-
-
-@pytest.mark.unit
-class TestFactoryHubConstruction:
-    """FactoryHub can be built fresh and inspected."""
-
-    def test_build_default_hub_returns_hub(self) -> None:
-        from neuroforge.factories.hub import FactoryHub, build_default_hub
-
-        hub = build_default_hub()
-        assert isinstance(hub, FactoryHub)
-
-    def test_default_hub_has_all_registries(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        for attr in (
-            "neurons",
-            "synapses",
-            "encoders",
-            "readouts",
-            "vision_backbones",
-            "losses",
-        ):
-            reg = getattr(DEFAULT_HUB, attr)
-            assert reg is not None
-            assert len(reg.list_keys()) > 0, f"{attr} registry is empty"
-
-
-# ── Built-in registrations ──────────────────────────────────────────
+import pytest
 
 
 @pytest.mark.unit
-class TestHubBuiltins:
-    """DEFAULT_HUB ships with all expected built-in keys."""
+def test_construction_tree_contains_expected_modules() -> None:
+    root = Path(__file__).parents[2] / "src" / "neuroforge" / "construction"
+    expected = {
+        "__init__.py",
+        "registry.py",
+        "hub.py",
+        "composition_root.py",
+        "network_factory.py",
+        "task_factory.py",
+        "monitor_factory.py",
+        "registrations/__init__.py",
+        "registrations/biology.py",
+        "registrations/synapses.py",
+        "registrations/plasticity.py",
+        "registrations/perception.py",
+        "registrations/learning.py",
+        "registrations/applications.py",
+    }
 
-    def test_neurons_has_lif(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.neurons.has("lif")
-
-    def test_synapses_has_static(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.synapses.has("static")
-
-    def test_encoders_has_rate(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.encoders.has("rate")
-
-    def test_readouts_has_rate_decoder(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.readouts.has("rate_decoder")
-
-    def test_losses_has_mse_count(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.losses.has("mse_count")
-
-    def test_losses_has_bce_logits(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.losses.has("bce_logits")
-
-    def test_vision_backbones_has_lif_convnet_v1(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert DEFAULT_HUB.vision_backbones.has("lif_convnet_v1")
-
-
-# ── create() round-trips ────────────────────────────────────────────
+    missing = [path for path in sorted(expected) if not (root / path).is_file()]
+    assert missing == []
 
 
 @pytest.mark.unit
-class TestHubCreation:
-    """DEFAULT_HUB.create() returns correct objects for real impls."""
+def test_build_default_hub_returns_independent_hub() -> None:
+    from neuroforge.construction.composition_root import DEFAULT_HUB, build_default_hub
+    from neuroforge.construction.hub import FactoryHub
 
-    def test_create_lif_neuron(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.neurons.lif.model import LIFModel
+    hub = build_default_hub()
 
-        model = DEFAULT_HUB.neurons.create("lif")
-        assert isinstance(model, LIFModel)
-
-    def test_create_static_synapse(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.synapses.static import StaticSynapseModel
-
-        model = DEFAULT_HUB.synapses.create("static")
-        assert isinstance(model, StaticSynapseModel)
-
-    def test_create_rate_encoder(self) -> None:
-        from neuroforge.encoding.rate import RateEncoder
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        enc = DEFAULT_HUB.encoders.create("rate")
-        assert isinstance(enc, RateEncoder)
-
-    def test_create_rate_decoder(self) -> None:
-        from neuroforge.encoding.decode import RateDecoder
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        dec = DEFAULT_HUB.readouts.create("rate_decoder")
-        assert isinstance(dec, RateDecoder)
-
-    def test_loss_mse_count_instantiates(self) -> None:
-        from neuroforge.encoding.losses import MseCountLoss
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        obj = DEFAULT_HUB.losses.create("mse_count")
-        assert isinstance(obj, MseCountLoss)
-
-    def test_readout_spike_count_instantiates(self) -> None:
-        from neuroforge.encoding.readout import SpikeCountReadout
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        obj = DEFAULT_HUB.readouts.create("spike_count")
-        assert isinstance(obj, SpikeCountReadout)
-
-    def test_vision_backbone_factory_instantiates(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.network.specs import VisionBackboneSpec, VisionBlockSpec, VisionInputSpec
-        from neuroforge.vision.factory import LIFConvNetV1BackboneFactory
-
-        spec = VisionBackboneSpec(
-            type="lif_convnet_v1",
-            input=VisionInputSpec(channels=1, height=8, width=8),
-            time_steps=8,
-            encoding_mode="poisson",
-            blocks=[VisionBlockSpec(type="conv", params={"out_channels": 8, "kernel_size": 3})],
-            output_dim=32,
-        )
-        obj = DEFAULT_HUB.vision_backbones.create(spec.type, spec=spec)
-        assert isinstance(obj, LIFConvNetV1BackboneFactory)
-
-    def test_unknown_key_raises(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        with pytest.raises(KeyError, match="no_such_neuron"):
-            DEFAULT_HUB.neurons.create("no_such_neuron")
-
-
-# ── Backward-compatible wrappers ────────────────────────────────────
+    assert isinstance(hub, FactoryHub)
+    assert hub is not DEFAULT_HUB
+    assert hub.neurons is not DEFAULT_HUB.neurons
 
 
 @pytest.mark.unit
-class TestBackwardCompat:
-    """Old import paths still work and point at the hub's registries."""
+def test_default_hub_has_all_registry_families() -> None:
+    from neuroforge.construction.composition_root import DEFAULT_HUB
 
-    def test_neuron_models_is_hub_neurons(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.neurons.registry import NEURON_MODELS
-
-        assert NEURON_MODELS is DEFAULT_HUB.neurons
-
-    def test_synapse_models_is_hub_synapses(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.synapses.registry import SYNAPSE_MODELS
-
-        assert SYNAPSE_MODELS is DEFAULT_HUB.synapses
-
-    def test_create_neuron_model_still_works(self) -> None:
-        from neuroforge.neurons.lif.model import LIFModel
-        from neuroforge.neurons.registry import create_neuron_model
-
-        model = create_neuron_model("lif")
-        assert isinstance(model, LIFModel)
-
-    def test_create_synapse_model_still_works(self) -> None:
-        from neuroforge.synapses.registry import create_synapse_model
-        from neuroforge.synapses.static import StaticSynapseModel
-
-        model = create_synapse_model("static")
-        assert isinstance(model, StaticSynapseModel)
-
-    def test_encoders_registry_is_hub_encoders(self) -> None:
-        from neuroforge.encoding.registry import ENCODERS
-        from neuroforge.factories.hub import DEFAULT_HUB
-
-        assert ENCODERS is DEFAULT_HUB.encoders
-
-    def test_readouts_registry_is_hub_readouts(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.readout.registry import READOUTS
-
-        assert READOUTS is DEFAULT_HUB.readouts
-
-    def test_losses_registry_is_hub_losses(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.losses.registry import LOSSES
-
-        assert LOSSES is DEFAULT_HUB.losses
-
-    def test_vision_registry_is_hub_vision_backbones(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB
-        from neuroforge.vision.registry import VISION_BACKBONES
-
-        assert VISION_BACKBONES is DEFAULT_HUB.vision_backbones
-
-
-# ── Fresh hub isolation ─────────────────────────────────────────────
+    for attr in (
+        "neurons",
+        "synapses",
+        "encoders",
+        "readouts",
+        "vision_backbones",
+        "losses",
+        "learning_rules",
+        "monitors",
+    ):
+        registry = getattr(DEFAULT_HUB, attr)
+        assert registry is not None
+        assert len(registry.list_keys()) > 0, f"{attr} registry is empty"
 
 
 @pytest.mark.unit
-class TestFreshHub:
-    """build_default_hub() returns an independent hub each time."""
+def test_default_hub_has_expected_builtin_keys() -> None:
+    from neuroforge.construction.composition_root import DEFAULT_HUB
 
-    def test_fresh_hub_has_lif(self) -> None:
-        from neuroforge.factories.hub import build_default_hub
+    assert DEFAULT_HUB.neurons.has("lif")
+    assert DEFAULT_HUB.neurons.has("lif_surr")
+    assert DEFAULT_HUB.synapses.has("static")
+    assert DEFAULT_HUB.synapses.has("static_dales")
+    assert DEFAULT_HUB.synapses.has("static_delayed")
+    assert DEFAULT_HUB.encoders.has("rate")
+    assert DEFAULT_HUB.readouts.has("rate_decoder")
+    assert DEFAULT_HUB.readouts.has("spike_count")
+    assert DEFAULT_HUB.vision_backbones.has("lif_convnet_v1")
+    assert DEFAULT_HUB.losses.has("mse_count")
+    assert DEFAULT_HUB.losses.has("bce_logits")
+    assert DEFAULT_HUB.learning_rules.has("rstdp")
+    assert DEFAULT_HUB.monitors.has("training")
 
-        hub = build_default_hub()
-        assert hub.neurons.has("lif")
 
-    def test_fresh_hub_is_distinct(self) -> None:
-        from neuroforge.factories.hub import DEFAULT_HUB, build_default_hub
+@pytest.mark.unit
+def test_default_hub_creates_core_builtins() -> None:
+    from neuroforge.biology.neurons.models.lif.model import LIFModel
+    from neuroforge.biology.plasticity.rules.rstdp import RSTDPRule
+    from neuroforge.biology.synapses.models.static import StaticSynapseModel
+    from neuroforge.construction.composition_root import DEFAULT_HUB
+    from neuroforge.learning.encoders.rate import RateEncoder
+    from neuroforge.learning.losses import MseCountLoss
+    from neuroforge.learning.readouts.rate_decoder import RateDecoder
+    from neuroforge.learning.readouts.spike_count import SpikeCountReadout
 
-        hub2 = build_default_hub()
-        assert hub2 is not DEFAULT_HUB
-        assert hub2.neurons is not DEFAULT_HUB.neurons
+    assert isinstance(DEFAULT_HUB.neurons.create("lif"), LIFModel)
+    assert isinstance(DEFAULT_HUB.synapses.create("static"), StaticSynapseModel)
+    assert isinstance(DEFAULT_HUB.encoders.create("rate"), RateEncoder)
+    assert isinstance(DEFAULT_HUB.readouts.create("rate_decoder"), RateDecoder)
+    assert isinstance(DEFAULT_HUB.readouts.create("spike_count"), SpikeCountReadout)
+    assert isinstance(DEFAULT_HUB.losses.create("mse_count"), MseCountLoss)
+    assert isinstance(DEFAULT_HUB.learning_rules.create("rstdp"), RSTDPRule)
+
+
+@pytest.mark.unit
+def test_default_hub_creates_vision_backbone_factory() -> None:
+    from neuroforge.construction.composition_root import DEFAULT_HUB
+    from neuroforge.perception.vision.factory import LIFConvNetV1BackboneFactory
+    from neuroforge.simulation.topology.specs import (
+        VisionBackboneSpec,
+        VisionBlockSpec,
+        VisionInputSpec,
+    )
+
+    spec = VisionBackboneSpec(
+        type="lif_convnet_v1",
+        input=VisionInputSpec(channels=1, height=8, width=8),
+        time_steps=8,
+        encoding_mode="poisson",
+        blocks=[
+            VisionBlockSpec(type="conv", params={"out_channels": 8, "kernel_size": 3})
+        ],
+        output_dim=32,
+    )
+
+    factory = DEFAULT_HUB.vision_backbones.create(spec.type, spec=spec)
+
+    assert isinstance(factory, LIFConvNetV1BackboneFactory)
+
+
+@pytest.mark.unit
+def test_task_factory_creates_registered_task_specs() -> None:
+    from neuroforge.construction.task_factory import build_task_factory
+
+    factory = build_task_factory()
+
+    assert "logic_gate" in factory.list_keys()
+    assert factory.get("logic_gate") is not None
+
+
+@pytest.mark.unit
+def test_monitor_factory_creates_registered_monitors() -> None:
+    from neuroforge.construction.monitor_factory import build_monitor_factory
+    from neuroforge.observability.monitors.training_monitor import TrainingMonitor
+
+    factory = build_monitor_factory()
+
+    assert "training" in factory.list_keys()
+    assert isinstance(factory.create("training"), TrainingMonitor)
+
+
+@pytest.mark.unit
+def test_unknown_key_raises() -> None:
+    from neuroforge.construction.composition_root import DEFAULT_HUB
+
+    with pytest.raises(KeyError, match="no_such_neuron"):
+        DEFAULT_HUB.neurons.create("no_such_neuron")

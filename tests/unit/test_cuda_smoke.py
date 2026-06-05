@@ -1,5 +1,5 @@
 # pyright: basic, reportMissingImports=false
-"""CUDA smoke tests — skipped automatically on CPU-only systems.
+"""CUDA smoke tests â€” skipped automatically on CPU-only systems.
 
 Run explicitly with::
 
@@ -21,13 +21,14 @@ class TestCudaEngine:
     """Verify that CoreEngine runs on CUDA and tensors remain on-device."""
 
     def test_engine_step_on_cuda(self) -> None:
-        """Build a tiny 2→1 engine on cuda, step it, and assert device."""
+        """Build a tiny 2â†’1 engine on cuda, step it, and assert device."""
+        from neuroforge.biology.compartments.types import Compartment
+        from neuroforge.biology.neurons.models.lif.model import LIFModel
+        from neuroforge.biology.neurons.models.lif.params import LIFParams
+        from neuroforge.biology.synapses.models.static import StaticSynapseModel
+        from neuroforge.biology.synapses.topology import SynapseTopology
         from neuroforge.contracts.simulation import SimulationConfig
-        from neuroforge.contracts.synapses import SynapseTopology
-        from neuroforge.contracts.types import Compartment
-        from neuroforge.engine.core_engine import CoreEngine, Population, Projection
-        from neuroforge.neurons.lif.model import LIFModel, LIFParams
-        from neuroforge.synapses.static import StaticSynapseModel
+        from neuroforge.simulation.engine.core import CoreEngine, Population, Projection
 
         cfg = SimulationConfig(dt=1e-3, seed=1, device="cuda", dtype="float32")
         lif = LIFModel(LIFParams(tau_mem=20e-3, v_thresh=1.0))
@@ -89,8 +90,8 @@ class TestCudaMetricsMonitor:
     """Verify that CudaMetricsMonitor enriches events."""
 
     def test_monitor_injects_memory_stats(self) -> None:
-        from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-        from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
+        from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+        from neuroforge.observability.monitors.resource_monitor import CudaMetricsMonitor
 
         mon = CudaMetricsMonitor(enabled=True)
 
@@ -112,8 +113,8 @@ class TestCudaMetricsMonitor:
         del _x
 
     def test_monitor_noop_on_non_scalar(self) -> None:
-        from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-        from neuroforge.monitors.cuda_monitor import CudaMetricsMonitor
+        from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+        from neuroforge.observability.monitors.resource_monitor import CudaMetricsMonitor
 
         mon = CudaMetricsMonitor(enabled=True)
         event = MonitorEvent(

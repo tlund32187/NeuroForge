@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from neuroforge.vision.encoding import (
+from neuroforge.perception.vision.encoding import (
     PerceptionStack,
     PerceptionStackConfig,
     RetinaEncoderConfig,

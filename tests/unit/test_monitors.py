@@ -1,21 +1,21 @@
 """Unit tests for the monitor infrastructure.
 
 Tests cover: EventBus, SpikeMonitor, VoltageMonitor, WeightMonitor,
-TrainingMonitor — all using math-predictive assertions where applicable.
+TrainingMonitor â€” all using math-predictive assertions where applicable.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.spike_monitor import SpikeMonitor
-from neuroforge.monitors.training_monitor import TrainingMonitor
-from neuroforge.monitors.voltage_monitor import VoltageMonitor
-from neuroforge.monitors.weight_monitor import WeightMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.spike_monitor import SpikeMonitor
+from neuroforge.observability.monitors.training_monitor import TrainingMonitor
+from neuroforge.observability.monitors.voltage_monitor import VoltageMonitor
+from neuroforge.observability.monitors.weight_monitor import WeightMonitor
 
-# ── Helpers ─────────────────────────────────────────────────────────
+#
 
 
 def _make_event(
@@ -30,7 +30,7 @@ def _make_event(
     )
 
 
-# ── EventBus tests ──────────────────────────────────────────────────
+#
 
 
 class TestEventBus:
@@ -104,7 +104,7 @@ class TestEventBus:
         assert spike_mon.snapshot()["populations"] == {}
 
 
-# ── SpikeMonitor tests ──────────────────────────────────────────────
+#
 
 
 class TestSpikeMonitor:
@@ -167,7 +167,7 @@ class TestSpikeMonitor:
         assert snap["populations"]["b"]["counts"] == [1]
 
 
-# ── VoltageMonitor tests ────────────────────────────────────────────
+#
 
 
 class TestVoltageMonitor:
@@ -206,7 +206,7 @@ class TestVoltageMonitor:
         assert mon.snapshot()["populations"] == {}
 
 
-# ── WeightMonitor tests ─────────────────────────────────────────────
+#
 
 
 class TestWeightMonitor:
@@ -243,7 +243,7 @@ class TestWeightMonitor:
         assert mon.snapshot()["projections"] == {}
 
 
-# ── TrainingMonitor tests ───────────────────────────────────────────
+#
 
 
 class TestTrainingMonitor:
@@ -278,7 +278,7 @@ class TestTrainingMonitor:
         mon = TrainingMonitor()
         mon.on_event(_make_event(EventTopic.TRAINING_START, data={"gate": "AND"}))
 
-        # 3 trials for pattern (1, 1): 2 correct, 1 wrong → 66.67%
+        # 3 trials for pattern (1, 1): 2 correct, 1 wrong â†’ 66.67%
         for i, correct in enumerate([True, True, False]):
             mon.on_event(_make_event(
                 EventTopic.TRAINING_TRIAL, step=i,
@@ -292,7 +292,7 @@ class TestTrainingMonitor:
         snap = mon.snapshot()
         entry = snap["truth_table"]["(1, 1)"]
         assert entry["total_count"] == 3
-        # 2/3 ≈ 0.6667
+        # 2/3 â‰ˆ 0.6667
         assert abs(entry["confidence"] - 2 / 3) < 1e-4
 
     def test_end_event_sets_converged(self) -> None:
@@ -347,7 +347,7 @@ class TestTrainingMonitor:
         assert snap["topology"]["layers"] == ["input(2)", "output(1)"]
 
 
-# ── Integration: EventBus + LogicGateTask ───────────────────────────
+#
 
 
 class TestLogicGateTaskWithMonitors:
@@ -362,7 +362,7 @@ class TestLogicGateTaskWithMonitors:
         bus.subscribe_all(train_mon)
         bus.subscribe(EventTopic.WEIGHT, weight_mon)
 
-        from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+        from neuroforge.applications.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
         cfg = LogicGateConfig(gate="OR", max_trials=100, seed=42)
         task = LogicGateTask(cfg, event_bus=bus)
@@ -382,7 +382,7 @@ class TestLogicGateTaskWithMonitors:
 
     def test_no_bus_still_works(self) -> None:
         """Without a bus, the task should run identically."""
-        from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
+        from neuroforge.applications.tasks.logic_gates import LogicGateConfig, LogicGateTask
 
         cfg = LogicGateConfig(gate="AND", max_trials=100, seed=42)
         task = LogicGateTask(cfg)  # no event_bus

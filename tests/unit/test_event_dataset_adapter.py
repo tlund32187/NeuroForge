@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.event_dataset_adapter import (
+from neuroforge.environments.datasets.event_dataset_adapter import (
     EventDatasetAdapter,
     EventSliceConfig,
     EventTensorConfig,
     TonicDatasetConfig,
     build_tonic_dataset,
 )
+from neuroforge.kernel.torch_utils import require_torch
 
 torch = require_torch()
 
@@ -166,7 +166,7 @@ def test_build_tonic_dataset_uses_signature_aware_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "neuroforge.data.event_dataset_adapter._require_tonic",
+        "neuroforge.environments.datasets.event_dataset_adapter._require_tonic",
         lambda: _FakeTonic,
     )
     cfg = TonicDatasetConfig(
@@ -187,7 +187,7 @@ def test_build_tonic_dataset_resolves_pokerdvs_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "neuroforge.data.event_dataset_adapter._require_tonic",
+        "neuroforge.environments.datasets.event_dataset_adapter._require_tonic",
         lambda: _FakeTonic,
     )
     cfg = TonicDatasetConfig(
@@ -206,7 +206,7 @@ def test_build_tonic_dataset_rejects_unknown_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "neuroforge.data.event_dataset_adapter._require_tonic",
+        "neuroforge.environments.datasets.event_dataset_adapter._require_tonic",
         lambda: _FakeTonic,
     )
     with pytest.raises(ValueError, match="Unsupported tonic dataset"):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from neuroforge.runners.vision_bench import build_plan_from_config
+from neuroforge.interfaces.cli.commands.vision_bench import build_plan_from_config
 
 
 @pytest.mark.unit

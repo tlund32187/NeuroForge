@@ -24,7 +24,7 @@ def test_vision_cli_runs_multiple_steps(tmp_path: Path) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "neuroforge.runners.cli",
+        "neuroforge.interfaces.cli.main",
         "vision",
         "--device",
         "cpu",

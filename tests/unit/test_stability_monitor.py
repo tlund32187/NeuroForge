@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.artifact_writer import ArtifactWriter
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.stability_monitor import StabilityConfig, StabilityMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.artifact_writer import ArtifactWriter
+from neuroforge.observability.monitors.stability_monitor import StabilityConfig, StabilityMonitor
 
 if TYPE_CHECKING:
     from pathlib import Path

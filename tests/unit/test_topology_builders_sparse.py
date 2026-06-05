@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.network.topology_builders import (
+from neuroforge.kernel.torch_utils import require_torch
+from neuroforge.simulation.topology.builders import (
     build_block_sparse_topology,
     build_sparse_fanin_topology,
     build_sparse_fanout_topology,

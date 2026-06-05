@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-import neuroforge.runners.cli as cli
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.datasets import DatasetLoaders, DatasetMeta
+import neuroforge.interfaces.cli.main as cli
+from neuroforge.environments.datasets.datasets import DatasetLoaders, DatasetMeta
+from neuroforge.kernel.torch_utils import require_torch
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,7 +50,7 @@ def test_vision_cli_nmnist_short_train_eval_loop(
         return DatasetLoaders(train=loader, val=loader, test=loader, meta=meta)
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.DatasetFactory.build_loaders",
+        "neuroforge.environments.datasets.datasets.DatasetFactory.build_loaders",
         _fake_build_loaders,
     )
 

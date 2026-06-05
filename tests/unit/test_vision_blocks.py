@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.vision.blocks import SpikingConvBlock, SpikingPool, SpikingResBlock
+from neuroforge.perception.vision.blocks import SpikingConvBlock, SpikingPool, SpikingResBlock
 
 _CUDA = torch.cuda.is_available()
 _skip_no_cuda = pytest.mark.skipif(not _CUDA, reason="CUDA not available")

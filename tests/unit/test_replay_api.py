@@ -232,20 +232,20 @@ def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
 
     # Patch the module-level _ARTIFACTS_DIR constant in the server.
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     monkeypatch.setattr(srv, "_ARTIFACTS_DIR", arts)
     return arts
 
 
-# ── Helpers ────────────────────────────────────────────────────────────
+#
 
 
 def _make_app() -> Any:
     """Build a minimal aiohttp app with replay routes."""
     from aiohttp import web
 
-    import neuroforge.dashboard.server as srv
+    import neuroforge.interfaces.dashboard.server as srv
 
     app = web.Application()
     app.router.add_get("/api/runs", srv._handle_runs)
@@ -291,39 +291,39 @@ async def _get_raw(path: str) -> tuple[int, bytes, str]:
         return resp.status, body, resp.content_type
 
 
-# ── Synchronous _safe_run_dir tests ─────────────────────────────────
+#
 
 
 class TestRunIdValidation:
     """Test the _safe_run_dir helper for directory traversal prevention."""
 
     def test_valid_run_id(self, _artifacts: Path) -> None:
-        from neuroforge.dashboard.server import _safe_run_dir
+        from neuroforge.interfaces.dashboard.server import _safe_run_dir
 
         result = _safe_run_dir(_RUN_ID)
         assert result is not None
         assert result.name == _RUN_ID
 
     def test_invalid_run_id_traversal(self, _artifacts: Path) -> None:
-        from neuroforge.dashboard.server import _safe_run_dir
+        from neuroforge.interfaces.dashboard.server import _safe_run_dir
 
         assert _safe_run_dir("../etc/passwd") is None
         assert _safe_run_dir("run_../../etc") is None
 
     def test_invalid_run_id_format(self, _artifacts: Path) -> None:
-        from neuroforge.dashboard.server import _safe_run_dir
+        from neuroforge.interfaces.dashboard.server import _safe_run_dir
 
         assert _safe_run_dir("not_a_run") is None
         assert _safe_run_dir("") is None
         assert _safe_run_dir("run_abc") is None
 
     def test_nonexistent_run_id(self, _artifacts: Path) -> None:
-        from neuroforge.dashboard.server import _safe_run_dir
+        from neuroforge.interfaces.dashboard.server import _safe_run_dir
 
         assert _safe_run_dir("run_99991231_235959_deadbeef") is None
 
 
-# ── Async endpoint tests (no pytest-asyncio needed) ────────────────
+#
 
 
 class TestReplayEndpoints:

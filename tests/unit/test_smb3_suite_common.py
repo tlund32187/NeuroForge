@@ -2,29 +2,18 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+import neuroforge.applications.smb3.suite_common as common
+
 if TYPE_CHECKING:
-    from types import ModuleType
-
-
-def _load_common() -> ModuleType:
-    path = Path(__file__).resolve().parents[2] / "scripts" / "smb3_suite_common.py"
-    spec = importlib.util.spec_from_file_location("smb3_suite_common", path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from pathlib import Path
 
 
 @pytest.mark.unit
 def test_base_env_prepends_local_src(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    common = _load_common()
     monkeypatch.setenv("PYTHONPATH", "existing")
 
     env = common.base_env(tmp_path)
@@ -34,7 +23,6 @@ def test_base_env_prepends_local_src(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 @pytest.mark.unit
 def test_evolution_run_dir_env_is_copied(tmp_path: Path) -> None:
-    common = _load_common()
     original = {"PYTHONPATH": "x"}
     run_dir = tmp_path / "runs" / "evolve_suite_1"
 
@@ -46,7 +34,6 @@ def test_evolution_run_dir_env_is_copied(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_evolution_checkpoint_path_uses_suite_run_dir(tmp_path: Path) -> None:
-    common = _load_common()
     run_dir = common.new_evolution_run_dir(tmp_path / "runs", label="evolve_suite")
 
     assert run_dir.parent == tmp_path / "runs"

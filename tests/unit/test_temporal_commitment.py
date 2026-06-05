@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.contracts.game import ControllerAction
-from neuroforge.game.policies.commitment import TemporalCommitment, TemporalCommitmentConfig
+from neuroforge.agents.actuators.action_commitment import (
+    TemporalCommitment,
+    TemporalCommitmentConfig,
+)
+from neuroforge.contracts.applications.games import ControllerAction
 
 
 @pytest.mark.unit

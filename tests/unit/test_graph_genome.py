@@ -12,8 +12,9 @@ import random
 
 import pytest
 
-from neuroforge.contracts.evolution import FitnessResult
-from neuroforge.evolution import (
+from neuroforge.applications.tasks.evolution import EvolutionTask
+from neuroforge.contracts.applications.evolution import FitnessResult
+from neuroforge.neuroevolution import (
     CallableFitnessEvaluator,
     EvolutionConfig,
     GraphGenome,
@@ -21,7 +22,6 @@ from neuroforge.evolution import (
     InnovationRegistry,
     make_graph_seed_population,
 )
-from neuroforge.tasks.evolution import EvolutionTask
 
 
 def _seed(reg: InnovationRegistry, *, randomise: bool = False) -> GraphGenome:
@@ -113,8 +113,10 @@ def test_content_key_ignores_id_but_tracks_structure() -> None:
 @pytest.mark.unit
 def test_graph_compiles_to_a_working_spiking_policy() -> None:
     torch = pytest.importorskip("torch")
-    from neuroforge.game.policies.graph_network import build_graph_policy_network
-    from neuroforge.game.policies.stateful_engine import CoreEnginePolicyEngine
+    from neuroforge.agents.brains.graph_network import (
+        build_graph_policy_network,
+    )
+    from neuroforge.agents.brains.stateful_engine import CoreEnginePolicyEngine
 
     reg = InnovationRegistry()
     genome = _seed(reg)
@@ -163,10 +165,10 @@ def test_engine_selects_for_structure() -> None:
 @pytest.mark.unit
 def test_graph_genome_runs_through_the_game_training_backend() -> None:
     pytest.importorskip("torch")
-    from neuroforge.evolution.evaluators import GameTrainingFitnessEvaluator
-    from neuroforge.game.clients.scripted import ScriptedGameClient
-    from neuroforge.game.policies.preprocess import FramePreprocessConfig
-    from neuroforge.tasks.game_training import GameTrainingConfig
+    from neuroforge.applications.tasks.game_training import GameTrainingConfig
+    from neuroforge.environments.games.clients.scripted import ScriptedGameClient
+    from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
+    from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
 
     evaluator = GameTrainingFitnessEvaluator(
         client_factory=lambda: ScriptedGameClient(
@@ -187,8 +189,8 @@ def test_graph_genome_runs_through_the_game_training_backend() -> None:
 
 @pytest.mark.unit
 def test_decode_genome_dispatches_by_type() -> None:
-    from neuroforge.evolution import decode_genome, max_connection_innovation
-    from neuroforge.evolution.genome import PolicyGenome
+    from neuroforge.neuroevolution import decode_genome, max_connection_innovation
+    from neuroforge.neuroevolution.genomes.policy import PolicyGenome
 
     graph = _seed(InnovationRegistry())
     assert isinstance(decode_genome(graph.to_dict()), GraphGenome)
@@ -207,7 +209,7 @@ def test_decode_genome_dispatches_by_type() -> None:
 def test_graph_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
     import json
 
-    from neuroforge.evolution import max_connection_innovation
+    from neuroforge.neuroevolution import max_connection_innovation
 
     def objective(genome: GraphGenome) -> float:
         return float(len(genome.hidden_nodes()))

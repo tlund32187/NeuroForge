@@ -5,10 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from neuroforge.contracts.synapses import SynapseInputs, SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.synapses.delayed_static import DelayedStaticSynapseModel
-from neuroforge.synapses.registry import SYNAPSE_MODELS
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.synapses.models.delayed_static import DelayedStaticSynapseModel
+from neuroforge.biology.synapses.state import SynapseInputs
+from neuroforge.biology.synapses.topology import SynapseTopology
+from neuroforge.construction.composition_root import DEFAULT_HUB
 
 
 def _build_topology(device: torch.device) -> SynapseTopology:
@@ -57,7 +58,7 @@ def _run_bool_pattern(device: torch.device) -> list[torch.Tensor]:
 
 @pytest.mark.unit
 def test_delayed_static_registered() -> None:
-    assert SYNAPSE_MODELS.has("static_delayed")
+    assert DEFAULT_HUB.synapses.has("static_delayed")
 
 
 @pytest.mark.unit

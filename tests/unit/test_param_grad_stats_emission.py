@@ -6,11 +6,11 @@ from __future__ import annotations
 import csv
 from typing import TYPE_CHECKING, Any
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.artifact_writer import ArtifactWriter
-from neuroforge.monitors.bus import EventBus
-from neuroforge.tasks.logic_gates import LogicGateConfig, LogicGateTask
-from neuroforge.tasks.multi_gate import MultiGateConfig, MultiGateTask
+from neuroforge.applications.tasks.logic_gates import LogicGateConfig, LogicGateTask
+from neuroforge.applications.tasks.multi_gate import MultiGateConfig, MultiGateTask
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.artifact_writer import ArtifactWriter
 
 if TYPE_CHECKING:
     from pathlib import Path

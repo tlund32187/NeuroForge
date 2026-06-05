@@ -8,30 +8,35 @@ the spiking policy end-to-end through the training task.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
-from neuroforge.contracts.game import ScreenFrame
+from neuroforge.contracts.applications.games import ScreenFrame
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 pytest.importorskip("torch")
 
-from neuroforge.game.policies.encoder import IFrameEncoder  # noqa: E402
-from neuroforge.game.policies.preprocess import (  # noqa: E402
-    FramePreprocessConfig,
-    FramePreprocessor,
-)
-from neuroforge.vision.encoding import (  # noqa: E402
+from neuroforge.perception.vision.encoding import (  # noqa: E402
     PerceptionStack,
     PerceptionStackConfig,
     RetinaEncoder,
     RetinaEncoderConfig,
     representation_separability,
 )
+from neuroforge.perception.vision.encoding.frame_encoder import IFrameEncoder  # noqa: E402
+from neuroforge.perception.vision.encoding.frame_preprocess import (  # noqa: E402
+    FramePreprocessConfig,
+    FramePreprocessor,
+)
 
 _H, _W = 56, 64
 
 
-def _scene(hole_col: int, *, block: bool) -> np.ndarray:
+def _scene(hole_col: int, *, block: bool) -> NDArray[np.float32]:
     luma = np.full((_H, _W), 0.2, dtype=np.float32)
     luma[44:, :] = 0.8
     luma[44:, hole_col : hole_col + 10] = 0.2
@@ -40,7 +45,7 @@ def _scene(hole_col: int, *, block: bool) -> np.ndarray:
     return luma
 
 
-def _frame(luma: np.ndarray, *, recolor: bool) -> ScreenFrame:
+def _frame(luma: NDArray[np.float32], *, recolor: bool) -> ScreenFrame:
     if recolor:
         luma = np.clip(luma * 0.6 + 0.25, 0.0, 1.0)
         rgb = np.stack([luma, luma * 0.7 + 0.1, 0.3 + 0.5 * luma], axis=-1)
@@ -85,8 +90,8 @@ def test_probe_separates_content_across_palettes() -> None:
 
 @pytest.mark.unit
 def test_stack_drives_the_policy_through_the_task() -> None:
-    from neuroforge.game.clients.scripted import ScriptedGameClient
-    from neuroforge.tasks.game_training import GameTrainingConfig, GameTrainingTask
+    from neuroforge.applications.tasks.game_training import GameTrainingConfig, GameTrainingTask
+    from neuroforge.environments.games.clients.scripted import ScriptedGameClient
 
     stack = PerceptionStack(
         PerceptionStackConfig(retina=RetinaEncoderConfig(out_h=12, out_w=12), motion=True),
@@ -102,7 +107,7 @@ def test_stack_drives_the_policy_through_the_task() -> None:
     assert result.frames == 4                          # the invariant drive ran the brain
 
 
-# ── A1/A2 wired into the drive (learned, online) ──────────────────────────
+#
 
 
 def _small_stack(**kw: object) -> PerceptionStack:

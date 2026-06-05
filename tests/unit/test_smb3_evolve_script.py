@@ -13,11 +13,18 @@ if TYPE_CHECKING:
 
 
 def _load_evolve_script(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-    monkeypatch.syspath_prepend(str(scripts_dir))
+    del monkeypatch
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "neuroforge"
+        / "applications"
+        / "smb3"
+        / "evolve.py"
+    )
     spec = importlib.util.spec_from_file_location(
         "evolve_smb3_test_module",
-        scripts_dir / "evolve_smb3.py",
+        path,
     )
     assert spec is not None
     assert spec.loader is not None
@@ -42,6 +49,11 @@ def test_evolve_script_reads_env_overrides(
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SEED", "99")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_MUTATION_RATE", "0.2")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_MUTATION_POWER", "0.75")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_THRESHOLD", "0.55")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS", "3")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_PROGRESS_SCALE", "120")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SURVIVAL_SCALE", "2")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_DURABLE_PROGRESS_WEIGHT", "1.5")
     monkeypatch.setenv("NEUROFORGE_SMB3_LAUNCH_EMUHAWK", "0")
 
     module = _load_evolve_script(monkeypatch)
@@ -56,6 +68,11 @@ def test_evolve_script_reads_env_overrides(
     assert module.EVOLUTION_SEED == 99
     assert pytest.approx(0.2) == module.MUTATION_RATE
     assert pytest.approx(0.75) == module.MUTATION_POWER
+    assert pytest.approx(0.55) == module.SPECIES_THRESHOLD
+    assert module.EVAL_REPEATS == 3
+    assert pytest.approx(120.0) == module.FITNESS_PROGRESS_SCALE
+    assert pytest.approx(2.0) == module.FITNESS_SURVIVAL_SCALE
+    assert pytest.approx(1.5) == module.FITNESS_DURABLE_PROGRESS_WEIGHT
     assert module.LAUNCH_EMUHAWK is False
 
 
@@ -66,12 +83,16 @@ def test_evolve_script_rejects_invalid_small_env_values(
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_POPULATION", "1")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_GENERATIONS", "0")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_FRAMES", "0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_THRESHOLD", "0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS", "0")
 
     module = _load_evolve_script(monkeypatch)
 
-    assert module.POPULATION_SIZE == 16
-    assert module.GENERATIONS == 25
+    assert module.POPULATION_SIZE == 32
+    assert module.GENERATIONS == 40
     assert module.EVAL_FRAMES_PER_EPISODE == 3600
+    assert pytest.approx(0.5) == module.SPECIES_THRESHOLD
+    assert module.EVAL_REPEATS == 2
 
 
 @pytest.mark.unit

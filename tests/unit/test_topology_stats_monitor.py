@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from neuroforge.contracts.monitors import EventTopic, MonitorEvent
-from neuroforge.monitors.bus import EventBus
-from neuroforge.monitors.topology_stats_monitor import TopologyStatsMonitor
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
+from neuroforge.messaging.bus import EventBus
+from neuroforge.observability.monitors.topology_stats_monitor import TopologyStatsMonitor
 
 
 class _CaptureMonitor:

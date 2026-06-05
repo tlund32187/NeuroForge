@@ -7,12 +7,12 @@ from typing import Any
 import pytest
 import torch
 
+from neuroforge.biology.compartments.types import Compartment
+from neuroforge.biology.neurons.models.lif.model import LIFModel
+from neuroforge.biology.synapses.models.static import StaticSynapseModel
+from neuroforge.biology.synapses.topology import SynapseTopology
 from neuroforge.contracts.simulation import SimulationConfig
-from neuroforge.contracts.synapses import SynapseTopology
-from neuroforge.contracts.types import Compartment
-from neuroforge.engine.core_engine import CoreEngine, Population, Projection
-from neuroforge.neurons.lif.model import LIFModel
-from neuroforge.synapses.static import StaticSynapseModel
+from neuroforge.simulation.engine.core import CoreEngine, Population, Projection
 
 
 def _cfg() -> SimulationConfig:

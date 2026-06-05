@@ -6,8 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from neuroforge.core.torch_utils import require_torch
-from neuroforge.data.datasets import DatasetFactory, DatasetFactoryConfig, DatasetTransformConfig
+from neuroforge.environments.datasets.datasets import (
+    DatasetFactory,
+    DatasetFactoryConfig,
+    DatasetTransformConfig,
+)
+from neuroforge.kernel.torch_utils import require_torch
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -130,7 +134,7 @@ class _FakeDatasets:
 
 def _patch_fake_torchvision(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "neuroforge.data.datasets._require_torchvision",
+        "neuroforge.environments.datasets.datasets._require_torchvision",
         lambda: (_FakeDatasets, _FakeTransforms),
     )
 
@@ -175,7 +179,7 @@ def _patch_fake_tonic(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(
-        "neuroforge.data.datasets.build_tonic_dataset",
+        "neuroforge.environments.datasets.datasets.build_tonic_dataset",
         _fake_build_tonic_dataset,
     )
 

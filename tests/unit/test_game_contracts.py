@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from neuroforge.contracts.game import (
+from neuroforge.contracts.applications.games import (
     ControllerAction,
     GameClientStep,
     GameObservation,
