@@ -1,12 +1,14 @@
-# pyright: basic, reportMissingImports=false
 """Unit tests for ResourceMonitor."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neuroforge.contracts.messaging import EventTopic, MonitorEvent
 from neuroforge.observability.monitors.resource_monitor import ResourceMonitor
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _event(
@@ -24,7 +26,9 @@ def _event(
     )
 
 
-def test_resource_monitor_enriches_scalar_payload_on_cadence() -> None:
+def test_resource_monitor_enriches_scalar_payload_on_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     mon = ResourceMonitor(
         enabled=True,
         every_n_steps=2,
@@ -33,10 +37,14 @@ def test_resource_monitor_enriches_scalar_payload_on_cadence() -> None:
         include_gpu=False,
     )
 
-    mon._collect_payload = lambda: {  # type: ignore[method-assign]
-        "resource.cpu.system_percent": 42.0,
-        "resource.ram.process_rss_mb": 128.5,
-    }
+    monkeypatch.setattr(
+        mon,
+        "_collect_payload",
+        lambda: {
+            "resource.cpu.system_percent": 42.0,
+            "resource.ram.process_rss_mb": 128.5,
+        },
+    )
 
     e0 = _event(0, {"trial": 0})
     e1 = _event(1, {"trial": 1})
@@ -52,22 +60,28 @@ def test_resource_monitor_enriches_scalar_payload_on_cadence() -> None:
     assert isinstance(e2.data["resource.cpu.system_percent"], float)
 
 
-def test_resource_monitor_disabled_is_noop() -> None:
+def test_resource_monitor_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     mon = ResourceMonitor(
         enabled=False,
         include_system=False,
         include_process=False,
         include_gpu=False,
     )
-    mon._collect_payload = lambda: {  # type: ignore[method-assign]
-        "resource.cpu.system_percent": 5.0,
-    }
+    monkeypatch.setattr(
+        mon,
+        "_collect_payload",
+        lambda: {
+            "resource.cpu.system_percent": 5.0,
+        },
+    )
     ev = _event(0, {"trial": 0})
     mon.on_event(ev)
     assert "resource.cpu.system_percent" not in ev.data
 
 
-def test_resource_monitor_enriches_training_trial_payload() -> None:
+def test_resource_monitor_enriches_training_trial_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     mon = ResourceMonitor(
         enabled=True,
         every_n_steps=1,
@@ -75,9 +89,13 @@ def test_resource_monitor_enriches_training_trial_payload() -> None:
         include_process=False,
         include_gpu=False,
     )
-    mon._collect_payload = lambda: {  # type: ignore[method-assign]
-        "resource.cpu.system_percent": 11.0,
-    }
+    monkeypatch.setattr(
+        mon,
+        "_collect_payload",
+        lambda: {
+            "resource.cpu.system_percent": 11.0,
+        },
+    )
     ev = _event(4, {"trial": 4}, topic=EventTopic.TRAINING_TRIAL)
     mon.on_event(ev)
     assert ev.data["resource.cpu.system_percent"] == 11.0

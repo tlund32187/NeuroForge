@@ -35,6 +35,7 @@ class BestGenomeCheckpoint:
     evaluations: int
     schema_version: int = 1
     config: dict[str, Any] = field(default_factory=dict[str, Any])
+    learned_checkpoint_path: str = ""
 
 
 def find_latest_evolution_checkpoint(runs_dir: str | Path) -> Path | None:
@@ -74,4 +75,5 @@ def load_best_genome_checkpoint(path: str | Path) -> BestGenomeCheckpoint:
         evaluations=int(payload.get("evaluations", 0)),
         schema_version=int(payload.get("schema_version", 1)),
         config=cast_json_object(payload.get("config") or {}),
+        learned_checkpoint_path=str(getattr(genome, "learned_checkpoint_path", "") or ""),
     )

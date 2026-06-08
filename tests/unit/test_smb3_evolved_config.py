@@ -15,6 +15,8 @@ from neuroforge.neuroevolution import Gene, PolicyGenome
 if TYPE_CHECKING:
     from types import ModuleType
 
+    from neuroforge.neuroevolution import GraphGenome
+
 
 def _load_evolved_config_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     del monkeypatch
@@ -163,6 +165,38 @@ def test_apply_evolved_config_full_mode_enables_partial_resume_for_shape_changes
 
 
 @pytest.mark.unit
+def test_apply_evolved_config_uses_lamarckian_learned_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_evolved_config_module(monkeypatch)
+    learned = tmp_path / "policy.pt"
+    learned.write_text("placeholder", encoding="utf-8")
+    checkpoint = tmp_path / "run" / "evolution" / "checkpoint.json"
+    genome = _genome_with({"decide_ticks": 8}).with_learned_checkpoint(str(learned))
+    _write_evolution_checkpoint(checkpoint, genome)
+    base = GameTrainingConfig(resume=False, resume_checkpoint_path=None)
+
+    selection = module.apply_evolved_genome_config(
+        base,
+        use_evolved=True,
+        evolved_mode="full",
+        evolution_checkpoint=str(checkpoint),
+        runs_dir=tmp_path,
+    )
+
+    assert selection.applied is True
+    assert selection.lamarckian_resume_enabled is True
+    assert selection.learned_checkpoint_path == str(learned)
+    assert selection.config.resume is True
+    assert selection.config.resume_checkpoint_path == str(learned)
+    assert selection.config.resume_allow_partial is True
+    assert module.evolved_config_status_lines(selection, action="training")[-1] == (
+        f"Lamarckian learned weights will warm-start from {learned}"
+    )
+
+
+@pytest.mark.unit
 def test_apply_evolved_config_reports_missing_and_invalid_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -203,16 +237,16 @@ def test_apply_evolved_config_reports_missing_and_invalid_modes(
     assert invalid.warnings == ("unknown evolved mode 'wide'; using compatible mode.",)
 
 
-def _write_graph_checkpoint(path: Path, genome: object) -> None:
+def _write_graph_checkpoint(path: Path, genome: GraphGenome) -> None:
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
                 "generation": 0,
                 "evaluations": 1,
-                "population": [genome.to_dict()],  # type: ignore[attr-defined]
+                "population": [genome.to_dict()],
                 "best": {
-                    "genome": genome.to_dict(),  # type: ignore[attr-defined]
+                    "genome": genome.to_dict(),
                     "fitness": 9.0,
                     "metrics": {},
                     "episodes": 1,

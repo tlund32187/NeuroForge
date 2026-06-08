@@ -12,20 +12,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import torch
 
 from neuroforge.contracts.applications.games import ScreenFrame
-
-torch = pytest.importorskip("torch")
-
-if TYPE_CHECKING:
-    from torch import Tensor
-
-from neuroforge.perception.vision.encoding import (  # noqa: E402
+from neuroforge.perception.vision.encoding import (
     RetinaEncoder,
     STDPFeatureConfig,
     STDPFeatureLayer,
     render_feature_atlas,
 )
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
+pytest.importorskip("torch")
 
 _PATCH = 5
 _CH = 2
@@ -82,7 +82,7 @@ def test_homeostasis_keeps_multiple_features_in_use() -> None:
         STDPFeatureConfig(n_features=24, patch=_PATCH, conscience=0.5, seed=1),
     )
     _train(layer, patterns, batches=300, seed=7)
-    used = int((layer._win_count > 0).sum())  # noqa: SLF001 - inspecting homeostasis
+    used = int((layer._win_count > 0).sum())
     assert used >= 3                           # not collapsed onto a single unit
 
 

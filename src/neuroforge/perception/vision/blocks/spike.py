@@ -20,7 +20,7 @@ class SurrogateSpike(nn.Module):
     """Element-wise hard spike with fast-sigmoid surrogate gradient."""
 
     def __init__(self, *, threshold: float = 0.0, beta: float = 5.0) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
         self.threshold = float(threshold)
         self.beta = float(beta)
 

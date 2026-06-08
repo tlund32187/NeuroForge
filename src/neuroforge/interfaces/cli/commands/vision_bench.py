@@ -699,7 +699,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     config_path = Path(str(args.config))
     if not config_path.exists():
-        print(f"Config file not found: {config_path}", file=sys.stderr)  # noqa: T201
+        print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
 
     try:
@@ -715,10 +715,10 @@ def _main(argv: list[str] | None = None) -> int:
         )
         result = run_vision_benchmark(plan)
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)  # noqa: T201
+        print(str(exc), file=sys.stderr)
         return 1
 
-    print(json.dumps(result, indent=2), flush=True)  # noqa: T201
+    print(json.dumps(result, indent=2), flush=True)
     any_failed = any(bool(run.get("failed", False)) for run in result["runs"])
     return 2 if any_failed else 0
 

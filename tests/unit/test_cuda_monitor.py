@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """Unit tests for CudaMetricsMonitor - works on CPU-only systems."""
 
 from __future__ import annotations

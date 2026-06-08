@@ -19,20 +19,25 @@ from neuroforge.applications.smb3.fitness import (
 from neuroforge.applications.tasks.evolution import EvolutionTask
 from neuroforge.applications.tasks.game_training import GameTrainingConfig
 from neuroforge.contracts.applications.evolution import FitnessResult
-from neuroforge.contracts.messaging import EventTopic
+from neuroforge.contracts.messaging import EventTopic, MonitorEvent
 from neuroforge.messaging.bus import EventBus
 from neuroforge.neuroevolution import (
+    AdaptiveSpeciation,
     BestGenomeCheckpoint,
     CallableFitnessEvaluator,
+    EvaluatedGenome,
     EvolutionConfig,
     Gene,
     PolicyGenome,
+    SpeciesAwareReproduction,
     ThreadLocalFitnessEvaluatorPool,
+    attach_learned_checkpoint_to_evolution_checkpoint,
     decode_genome,
     find_latest_evolution_checkpoint,
     get_policy_objective,
     load_best_genome_checkpoint,
     policy_objective_names,
+    select_parent_by_mode,
 )
 
 if TYPE_CHECKING:
@@ -43,9 +48,9 @@ class _Collector:
     enabled = True
 
     def __init__(self) -> None:
-        self.events: list[object] = []
+        self.events: list[MonitorEvent] = []
 
-    def on_event(self, event: object) -> None:
+    def on_event(self, event: MonitorEvent) -> None:
         self.events.append(event)
 
     def reset(self) -> None:
@@ -71,6 +76,19 @@ def test_policy_genome_round_trips_and_builds_configs() -> None:
     assert spec.metadata["n_hidden_layers"] == 1
     assert [pop.name for pop in spec.populations] == ["input", "hidden", "motor"]
     assert {proj.name for proj in spec.projections} >= {"in_to_hidden", "hidden_to_motor"}
+
+
+@pytest.mark.unit
+def test_policy_genome_learned_checkpoint_round_trip_does_not_change_content_key() -> None:
+    genome = PolicyGenome.seed("g0", generation=0, randomise=False)
+    learned = genome.with_learned_checkpoint("artifacts/smb3_policy.pt")
+    decoded = PolicyGenome.from_dict(learned.to_dict())
+
+    assert decoded.learned_checkpoint_path == "artifacts/smb3_policy.pt"
+    assert decoded.content_key() == genome.content_key()
+    assert decoded.as_offspring(child_id="child", generation=1).learned_checkpoint_path == (
+        "artifacts/smb3_policy.pt"
+    )
 
 
 @pytest.mark.unit
@@ -207,6 +225,53 @@ def test_load_and_find_best_evolution_checkpoint(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_attach_learned_checkpoint_to_evolution_checkpoint(tmp_path: Path) -> None:
+    genome = PolicyGenome.seed("best", generation=2, randomise=False)
+    twin = genome.as_offspring(child_id="twin", generation=3)
+    other = genome.mutate(child_id="other", generation=3, rng=random.Random(5), rate=1.0)
+    checkpoint = tmp_path / "run" / "evolution" / "checkpoint.json"
+    learned = tmp_path / "policy.pt"
+    learned.write_text("placeholder", encoding="utf-8")
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "generation": 3,
+                "evaluations": 12,
+                "population": [twin.to_dict(), other.to_dict()],
+                "best": {
+                    "genome": genome.to_dict(),
+                    "fitness": 42.5,
+                    "metrics": {},
+                    "episodes": 1,
+                    "frames": 600,
+                    "species_id": 0,
+                    "adjusted_fitness": 42.5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = attach_learned_checkpoint_to_evolution_checkpoint(
+        checkpoint,
+        learned,
+        genome_id="best",
+        source="unit",
+    )
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    loaded = load_best_genome_checkpoint(checkpoint)
+
+    assert summary["population_updates"] == 1
+    assert payload["best"]["lamarckian"]["source"] == "unit"
+    assert payload["best"]["genome"]["learned_checkpoint_path"] == str(learned)
+    assert payload["population"][0]["learned_checkpoint_path"] == str(learned)
+    assert "learned_checkpoint_path" not in payload["population"][1]
+    assert loaded.learned_checkpoint_path == str(learned)
+    assert loaded.genome.learned_checkpoint_path == str(learned)
+
+
+@pytest.mark.unit
 def test_policy_genome_mutation_keeps_bounds_and_changes_value() -> None:
     genome = PolicyGenome.seed("parent", randomise=False)
     import random
@@ -253,6 +318,133 @@ def test_genome_content_key_ignores_id_and_generation() -> None:
 
 
 @pytest.mark.unit
+def test_adaptive_speciation_adjusts_threshold_toward_target_species_count() -> None:
+    base = PolicyGenome.seed("base", generation=0, randomise=False)
+    twins = [
+        base.as_offspring(child_id=f"twin_{idx}", generation=0)
+        for idx in range(4)
+    ]
+    too_few = AdaptiveSpeciation(
+        threshold=0.5,
+        target_min=2,
+        target_max=4,
+        adjustment=0.1,
+    )
+
+    too_few.assign(twins)
+
+    assert too_few.last_species_count == 1
+    assert too_few.threshold == pytest.approx(0.45)
+
+    rng = random.Random(2)
+    diverse = [base]
+    current = base
+    for idx in range(4):
+        current = current.mutate(
+            child_id=f"diverse_{idx}",
+            generation=0,
+            rng=rng,
+            rate=1.0,
+        )
+        diverse.append(current)
+    too_many = AdaptiveSpeciation(
+        threshold=1e-6,
+        target_min=1,
+        target_max=2,
+        adjustment=0.1,
+    )
+
+    too_many.assign(diverse)
+
+    assert too_many.last_species_count > 2
+    assert too_many.threshold == pytest.approx(1.1e-6)
+
+
+@pytest.mark.unit
+def test_species_aware_reproduction_preserves_weaker_species() -> None:
+    strong = PolicyGenome.seed("strong", generation=0, randomise=False)
+    weak = strong.mutate(child_id="weak", generation=0, rng=random.Random(3), rate=1.0)
+    cfg = EvolutionConfig(
+        population_size=6,
+        generations=2,
+        elite_count=1,
+        mutation_rate=0.8,
+        seed=9,
+    )
+    evaluated = [
+        EvaluatedGenome(
+            strong,
+            FitnessResult(100.0),
+            species_id=0,
+            adjusted_fitness=50.0,
+            species_uid=0,
+        ),
+        EvaluatedGenome(
+            strong.mutate(child_id="strong_2", generation=0, rng=random.Random(4), rate=1.0),
+            FitnessResult(90.0),
+            species_id=0,
+            adjusted_fitness=45.0,
+            species_uid=0,
+        ),
+        EvaluatedGenome(
+            weak,
+            FitnessResult(1.0),
+            species_id=1,
+            adjusted_fitness=1.0,
+            species_uid=1,
+        ),
+    ]
+
+    children = SpeciesAwareReproduction(cfg).next_generation(
+        evaluated,
+        generation=1,
+        rng=random.Random(5),
+    )
+
+    assert len(children) == cfg.population_size
+    assert any(child.content_key() == strong.content_key() for child in children)
+    assert any(child.content_key() == weak.content_key() for child in children)
+
+
+@pytest.mark.unit
+def test_tournament_selection_prefers_order_over_score_magnitude() -> None:
+    base = PolicyGenome.seed("base", generation=0, randomise=False)
+    evaluated = [
+        EvaluatedGenome(
+            base.as_offspring(child_id="low", generation=0),
+            FitnessResult(-10_000.0),
+            species_id=0,
+            adjusted_fitness=-10_000.0,
+            species_uid=0,
+        ),
+        EvaluatedGenome(
+            base.as_offspring(child_id="mid", generation=0),
+            FitnessResult(0.5),
+            species_id=0,
+            adjusted_fitness=0.5,
+            species_uid=0,
+        ),
+        EvaluatedGenome(
+            base.as_offspring(child_id="high", generation=0),
+            FitnessResult(0.6),
+            species_id=0,
+            adjusted_fitness=0.6,
+            species_uid=0,
+        ),
+    ]
+
+    selected = select_parent_by_mode(
+        evaluated,
+        random.Random(3),
+        mode="tournament",
+        tournament_size=len(evaluated),
+        rank_pressure=1.7,
+    )
+
+    assert selected.genome.id == "high"
+
+
+@pytest.mark.unit
 def test_fitness_cache_avoids_re_evaluating_identical_genomes() -> None:
     evaluated: list[str] = []
 
@@ -271,6 +463,49 @@ def test_fitness_cache_avoids_re_evaluating_identical_genomes() -> None:
     # re-rolled, so total evaluate() calls fall below the naive pop*generations.
     assert len(evaluated) == len(set(evaluated))
     assert len(evaluated) < 6 * 4
+
+
+@pytest.mark.unit
+def test_evolution_task_adds_novelty_selection_metrics() -> None:
+    def objective(genome: PolicyGenome) -> FitnessResult:
+        return FitnessResult(
+            fitness=1.0,
+            metrics={"behavior": float(genome.value("n_hidden")) / 256.0},
+        )
+
+    bus = EventBus()
+    collector = _Collector()
+    bus.subscribe(EventTopic.TRAINING_TRIAL, collector)
+    bus.subscribe(EventTopic.SCALAR, collector)
+
+    EvolutionTask(
+        EvolutionConfig(
+            population_size=5,
+            generations=1,
+            elite_count=1,
+            seed=31,
+            novelty_weight=10.0,
+            novelty_metric_keys=("behavior",),
+        ),
+        event_bus=bus,
+        evaluator=CallableFitnessEvaluator(objective),
+    ).run()
+
+    trials = [
+        event.data
+        for event in collector.events
+        if event.topic == EventTopic.TRAINING_TRIAL
+    ]
+    scalars = [
+        event.data
+        for event in collector.events
+        if event.topic == EventTopic.SCALAR
+    ]
+
+    assert trials
+    assert any(trial["novelty_score"] > 0.0 for trial in trials)
+    assert any(trial["fitness"] > trial["fitness_objective"] for trial in trials)
+    assert "best_novelty_score" in scalars[0]
 
 
 @pytest.mark.unit
@@ -322,13 +557,20 @@ def test_evolution_task_improves_toy_objective_and_emits_events(tmp_path: Path) 
         "resume": False,
         "max_workers": 1,
         "preserve_global_best": True,
+        "selection_mode": "tournament",
+        "tournament_size": 3,
+        "rank_selection_pressure": 1.7,
+        "novelty_weight": 0.0,
+        "novelty_k": 5,
+        "novelty_archive_size": 256,
+        "novelty_metric_keys": [],
     }
     loaded_checkpoint = load_best_genome_checkpoint(checkpoint)
     assert loaded_checkpoint.schema_version == 2
     assert loaded_checkpoint.config["population_size"] == 8
     assert loaded_checkpoint.config["seed"] == 11
 
-    topics = [event.topic for event in collector.events]  # type: ignore[attr-defined]
+    topics = [event.topic for event in collector.events]
     assert EventTopic.RUN_START in topics
     assert EventTopic.RUN_END in topics
     assert topics.count(EventTopic.SCALAR) == 4
@@ -454,6 +696,7 @@ def test_scripted_progress_evaluator_uses_game_training_backend() -> None:
     assert result.frames == 4
     assert "reward_mean" in result.metrics
     assert "max_x_progress" in result.metrics
+    assert "score_gain" in result.metrics
     assert "action_button_mean" in result.metrics
     assert "action_up_frac" in result.metrics
 
@@ -573,6 +816,143 @@ def test_evaluator_reuses_one_client_across_genomes_when_requested() -> None:
     assert "fitness_std" in result.metrics
     assert "max_x_progress_std" in result.metrics
     assert "survival_frac" in result.metrics
+
+
+@pytest.mark.unit
+def test_game_training_evaluator_applies_terminal_fitness_penalties() -> None:
+    from neuroforge.contracts.applications.games import EpisodeDecision, GameObservation
+    from neuroforge.environments.games.clients.scripted import ActionProgressGameClient
+    from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
+    from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
+
+    class DeathAfterOneStep:
+        def begin_episode(self) -> None:
+            return
+
+        def should_end(
+            self,
+            before: GameObservation,
+            after: GameObservation,
+        ) -> EpisodeDecision:
+            del before, after
+            return EpisodeDecision(terminated=True, reason="death")
+
+    class ZeroReward:
+        def reward(self, previous: GameObservation, current: GameObservation) -> float:
+            del previous, current
+            return 0.0
+
+    def build_evaluator(*, death_penalty: float) -> GameTrainingFitnessEvaluator:
+        return GameTrainingFitnessEvaluator(
+            client_factory=lambda: ActionProgressGameClient(
+                width=12, height=10, channels=1, max_steps=3,
+            ),
+            base_config=GameTrainingConfig(
+                preprocess=FramePreprocessConfig(out_h=10, out_w=10, motion=False),
+                n_hidden=16,
+                motor_per_button=1,
+                input_fanin=8,
+                decide_ticks=3,
+                max_episodes=1,
+                frames_per_episode=3,
+                telemetry_every=0,
+            ),
+            reward_model_factory=ZeroReward,
+            episode_manager_factory=DeathAfterOneStep,
+            death_penalty=death_penalty,
+        )
+
+    genome = PolicyGenome.seed("g0", generation=0, randomise=False)
+    base = build_evaluator(death_penalty=0.0).evaluate(genome)
+    penalized = build_evaluator(death_penalty=7.5).evaluate(genome)
+
+    assert base.metrics["termination.death"] == pytest.approx(1.0)
+    assert penalized.metrics["fitness_terminal_score"] == pytest.approx(-7.5)
+    assert base.fitness - penalized.fitness == pytest.approx(7.5)
+
+
+@pytest.mark.unit
+def test_game_training_evaluator_rewards_score_gain() -> None:
+    from neuroforge.contracts.applications.games import (
+        ControllerAction,
+        GameClientStep,
+        GameObservation,
+        ScreenFrame,
+        VisionGameMetrics,
+    )
+    from neuroforge.environments.games.smb3.actions import ActionEnergyConfig
+    from neuroforge.neuroevolution.fitness.evaluators import GameTrainingFitnessEvaluator
+    from neuroforge.perception.vision.encoding.frame_preprocess import FramePreprocessConfig
+
+    class ScoreClient:
+        def __init__(self) -> None:
+            self._step = 0
+            self._score = 0
+
+        def reset(self) -> GameObservation:
+            self._step = 0
+            self._score = 0
+            return self._observation()
+
+        def step(self, action: ControllerAction) -> GameClientStep:
+            del action
+            self._step += 1
+            self._score += 100
+            return GameClientStep(self._observation(), truncated=self._step >= 3)
+
+        def close(self) -> None:
+            return
+
+        def _observation(self) -> GameObservation:
+            frame = ScreenFrame(width=12, height=10, channels=1, data=bytes(120))
+            return GameObservation(
+                step=self._step,
+                t=float(self._step),
+                frame=frame,
+                metrics=VisionGameMetrics(score=self._score, x_progress=0.0),
+            )
+
+    class ZeroReward:
+        def reward(self, previous: GameObservation, current: GameObservation) -> float:
+            del previous, current
+            return 0.0
+
+    evaluator = GameTrainingFitnessEvaluator(
+        client_factory=ScoreClient,
+        base_config=GameTrainingConfig(
+            preprocess=FramePreprocessConfig(out_h=10, out_w=10, motion=False),
+            n_hidden=16,
+            motor_per_button=1,
+            input_fanin=8,
+            decide_ticks=3,
+            max_episodes=1,
+            frames_per_episode=3,
+            telemetry_every=0,
+            action_energy=ActionEnergyConfig(enabled=False),
+        ),
+        reward_model_factory=ZeroReward,
+        progress_scale=0.0,
+        score_gain_scale=0.01,
+    )
+    result = evaluator.evaluate(PolicyGenome.seed("g0", generation=0, randomise=False))
+
+    assert result.metrics["score_gain_total"] == pytest.approx(300.0)
+    assert result.metrics["fitness_score_gain_score"] == pytest.approx(3.0)
+    assert result.fitness == pytest.approx(3.0)
+
+
+@pytest.mark.unit
+def test_trial_metric_collisions_do_not_replace_primary_rollout_metrics() -> None:
+    from neuroforge.neuroevolution.fitness.evaluators import _non_colliding_metrics
+
+    merged = _non_colliding_metrics(
+        {"max_x_progress": 0.1, "termination.death": 1.0},
+        existing={"max_x_progress": 0.3},
+    )
+
+    assert "max_x_progress" not in merged
+    assert merged["max_x_progress_mean"] == pytest.approx(0.1)
+    assert merged["termination.death"] == pytest.approx(1.0)
 
 
 @pytest.mark.unit
@@ -742,12 +1122,12 @@ def test_resume_progress_uses_checkpoint_population_before_reproducing(
 
     progress = [
         event.data
-        for event in collector.events  # type: ignore[attr-defined]
+        for event in collector.events
         if event.topic == EventTopic.EVALUATION_PROGRESS
     ]
     run_start = [
         event.data
-        for event in collector.events  # type: ignore[attr-defined]
+        for event in collector.events
         if event.topic == EventTopic.RUN_START
     ][0]
     completes = [event for event in progress if event["phase"] == "complete"]

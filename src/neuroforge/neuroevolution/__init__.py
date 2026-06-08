@@ -28,6 +28,7 @@ from neuroforge.neuroevolution.genomes.innovations import InnovationRegistry
 from neuroforge.neuroevolution.genomes.policy import Gene, GeneDef, PolicyGenome, policy_gene_defs
 from neuroforge.neuroevolution.genomes.substrate import (
     DEFAULT_SUBSTRATE,
+    InputChannelLayout,
     Substrate,
     SubstrateConfig,
 )
@@ -37,7 +38,13 @@ from neuroforge.neuroevolution.io.checkpoints import (
     load_best_genome_checkpoint,
 )
 from neuroforge.neuroevolution.io.genome_codec import decode_genome, max_connection_innovation
+from neuroforge.neuroevolution.io.learned_state import (
+    attach_learned_checkpoint_to_evolution_checkpoint,
+    learned_checkpoint_path,
+    with_learned_checkpoint,
+)
 from neuroforge.neuroevolution.search.engine import (
+    AdaptiveSpeciation,
     EvaluatedGenome,
     EvaluationProgress,
     EvolutionConfig,
@@ -47,11 +54,14 @@ from neuroforge.neuroevolution.search.engine import (
     ProgressCallback,
     SimpleReproduction,
     SimpleSpeciation,
+    SpeciesAwareReproduction,
     default_seed_population,
     evolution_config_to_dict,
+    select_parent_by_mode,
 )
 
 __all__ = [
+    "AdaptiveSpeciation",
     "CallableFitnessEvaluator",
     "BestGenomeCheckpoint",
     "ConnGene",
@@ -60,8 +70,10 @@ __all__ = [
     "GraphReproduction",
     "HyperNEATGenome",
     "HyperNEATReproduction",
+    "InputChannelLayout",
     "InnovationRegistry",
     "NodeGene",
+    "attach_learned_checkpoint_to_evolution_checkpoint",
     "decode_genome",
     "graph_hyperparam_defs",
     "make_graph_seed_population",
@@ -81,6 +93,7 @@ __all__ = [
     "PolicyGenome",
     "SimpleSpeciation",
     "SimpleReproduction",
+    "SpeciesAwareReproduction",
     "Substrate",
     "SubstrateConfig",
     "ThreadLocalFitnessEvaluatorPool",
@@ -89,7 +102,10 @@ __all__ = [
     "evolution_config_to_dict",
     "find_latest_evolution_checkpoint",
     "get_policy_objective",
+    "learned_checkpoint_path",
     "load_best_genome_checkpoint",
     "policy_gene_defs",
     "policy_objective_names",
+    "select_parent_by_mode",
+    "with_learned_checkpoint",
 ]

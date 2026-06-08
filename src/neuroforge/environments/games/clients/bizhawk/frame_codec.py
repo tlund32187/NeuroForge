@@ -11,6 +11,7 @@ them.
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 __all__ = ["decode_png_to_raw"]
@@ -31,7 +32,8 @@ def decode_png_to_raw(data: bytes, *, width: int, height: int, channels: int) ->
 
     torch: Any = require_torch()
     try:
-        from torchvision.io import decode_png  # pyright: ignore[reportMissingTypeStubs]
+        torchvision_io: Any = import_module("torchvision.io")
+        decode_png = torchvision_io.decode_png
     except ImportError as exc:  # pragma: no cover - exercised only without torchvision
         msg = "PNG frame format requires torchvision (pip install '.[vision]')"
         raise RuntimeError(msg) from exc

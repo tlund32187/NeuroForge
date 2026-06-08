@@ -39,7 +39,7 @@ class LifConvNetV1(nn.Module):
     """Minimal spiking ConvNet backbone with temporal encoding support."""
 
     def __init__(self, spec: VisionBackboneSpec) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
         if spec.type != "lif_convnet_v1":
             msg = f"LifConvNetV1 requires spec.type='lif_convnet_v1', got {spec.type!r}"
             raise ValueError(msg)

@@ -45,7 +45,10 @@ from neuroforge.messaging.bus import EventBus
 from neuroforge.observability.events.recorder import EventRecorderMonitor
 
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
-ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 3 (USA) (Rev 1).nes"  # noqa: E501
+ROM_PATH = (
+    r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)"
+    r"\Super Mario Bros. 3 (USA) (Rev 1).nes"
+)
 SAVESTATE_PATHS: tuple[str, ...] = (
     r"C:\BizHawk\States\smb3_level1.State",
 )
@@ -61,7 +64,12 @@ RUN_RANDOM_BASELINE = env_bool("NEUROFORGE_EVAL_RANDOM_BASELINE", False)
 
 _REPO = Path(__file__).resolve().parents[4]
 LUA_SCRIPT = _REPO / "scripts" / "bizhawk" / "neuroforge_bridge.lua"
-CHECKPOINT = Path(os.environ.get("NEUROFORGE_SMB3_CHECKPOINT", str(_REPO / "artifacts" / "smb3_policy.pt")))  # noqa: E501
+CHECKPOINT = Path(
+    os.environ.get(
+        "NEUROFORGE_SMB3_CHECKPOINT",
+        str(_REPO / "artifacts" / "smb3_policy.pt"),
+    ),
+)
 RUNS_DIR = _REPO / "artifacts" / "runs"
 USE_EVOLVED_GENOME = env_bool("NEUROFORGE_SMB3_USE_EVOLVED", False)
 EVOLUTION_CHECKPOINT = os.environ.get("NEUROFORGE_SMB3_EVOLUTION_CHECKPOINT")
@@ -183,7 +191,9 @@ def _run_evaluation(
     savestates: tuple[str, ...],
     checkpoint_path: Path | None,
 ) -> dict[str, float]:
-    run_dir = RUNS_DIR / dt.datetime.now().astimezone().strftime(f"smb3_eval_%Y%m%d_%H%M%S_{label}")  # noqa: E501
+    run_dir = RUNS_DIR / dt.datetime.now().astimezone().strftime(
+        f"smb3_eval_%Y%m%d_%H%M%S_{label}"
+    )
     bus = EventBus()
     monitor = _EvaluationMonitor(label)
     recorder = EventRecorderMonitor(run_dir)

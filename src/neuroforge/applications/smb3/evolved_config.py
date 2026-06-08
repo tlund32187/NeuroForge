@@ -9,6 +9,7 @@ from typing import Any
 
 from neuroforge.neuroevolution import (
     find_latest_evolution_checkpoint,
+    learned_checkpoint_path,
     load_best_genome_checkpoint,
 )
 
@@ -25,9 +26,12 @@ class EvolvedConfigSelection:
     fitness: float = 0.0
     include_network_shape: bool = False
     partial_resume_enabled: bool = False
-    # For a structural (graph) champion in "full" mode: the n_input -> PolicyNetwork
+    genome_type: str = ""
+    learned_checkpoint_path: str = ""
+    lamarckian_resume_enabled: bool = False
+    # For a structural champion in "full" mode: the n_input -> PolicyNetwork
     # builder that compiles its invented topology. None for hyperparameter genomes
-    # (and for graph "compatible" mode, which keeps the base network shape).
+    # and compatible mode, which keeps the base network shape.
     network_builder: Any | None = None
     warnings: tuple[str, ...] = ()
 
@@ -64,7 +68,7 @@ def apply_evolved_genome_config(
         include_network_shape = False
 
     selected = load_best_genome_checkpoint(checkpoint_path)
-    # A structural (graph) genome describes its own topology, compiled by a network
+    # A structural genome describes its own topology, compiled by a network
     # builder; a hyperparameter genome only adjusts config fields. Detect by surface.
     is_graph = hasattr(selected.genome, "make_network_builder")
     network_builder: Any | None = None
@@ -89,6 +93,19 @@ def apply_evolved_genome_config(
     )
     if partial_resume_enabled:
         next_config = dataclasses.replace(next_config, resume_allow_partial=True)
+    learned_path = learned_checkpoint_path(selected.genome)
+    lamarckian_resume_enabled = False
+    if learned_path:
+        if Path(learned_path).exists():
+            lamarckian_resume_enabled = True
+            next_config = dataclasses.replace(
+                next_config,
+                resume=True,
+                resume_checkpoint_path=learned_path,
+                resume_allow_partial=True,
+            )
+        else:
+            warnings.append(f"learned checkpoint not found; ignoring: {learned_path}")
 
     return EvolvedConfigSelection(
         config=next_config,
@@ -99,6 +116,9 @@ def apply_evolved_genome_config(
         fitness=float(selected.fitness),
         include_network_shape=include_network_shape,
         partial_resume_enabled=partial_resume_enabled,
+        genome_type=type(selected.genome).__name__,
+        learned_checkpoint_path=learned_path,
+        lamarckian_resume_enabled=lamarckian_resume_enabled,
         network_builder=network_builder,
         warnings=tuple(warnings),
     )
@@ -117,7 +137,11 @@ def evolved_config_status_lines(
         return lines
 
     if selection.network_builder is not None:
-        mode = "evolved graph topology"
+        mode = (
+            "evolved HyperNEAT topology"
+            if selection.genome_type == "HyperNEATGenome"
+            else "evolved graph topology"
+        )
     elif selection.include_network_shape:
         mode = "full phenotype"
     else:
@@ -130,5 +154,10 @@ def evolved_config_status_lines(
         lines.append(
             "Evolved genome mode=full changes network shape; "
             "partial checkpoint warm-start enabled."
+        )
+    if selection.lamarckian_resume_enabled:
+        lines.append(
+            "Lamarckian learned weights will warm-start from "
+            f"{selection.learned_checkpoint_path}"
         )
     return lines

@@ -26,7 +26,7 @@ class SpikingPool(nn.Module):
         stride: int | tuple[int, int] | None = None,
         padding: int | tuple[int, int] = 0,
     ) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
         pool_mode = mode.strip().lower()
         self.pool: nn.MaxPool2d | nn.AvgPool2d
         if pool_mode == "max":

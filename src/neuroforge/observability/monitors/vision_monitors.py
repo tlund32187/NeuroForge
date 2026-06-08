@@ -102,7 +102,7 @@ class VisionLayerStatsMonitor:
 
         layer_rows: dict[str, dict[str, Any]] = {}
         for key, raw_value in event.data.items():
-            if not isinstance(key, str) or not key.startswith(_LAYER_PREFIX):  # pyright: ignore[reportUnnecessaryIsInstance]
+            if not key.startswith(_LAYER_PREFIX):
                 continue
             tail = key[len(_LAYER_PREFIX):]
             if "." not in tail:

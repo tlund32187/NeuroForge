@@ -165,7 +165,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
         line = f"[{ts}] {msg}"
         writer.add_log_line(line)
-        print(line, flush=True)  # noqa: T201
+        print(line, flush=True)
 
     def _emit(topic: str, data: dict[str, Any]) -> None:
         bus.publish(MonitorEvent(
@@ -197,7 +197,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     spec = get_task_spec(task_name)
     if spec is None:
-        print(f"Unknown task: {task_name!r}", file=sys.stderr)  # noqa: T201
+        print(f"Unknown task: {task_name!r}", file=sys.stderr)
         return 1
     config_cls, task_cls = spec.load()
 
@@ -245,7 +245,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             try:
                 objective = get_policy_objective(str(args.evolution_objective))
             except ValueError as exc:
-                print(str(exc), file=sys.stderr)  # noqa: T201
+                print(str(exc), file=sys.stderr)
                 writer.flush()
                 return 1
             task_kwargs["evaluator"] = CallableFitnessEvaluator(objective)
@@ -360,7 +360,7 @@ def _cmd_stability(args: argparse.Namespace) -> int:
     try:
         seeds = _parse_seeds(args.seeds)
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)  # noqa: T201
+        print(str(exc), file=sys.stderr)
         return 1
 
     hidden = int(args.hidden) if args.hidden is not None else None
@@ -387,7 +387,7 @@ def _cmd_stability(args: argparse.Namespace) -> int:
         base_config=base_config,
         deterministic=bool(args.deterministic),
     )
-    print(json.dumps(summary, indent=2), flush=True)  # noqa: T201
+    print(json.dumps(summary, indent=2), flush=True)
     return 0
 
 
@@ -485,7 +485,7 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         line = f"[{ts}] {msg}"
         if writer is not None:
             writer.add_log_line(line)
-        print(line, flush=True)  # noqa: T201
+        print(line, flush=True)
 
     def _publish(
         topic: str,
@@ -569,7 +569,7 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         )
         if writer is not None:
             writer.flush()
-        print(f"Benchmark failed: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"Benchmark failed: {exc}", file=sys.stderr)
         return 2
 
     wall_ms = (time.perf_counter() - bench_t0) * 1_000.0
@@ -653,7 +653,7 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     _log(f"ms/step  : {summary['ms_per_step']:.4f}")
     if "run_dir" in summary:
         _log(f"artifacts: {summary['run_dir']}")
-    print(json.dumps(summary, indent=2), flush=True)  # noqa: T201
+    print(json.dumps(summary, indent=2), flush=True)
     return 0
 
 
@@ -774,7 +774,7 @@ def _cmd_vision(args: argparse.Namespace) -> int:
         ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
         line = f"[{ts}] {msg}"
         writer.add_log_line(line)
-        print(line, flush=True)  # noqa: T201
+        print(line, flush=True)
 
     def _publish(topic: str, *, step: int, data: dict[str, Any]) -> None:
         bus.publish(
@@ -820,7 +820,7 @@ def _cmd_vision(args: argparse.Namespace) -> int:
             },
         )
         writer.flush()
-        print(f"Vision run failed: {exc}", file=sys.stderr)  # noqa: T201
+        print(f"Vision run failed: {exc}", file=sys.stderr)
         return 2
 
     wall_ms = (time.perf_counter() - t0) * 1_000.0
@@ -861,7 +861,7 @@ def _cmd_vision(args: argparse.Namespace) -> int:
     _log(f"final_acc  : {result_data['final_accuracy']:.4f}")
     _log(f"wall_ms    : {wall_ms:,.1f}")
     _log(f"artifacts  : {ctx.run_dir}")
-    print(json.dumps(summary_out, indent=2), flush=True)  # noqa: T201
+    print(json.dumps(summary_out, indent=2), flush=True)
     return 0
 
 
@@ -875,7 +875,7 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     from neuroforge.interfaces.dashboard import run_dashboard
 
     mode = "live" if args.live else "default"
-    print(  # noqa: T201
+    print(
         f"Starting dashboard ({mode}) on http://{args.host}:{args.port}",
         flush=True,
     )
@@ -892,7 +892,7 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
     """List all run directories under the artifacts folder."""
     base = Path(args.artifacts)
     if not base.exists():
-        print(f"No artifacts directory: {base}", file=sys.stderr)  # noqa: T201
+        print(f"No artifacts directory: {base}", file=sys.stderr)
         return 1
 
     runs = sorted(
@@ -900,7 +900,7 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
         key=lambda p: p.name,
     )
     if not runs:
-        print("No runs found.", file=sys.stderr)  # noqa: T201
+        print("No runs found.", file=sys.stderr)
         return 0
 
     for run_dir in runs:
@@ -912,9 +912,9 @@ def _cmd_list_runs(args: argparse.Namespace) -> int:
                 suffix = f"  seed={meta.get('seed', '?')}  device={meta.get('device', '?')}"
             except (json.JSONDecodeError, KeyError):
                 pass
-        print(f"  {run_dir.name}{suffix}")  # noqa: T201
+        print(f"  {run_dir.name}{suffix}")
 
-    print(f"\n{len(runs)} run(s) in {base.resolve()}")  # noqa: T201
+    print(f"\n{len(runs)} run(s) in {base.resolve()}")
     return 0
 
 
@@ -1329,7 +1329,7 @@ def _add_bench_parser(sub: Any) -> None:
     )
 
 
-def _add_vision_parser(sub: Any) -> None:  # noqa: PLR0915
+def _add_vision_parser(sub: Any) -> None:
     p_vision = sub.add_parser(
         "vision",
         help="Run vision classification task",

@@ -111,6 +111,7 @@ class PolicyGenome:
     generation: int
     genes: tuple[Gene, ...]
     parent_ids: tuple[str, ...] = ()
+    learned_checkpoint_path: str = ""
 
     @classmethod
     def seed(
@@ -171,17 +172,21 @@ class PolicyGenome:
             generation=int(payload["generation"]),
             genes=tuple(genes),
             parent_ids=parent_ids,
+            learned_checkpoint_path=_learned_checkpoint_path_from_payload(payload),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
-        return {
+        payload: dict[str, Any] = {
             "type": "policy",
             "id": self.id,
             "generation": self.generation,
             "parent_ids": list(self.parent_ids),
             "genes": [dataclasses.asdict(gene) for gene in self.genes],
         }
+        if self.learned_checkpoint_path:
+            payload["learned_checkpoint_path"] = self.learned_checkpoint_path
+        return payload
 
     def value(self, key: str) -> int | float | bool:
         """Return one gene value by key."""
@@ -204,6 +209,10 @@ class PolicyGenome:
         ]
         return ";".join(parts)
 
+    def with_learned_checkpoint(self, path: str) -> PolicyGenome:
+        """Return this genome with an inherited learned-weight checkpoint path."""
+        return dataclasses.replace(self, learned_checkpoint_path=str(path))
+
     def as_offspring(
         self, *, child_id: str, generation: int, parent_ids: tuple[str, ...] | None = None,
     ) -> PolicyGenome:
@@ -213,6 +222,7 @@ class PolicyGenome:
             generation=generation,
             genes=self.genes,
             parent_ids=parent_ids if parent_ids is not None else (self.id,),
+            learned_checkpoint_path=self.learned_checkpoint_path,
         )
 
     def mutate(
@@ -246,7 +256,8 @@ class PolicyGenome:
             id=child_id,
             generation=generation,
             genes=tuple(next_genes),
-            parent_ids=(self.id,),
+            parent_ids=self.parent_ids if self.parent_ids else (self.id,),
+            learned_checkpoint_path=self.learned_checkpoint_path,
         )
 
     def crossover(
@@ -269,6 +280,7 @@ class PolicyGenome:
             generation=generation,
             genes=tuple(child_genes),
             parent_ids=(self.id, other.id),
+            learned_checkpoint_path=_inherit_learned_checkpoint(self, other, rng),
         )
 
     def distance(self, other: PolicyGenome) -> float:
@@ -468,3 +480,31 @@ class PolicyGenome:
                 "commit_frames": int(self.value("commit_frames")),
             },
         )
+
+
+def _learned_checkpoint_path_from_payload(payload: dict[str, Any]) -> str:
+    """Return the optional learned-policy checkpoint path from a genome payload."""
+    raw = payload.get("learned_checkpoint_path", "")
+    if isinstance(raw, str):
+        return raw
+    state = payload.get("learned_state")
+    if isinstance(state, dict):
+        path = cast("dict[str, Any]", state).get("policy_checkpoint", "")
+        return path if isinstance(path, str) else ""
+    return ""
+
+
+def _inherit_learned_checkpoint(
+    left: PolicyGenome,
+    right: PolicyGenome,
+    rng: random.Random,
+) -> str:
+    """Choose one available learned checkpoint during crossover inheritance."""
+    paths = tuple(
+        path
+        for path in (left.learned_checkpoint_path, right.learned_checkpoint_path)
+        if path
+    )
+    if not paths:
+        return ""
+    return rng.choice(paths)

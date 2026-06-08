@@ -277,7 +277,7 @@ class TestBuildGateNetwork:
     def test_default_spec_produces_gate_network(self) -> None:
         gn = build_gate_network(GateNetworkSpec())
         assert isinstance(gn, GateNetwork)
-        assert gn.engine._built  # noqa: SLF001
+        assert gn.engine._built
 
     def test_populations_present(self) -> None:
         gn = build_gate_network(GateNetworkSpec())

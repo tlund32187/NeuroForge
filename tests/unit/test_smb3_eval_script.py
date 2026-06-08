@@ -33,6 +33,10 @@ def _load_eval_script(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return module
 
 
+def _set_module_attr(module: ModuleType, name: str, value: object) -> None:
+    setattr(module, name, value)
+
+
 def _write_evolution_checkpoint(path: Path, genome: PolicyGenome) -> None:
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -116,9 +120,9 @@ def test_full_phenotype_eval_enables_partial_resume(
     checkpoint = tmp_path / "run" / "evolution" / "checkpoint.json"
     _write_evolution_checkpoint(checkpoint, genome)
 
-    module.USE_EVOLVED_GENOME = True
-    module.EVOLUTION_CHECKPOINT = str(checkpoint)
-    module.EVOLVED_MODE = "full"
+    _set_module_attr(module, "USE_EVOLVED_GENOME", True)
+    _set_module_attr(module, "EVOLUTION_CHECKPOINT", str(checkpoint))
+    _set_module_attr(module, "EVOLVED_MODE", "full")
 
     cfg = module._build_eval_config(checkpoint_path=tmp_path / "policy.pt")
 
@@ -153,9 +157,9 @@ def test_full_phenotype_random_baseline_uses_evolved_architecture(
     checkpoint = tmp_path / "run" / "evolution" / "checkpoint.json"
     _write_evolution_checkpoint(checkpoint, genome)
 
-    module.USE_EVOLVED_GENOME = True
-    module.EVOLUTION_CHECKPOINT = str(checkpoint)
-    module.EVOLVED_MODE = "full"
+    _set_module_attr(module, "USE_EVOLVED_GENOME", True)
+    _set_module_attr(module, "EVOLUTION_CHECKPOINT", str(checkpoint))
+    _set_module_attr(module, "EVOLVED_MODE", "full")
 
     cfg = module._build_eval_config(checkpoint_path=None)
 

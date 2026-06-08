@@ -120,7 +120,12 @@ class EvolutionTask(BaseTask):
             )
             summaries.append(summary)
             self._emit_individuals(evaluated, generation=summary.generation)
-            self._emit_generation(summary)
+            run_best_fitness = (
+                state.best.result.fitness
+                if state.best is not None
+                else summary.best.result.fitness
+            )
+            self._emit_generation(summary, run_best_fitness=run_best_fitness)
 
             if state.generation + 1 >= self._cfg.generations:
                 engine.advance(state, evaluated)
@@ -176,6 +181,9 @@ class EvolutionTask(BaseTask):
             "individual": progress.individual,
             "population_size": progress.population_size,
             "genome_id": progress.genome.id,
+            "species_id": progress.species_id,
+            "species_uid": progress.species_uid,
+            "parent_ids": ",".join(getattr(progress.genome, "parent_ids", [])),
             "completed": progress.completed,
             "evaluations": evaluations,
             "total_evaluations": completed_before_run + run_total,
@@ -208,6 +216,7 @@ class EvolutionTask(BaseTask):
                 "fitness": item.result.fitness,
                 "adjusted_fitness": item.adjusted_fitness,
                 "species_id": item.species_id,
+                "species_uid": item.species_uid,
                 "parent_ids": ",".join(item.genome.parent_ids),
                 "episodes": item.result.episodes,
                 "frames": item.result.frames,
@@ -216,19 +225,36 @@ class EvolutionTask(BaseTask):
             }
             self._emit("training_trial", generation, "evolution", data)
 
-    def _emit_generation(self, summary: GenerationSummary) -> None:
+    def _emit_generation(self, summary: GenerationSummary, *, run_best_fitness: float) -> None:
+        best_genome = summary.best.genome.to_dict()
+        data: dict[str, Any] = {
+            "generation": summary.generation,
+            "best_fitness": summary.best.result.fitness,
+            "run_best_fitness": float(run_best_fitness),
+            "mean_fitness": summary.mean_fitness,
+            "species_count": summary.species_count,
+            "evaluations": summary.evaluations,
+            "best_genome_id": summary.best.genome.id,
+            "best_species_uid": summary.best.species_uid,
+            "best_genome": best_genome,
+            **summary.best.result.metrics,
+        }
+        for source_key, scalar_key in (
+            ("fitness_objective", "best_objective_fitness"),
+            ("novelty_score", "best_novelty_score"),
+            ("fitness_novelty_bonus", "best_novelty_bonus"),
+        ):
+            value = summary.best.result.metrics.get(source_key)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                data[scalar_key] = float(value)
+        threshold = getattr(self._speciation, "threshold", None)
+        if isinstance(threshold, int | float) and not isinstance(threshold, bool):
+            data["species_threshold"] = float(threshold)
         self._emit(
             "scalar",
             summary.generation,
             "evolution",
-            {
-                "generation": summary.generation,
-                "best_fitness": summary.best.result.fitness,
-                "mean_fitness": summary.mean_fitness,
-                "species_count": summary.species_count,
-                "evaluations": summary.evaluations,
-                "best_genome_id": summary.best.genome.id,
-            },
+            data,
         )
 
 

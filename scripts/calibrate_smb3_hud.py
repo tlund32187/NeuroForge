@@ -1,4 +1,3 @@
-# pyright: basic
 """Calibrate the SMB3 HUD glyph atlas from a real captured frame.
 
 Template matching needs pixel-exact glyphs, which can only come from real
@@ -46,7 +45,7 @@ _CROP_OUT = _REPO / "artifacts" / "calibration"
 
 
 def _load_gray(path: Path) -> NDArray[np.uint8]:
-    from torchvision.io import read_image  # pyright: ignore[reportMissingTypeStubs]
+    from torchvision.io import read_image
 
     image = read_image(str(path))  # [C, H, W] uint8
     hwc = np.asarray(image.permute(1, 2, 0).contiguous().numpy(), dtype=np.uint8)
@@ -59,7 +58,7 @@ def _load_gray(path: Path) -> NDArray[np.uint8]:
 
 def _save_png(path: Path, gray: NDArray[np.uint8]) -> None:
     import torch
-    from torchvision.io import write_png  # pyright: ignore[reportMissingTypeStubs]
+    from torchvision.io import write_png
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tensor = torch.from_numpy(np.ascontiguousarray(gray))[None, :, :]  # [1, H, W]

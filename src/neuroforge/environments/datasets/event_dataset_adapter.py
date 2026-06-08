@@ -13,11 +13,14 @@ from __future__ import annotations
 import importlib
 import inspect
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.kernel.torch_utils import require_torch
 
 torch = require_torch()
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 __all__ = [
     "EventDatasetAdapter",
@@ -222,12 +225,13 @@ def _extract_event_fields(events: Any) -> tuple[Any, Any, Any, Any]:
         )
 
     # Generic sequence case: (t, x, y, polarity).
-    if isinstance(events, tuple | list) and len(events) >= 4:  # pyright: ignore[reportUnknownArgumentType]
+    fields = cast("Sequence[Any]", events) if isinstance(events, tuple | list) else ()
+    if len(fields) >= 4:
         return (
-            _as_1d_tensor(events[0], dtype=torch.int64),
-            _as_1d_tensor(events[1], dtype=torch.int64),
-            _as_1d_tensor(events[2], dtype=torch.int64),
-            _as_1d_tensor(events[3], dtype=torch.int64),
+            _as_1d_tensor(fields[0], dtype=torch.int64),
+            _as_1d_tensor(fields[1], dtype=torch.int64),
+            _as_1d_tensor(fields[2], dtype=torch.int64),
+            _as_1d_tensor(fields[3], dtype=torch.int64),
         )
 
     msg = (
@@ -273,11 +277,15 @@ class EventDatasetAdapter:
 
     def __getitem__(self, index: int) -> tuple[Any, Any]:
         sample = self._dataset[index]
-        if not isinstance(sample, tuple | list) or len(sample) < 2:  # pyright: ignore[reportUnknownArgumentType]
+        if not isinstance(sample, tuple | list):
             msg = "Dataset samples must be (events, label)"
             raise ValueError(msg)
-        events_raw = cast("Any", sample[0])
-        label = _coerce_label(sample[1])
+        values = cast("Sequence[Any]", sample)
+        if len(values) < 2:
+            msg = "Dataset samples must be (events, label)"
+            raise ValueError(msg)
+        events_raw = values[0]
+        label = _coerce_label(values[1])
 
         t, x, y, p = _extract_event_fields(events_raw)
         t, x, y, p = self._deterministic_slice(t=t, x=x, y=y, p=p)

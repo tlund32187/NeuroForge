@@ -14,7 +14,7 @@ from neuroforge.contracts.applications.games import ScreenFrame
 
 pytest.importorskip("torch")
 
-from neuroforge.perception.vision.encoding import MotionFigureGround  # noqa: E402
+from neuroforge.perception.vision.encoding import MotionFigureGround
 
 _H, _W = 112, 128
 _RNG = np.random.default_rng(0)

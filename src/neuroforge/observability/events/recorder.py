@@ -31,6 +31,24 @@ def _utc_iso_now() -> str:
     return dt.datetime.now(tz=dt.UTC).isoformat()
 
 
+def _as_any_list(value: object) -> list[Any] | None:
+    if not isinstance(value, list):
+        return None
+    return cast("list[Any]", value)
+
+
+def _as_any_sequence(value: object) -> list[Any] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return list(cast("list[Any] | tuple[Any, ...]", value))
+
+
+def _as_any_mapping(value: object) -> dict[Any, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return cast("dict[Any, Any]", value)
+
+
 class EventRecorderMonitor:
     """Monitor that records events to ``run_dir/events/events.ndjson``."""
 
@@ -253,8 +271,8 @@ class EventRecorderMonitor:
             tensor = value.detach()
             tensor = tensor.reshape(-1).cpu()
             flat_tensor = tensor.tolist()
-            if isinstance(flat_tensor, list):
-                flat_list = cast("list[Any]", flat_tensor)  # type: ignore[redundant-cast]
+            flat_list = _as_any_list(flat_tensor)
+            if flat_list is not None:
                 return [self._coerce_scalar(v) for v in flat_list]
             return [self._coerce_scalar(flat_tensor)]
         except AttributeError:
@@ -263,9 +281,9 @@ class EventRecorderMonitor:
         if isinstance(value, dict):
             return [self._small_json(value, self._rule("default_max_values", 512))]
 
-        if isinstance(value, (list, tuple)):
+        seq = _as_any_sequence(value)
+        if seq is not None:
             out: list[Any] = []
-            seq = cast("list[Any] | tuple[Any, ...]", value)  # type: ignore[redundant-cast]
             for item in seq:
                 out.extend(self._flatten_value(item))
             return out
@@ -286,11 +304,11 @@ class EventRecorderMonitor:
         except AttributeError:
             pass
 
-        if isinstance(value, dict):
-            mapping = cast("dict[Any, Any]", value)  # type: ignore[redundant-cast]
+        mapping = _as_any_mapping(value)
+        if mapping is not None:
             return {str(k): self._small_json(v, max_values) for k, v in mapping.items()}
-        if isinstance(value, (list, tuple)):
-            seq = cast("list[Any] | tuple[Any, ...]", value)  # type: ignore[redundant-cast]
+        seq = _as_any_sequence(value)
+        if seq is not None:
             if len(seq) <= max_values:
                 return [self._small_json(v, max_values) for v in seq]
             sampled, total, _ = self._sample_flat_values(seq, max_values)

@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """Unit tests for the dashboard replay API endpoints."""
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ if TYPE_CHECKING:
 _RUN_ID = "run_20260101_120000_aabbccdd"
 
 
-@pytest.fixture()
-def _artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+@pytest.fixture(name="_artifacts")
+def artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create a fake artifacts directory and patch the server constant."""
     arts = tmp_path / "artifacts"
     arts.mkdir()
@@ -254,10 +253,10 @@ def _make_app() -> Any:
     app.router.add_get("/api/run/{run_id}/topology", srv._handle_run_topology)
     app.router.add_get("/api/run/{run_id}/topology-stats", srv._handle_run_topology_stats)
     app.router.add_get("/api/run/{run_id}/scalars", srv._handle_run_scalars)
-    app.router.add_get(  # noqa: E501
+    app.router.add_get(
         "/api/run/{run_id}/vision/sample-grid", srv._handle_run_vision_sample_grid,
     )
-    app.router.add_get(  # noqa: E501
+    app.router.add_get(
         "/api/run/{run_id}/vision/event-sample", srv._handle_run_vision_event_sample,
     )
     app.router.add_get("/api/run/{run_id}/vision/event-image", srv._handle_run_vision_event_image)
@@ -329,7 +328,7 @@ class TestRunIdValidation:
 class TestReplayEndpoints:
     """Test replay API endpoints via aiohttp TestClient."""
 
-    def test_runs_list(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_runs_list(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get("/api/runs"))
         assert status == 200
         assert isinstance(data, list)
@@ -338,32 +337,32 @@ class TestReplayEndpoints:
         assert data[0]["device"] == "cpu"
         assert data[0]["seed"] == 42
 
-    def test_run_meta(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_meta(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/meta"))
         assert status == 200
         assert data["run_id"] == _RUN_ID
         assert data["seed"] == 42
 
-    def test_run_config(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_config(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/config"))
         assert status == 200
         assert data["gate"] == "XOR"
         assert data["lr"] == 0.005
 
-    def test_run_topology(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_topology(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/topology"))
         assert status == 200
         assert "layers" in data
         assert data["layers"] == ["input(2)", "hidden(6)", "output(1)"]
 
-    def test_run_topology_stats(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_topology_stats(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/topology-stats"))
         assert status == 200
         assert data["totals"]["edges_total"] == 1234
         assert len(data["projections"]) == 2
         assert data["projections"][0]["topology_type"] == "sparse_random"
 
-    def test_run_scalars(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_scalars(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/scalars"))
         assert status == 200
         assert isinstance(data, list)
@@ -372,7 +371,7 @@ class TestReplayEndpoints:
         assert data[0]["accuracy"] == 0.5
         assert data[1]["correct"] is True
 
-    def test_run_scalars_with_optional_resource_columns(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_scalars_with_optional_resource_columns(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/scalars"))
         assert status == 200
         assert data[0]["resource.cpu.system_percent"] == 21.5
@@ -380,7 +379,7 @@ class TestReplayEndpoints:
         assert data[1]["resource.gpu.util_percent"] == 55.0
         assert data[1]["torch_cuda_allocated_mb"] is None
 
-    def test_run_events(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_events(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/events?start=1&limit=1"))
         assert status == 200
         assert data["run_id"] == _RUN_ID
@@ -388,7 +387,7 @@ class TestReplayEndpoints:
         assert len(data["events"]) == 1
         assert data["events"][0]["topic"] == "training_trial"
 
-    def test_run_events_index(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_events_index(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/events/index"))
         assert status == 200
         assert data["run_id"] == _RUN_ID
@@ -396,7 +395,7 @@ class TestReplayEndpoints:
         assert data["items"][0]["idx"] == 0
         assert data["items"][0]["topic"] == "training_start"
 
-    def test_run_vision_sample_grid(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_sample_grid(self, _artifacts: Path) -> None:
         status, body, content_type = asyncio.run(
             _get_raw(f"/api/run/{_RUN_ID}/vision/sample-grid")
         )
@@ -404,7 +403,7 @@ class TestReplayEndpoints:
         assert content_type == "image/png"
         assert len(body) > 0
 
-    def test_run_vision_event_sample(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_event_sample(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/event-sample"))
         assert status == 200
         assert data["total_events"] == 1234.0
@@ -412,7 +411,7 @@ class TestReplayEndpoints:
         assert data["has_bins_grid"] is True
         assert data["has_sum"] is True
 
-    def test_run_vision_event_image_bins(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_event_image_bins(self, _artifacts: Path) -> None:
         status, body, content_type = asyncio.run(
             _get_raw(f"/api/run/{_RUN_ID}/vision/event-image?mode=bins")
         )
@@ -420,7 +419,7 @@ class TestReplayEndpoints:
         assert content_type == "image/png"
         assert len(body) > 0
 
-    def test_run_vision_event_image_sum(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_event_image_sum(self, _artifacts: Path) -> None:
         status, body, content_type = asyncio.run(
             _get_raw(f"/api/run/{_RUN_ID}/vision/event-image?mode=sum")
         )
@@ -428,7 +427,7 @@ class TestReplayEndpoints:
         assert content_type == "image/png"
         assert len(body) > 0
 
-    def test_run_vision_confusion(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_confusion(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/confusion"))
         assert status == 200
         assert data["n_classes"] == 3
@@ -436,14 +435,14 @@ class TestReplayEndpoints:
         assert data["matrix"][0][0] == 5
         assert "0" in data["per_class_accuracy"]
 
-    def test_run_vision_layer_stats(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_layer_stats(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/layer-stats"))
         assert status == 200
         assert data["layers"] == ["conv_0", "res_1"]
         assert len(data["rows"]) == 2
         assert data["rows"][0]["spike_rate"] == 0.12
 
-    def test_run_vision_summary(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_run_vision_summary(self, _artifacts: Path) -> None:
         status, data = asyncio.run(_get(f"/api/run/{_RUN_ID}/vision/summary"))
         assert status == 200
         assert data["summary_source"] == "benchmark_summary"
@@ -451,14 +450,14 @@ class TestReplayEndpoints:
         assert data["throughput"]["ms_per_step"] == 32.0
         assert data["final_metrics"]["accuracy"] == 0.75
 
-    def test_invalid_run_returns_404(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_invalid_run_returns_404(self, _artifacts: Path) -> None:
         status, _data = asyncio.run(_get("/api/run/not_a_valid_run/meta"))
         assert status == 404
 
-    def test_traversal_returns_404(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_traversal_returns_404(self, _artifacts: Path) -> None:
         status, _data = asyncio.run(_get("/api/run/..%2F..%2Fetc/meta"))
         assert status == 404
 
-    def test_nonexistent_run_returns_404(self, _artifacts: Path) -> None:  # noqa: ARG002
+    def test_nonexistent_run_returns_404(self, _artifacts: Path) -> None:
         status, _data = asyncio.run(_get("/api/run/run_99991231_235959_deadbeef/meta"))
         assert status == 404

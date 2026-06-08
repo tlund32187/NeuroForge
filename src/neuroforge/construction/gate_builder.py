@@ -439,8 +439,6 @@ def build_gate_network(
         engine.add_projection(proj0)
         trainables.update(t0)
 
-    # Mark engine as built.
-    engine._clock.reset()  # pyright: ignore[reportPrivateUsage]
-    engine._built = True  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+    engine.mark_built()
 
     return GateNetwork(engine=engine, trainables=trainables, meta=meta)

@@ -268,6 +268,9 @@ class GameTrainingTask(BaseTask):
             ep_change_total = 0
             ep_energy_min = cfg.action_energy.capacity
             ep_termination_reason = ""
+            ep_score_start = current.metrics.score
+            ep_score_max = float(ep_score_start) if ep_score_start is not None else 0.0
+            ep_score_gain = 0.0
             button_counts = {name: 0 for name in NINTENDO_BUTTONS}
             perf_start = dict(perf_timings) if perf_timings is not None else {}
             if action_energy is not None:
@@ -316,6 +319,14 @@ class GameTrainingTask(BaseTask):
                 ep_frames += 1
                 ep_reward += reward
                 ep_max_x = max(ep_max_x, transition.after.metrics.x_progress or 0.0)
+                score = transition.after.metrics.score
+                if score is not None:
+                    if ep_score_start is None:
+                        ep_score_start = int(score)
+                        ep_score_max = float(score)
+                    else:
+                        ep_score_max = max(ep_score_max, float(score))
+                        ep_score_gain = max(ep_score_gain, ep_score_max - float(ep_score_start))
                 self._maybe_emit_scalar(
                     frame_total,
                     episode,
@@ -341,6 +352,8 @@ class GameTrainingTask(BaseTask):
                     "reward_action_energy_sum": ep_energy_reward,
                     "reward_baseline": trainer.reward_baseline,
                     "max_x_progress": ep_max_x,
+                    "score_gain": ep_score_gain,
+                    "score_max": ep_score_max,
                     "curriculum_stage": int(getattr(self._curriculum, "stage", 0)),
                     "action_button_mean": ep_button_total / ep_frames if ep_frames else 0.0,
                     "action_change_mean": ep_change_total / ep_frames if ep_frames else 0.0,

@@ -550,7 +550,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     config_path = Path(str(args.config))
     if not config_path.exists():
-        print(f"Config file not found: {config_path}", file=sys.stderr)  # noqa: T201
+        print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
 
     try:
@@ -569,7 +569,7 @@ def _main(argv: list[str] | None = None) -> int:
             min_accuracy_pct_b2=args.min_accuracy_pct_b2,
         )
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)  # noqa: T201
+        print(str(exc), file=sys.stderr)
         return 1
 
     summary = _as_mapping(report.get("summary"))
@@ -581,22 +581,22 @@ def _main(argv: list[str] | None = None) -> int:
     poker_summary = _as_mapping(poker.get("summary"))
     b1_criteria = _as_mapping(b1.get("criteria"))
     b2_criteria = _as_mapping(b2.get("criteria"))
-    print(f"Gate B: {'PASS' if gate_pass else 'FAIL'}")  # noqa: T201
-    print(  # noqa: T201
+    print(f"Gate B: {'PASS' if gate_pass else 'FAIL'}")
+    print(
         "B1 (MNIST): "
         f"{b1.get('status', 'FAIL')} "
         f"val/test>={b1_criteria.get('min_best_val_accuracy_pct')}% "
         f"budget<={b1_criteria.get('max_budget_steps')} steps "
         f"runs={b1_summary.get('passed_runs', 0)}/{b1_summary.get('total_runs', 0)}"
     )
-    print(  # noqa: T201
+    print(
         "B2 (NMNIST): "
         f"{b2.get('status', 'FAIL')} "
         f"val/test>={b2_criteria.get('min_best_val_accuracy_pct')}% "
         f"budget<={b2_criteria.get('max_budget_steps')} steps "
         f"runs={b2_summary.get('passed_runs', 0)}/{b2_summary.get('total_runs', 0)}"
     )
-    print(  # noqa: T201
+    print(
         "Poker-DVS (non-gating): "
         f"status={poker.get('status', 'WARN')} "
         f"succeeded={poker_summary.get('succeeded_runs', 0)}"
@@ -604,8 +604,8 @@ def _main(argv: list[str] | None = None) -> int:
         f"confusion={poker_summary.get('runs_with_confusion', 0)}"
         f"/{poker_summary.get('total_runs', 0)}"
     )
-    print(f"Gate summary: B1={summary.get('b1_pass')} B2={summary.get('b2_pass')}")  # noqa: T201
-    print(f"Report: {report_path}")  # noqa: T201
+    print(f"Gate summary: B1={summary.get('b1_pass')} B2={summary.get('b2_pass')}")
+    print(f"Report: {report_path}")
     return 0 if gate_pass else 2
 
 

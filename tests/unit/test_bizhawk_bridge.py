@@ -348,7 +348,7 @@ def test_client_over_real_socket_loopback() -> None:
             captured["action"] = proto.decode_action(payload)
             t.send(_raw_frame_msg(1, w, h, c, fill=8))
             captured["final"] = _read_msg(t)[0]  # CLOSE
-        except BaseException as exc:  # noqa: BLE001 - surfaced via assert below
+        except BaseException as exc:
             errors.append(exc)
 
     thread = threading.Thread(target=fake_lua)
@@ -434,7 +434,7 @@ def test_screenshot_socket_receiver_reads_length_prefixed_payload() -> None:
         try:
             with socket.create_connection((receiver.host, receiver.port), timeout=5.0) as sock:
                 sock.sendall(b"5 hello")
-        except BaseException as exc:  # noqa: BLE001 - surfaced via assert below
+        except BaseException as exc:
             errors.append(exc)
 
     thread = threading.Thread(target=fake_bizhawk)
@@ -475,7 +475,7 @@ def test_png_frame_decoded_by_client() -> None:
 
 
 class _HoldRight:
-    def act(self, observation: object) -> ControllerAction:  # noqa: ARG002
+    def act(self, observation: object) -> ControllerAction:
         return ControllerAction(right=True)
 
 
@@ -605,7 +605,10 @@ def test_launcher_passes_frameskip_and_speed_env(
 
         return _Proc()
 
-    monkeypatch.setattr(lmod.subprocess, "Popen", _fake_popen)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "neuroforge.environments.games.clients.bizhawk.launcher.subprocess.Popen",
+        _fake_popen,
+    )
     lmod.EmuHawkLauncher(
         emuhawk_path=str(tmp_path / "EmuHawk.exe"),
         lua_script=str(tmp_path / "bridge.lua"),
@@ -641,7 +644,10 @@ def test_launcher_passes_socket_transport_env(
 
         return _Proc()
 
-    monkeypatch.setattr(lmod.subprocess, "Popen", _fake_popen)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "neuroforge.environments.games.clients.bizhawk.launcher.subprocess.Popen",
+        _fake_popen,
+    )
     lmod.EmuHawkLauncher(
         emuhawk_path=str(tmp_path / "EmuHawk.exe"),
         lua_script=str(tmp_path / "bridge.lua"),

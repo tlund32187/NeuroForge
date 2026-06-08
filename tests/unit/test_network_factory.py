@@ -108,7 +108,7 @@ class TestNetworkFactoryCPU:
         factory = NetworkFactory(DEFAULT_HUB.neurons, DEFAULT_HUB.synapses)
         engine = factory.build(_small_spec(), device="cpu", dtype="float32", seed=42)
         # Engine should be marked as built (can run step)
-        assert engine._built  # noqa: SLF001
+        assert engine._built
 
 
 #

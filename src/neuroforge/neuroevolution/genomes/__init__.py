@@ -23,6 +23,7 @@ from neuroforge.neuroevolution.genomes.policy import (
 )
 from neuroforge.neuroevolution.genomes.substrate import (
     DEFAULT_SUBSTRATE,
+    InputChannelLayout,
     Substrate,
     SubstrateConfig,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "GraphReproduction",
     "HyperNEATGenome",
     "HyperNEATReproduction",
+    "InputChannelLayout",
     "InnovationRegistry",
     "NodeGene",
     "PolicyGenome",

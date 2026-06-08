@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """Unit tests for the EventRecorderMonitor."""
 
 from __future__ import annotations

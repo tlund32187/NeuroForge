@@ -32,7 +32,13 @@ def env_int(name: str, default: int, *, min_value: int | None = None) -> int:
     return value
 
 
-def env_float(name: str, default: float, *, min_value: float | None = None) -> float:
+def env_float(
+    name: str,
+    default: float,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
     """Read a float environment variable, falling back on invalid values."""
     raw = os.environ.get(name)
     if raw is None:
@@ -42,5 +48,7 @@ def env_float(name: str, default: float, *, min_value: float | None = None) -> f
     except ValueError:
         return default
     if min_value is not None and value < min_value:
+        return default
+    if max_value is not None and value > max_value:
         return default
     return value

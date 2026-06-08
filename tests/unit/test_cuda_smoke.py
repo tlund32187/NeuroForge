@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """CUDA smoke tests - skipped automatically on CPU-only systems.
 
 Run explicitly with::
@@ -65,7 +64,8 @@ class TestCudaEngine:
             },
         }
 
-        for _ in range(5):
+        result = engine.step(external_drive=drive)
+        for _ in range(4):
             result = engine.step(external_drive=drive)
 
         # Assert spike tensors are on CUDA.

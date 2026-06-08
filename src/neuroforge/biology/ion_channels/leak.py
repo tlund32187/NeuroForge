@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from neuroforge.biology.ion_channels.base import IonChannelBase
 
@@ -16,6 +17,6 @@ class LeakChannel(IonChannelBase):
     conductance: float = 0.0
     reversal: float = 0.0
 
-    def current(self, voltage: object) -> object:
+    def current(self, voltage: Any) -> Any:
         """Compute leak current for scalar or tensor voltage."""
-        return self.conductance * (self.reversal - voltage)  # type: ignore[operator]
+        return self.conductance * (self.reversal - voltage)

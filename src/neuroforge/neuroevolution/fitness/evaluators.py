@@ -8,6 +8,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from neuroforge.contracts.applications.evolution import (
@@ -16,6 +17,7 @@ from neuroforge.contracts.applications.evolution import (
     IGenome,
 )
 from neuroforge.messaging.bus import EventBus
+from neuroforge.neuroevolution.io.learned_state import learned_checkpoint_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -166,8 +168,16 @@ class GameTrainingFitnessEvaluator:
             Callable[[GameTrainingConfig, IGenome], GameTrainingConfig] | None
         ) = None,
         progress_scale: float = 100.0,
+        score_gain_scale: float = 0.0,
         survival_scale: float = 0.0,
         durable_progress_weight: float = 0.0,
+        death_penalty: float = 0.0,
+        stall_penalty: float = 0.0,
+        min_progress_penalty: float = 0.0,
+        level_clear_bonus: float = 0.0,
+        button_overuse_penalty: float = 0.0,
+        button_overuse_threshold: float = 2.0,
+        horizontal_conflict_penalty: float = 0.0,
     ) -> None:
         if eval_repeats < 1:
             msg = "GameTrainingFitnessEvaluator.eval_repeats must be >= 1"
@@ -187,8 +197,16 @@ class GameTrainingFitnessEvaluator:
         self._reuse_client = bool(reuse_client)
         self._shared_client: IGameClient | None = None
         self._progress_scale = float(progress_scale)
+        self._score_gain_scale = float(score_gain_scale)
         self._survival_scale = float(survival_scale)
         self._durable_progress_weight = float(durable_progress_weight)
+        self._death_penalty = float(death_penalty)
+        self._stall_penalty = float(stall_penalty)
+        self._min_progress_penalty = float(min_progress_penalty)
+        self._level_clear_bonus = float(level_clear_bonus)
+        self._button_overuse_penalty = float(button_overuse_penalty)
+        self._button_overuse_threshold = max(0.0, float(button_overuse_threshold))
+        self._horizontal_conflict_penalty = float(horizontal_conflict_penalty)
 
     def close(self) -> None:
         """Close the shared client, if one was created (no-op otherwise)."""
@@ -247,6 +265,15 @@ class GameTrainingFitnessEvaluator:
         genome_decide_ticks = _genome_value(genome, "decide_ticks")
         if self._config_transform is not None:
             config = self._config_transform(config, genome)
+        lamarckian_path = learned_checkpoint_path(genome)
+        lamarckian_available = bool(lamarckian_path and Path(lamarckian_path).exists())
+        if lamarckian_available:
+            config = dataclasses.replace(
+                config,
+                resume=True,
+                resume_checkpoint_path=lamarckian_path,
+                resume_allow_partial=True,
+            )
         # A reused client is borrowed: the per-genome task must not close it.
         config = dataclasses.replace(config, close_client=not self._reuse_client)
         # A structural genome supplies its own compiled phenotype; a hyperparameter
@@ -278,29 +305,69 @@ class GameTrainingFitnessEvaluator:
         reward_means = [trial.get("reward_mean", 0.0) for trial in collector.trials]
         max_x = max((trial.get("max_x_progress", 0.0) for trial in collector.trials), default=0.0)
         reward_mean = sum(reward_means) / max(1, len(reward_means))
+        trial_metrics = _mean_trial_metrics(
+            collector.trials,
+            keys=_numeric_trial_keys(collector.trials),
+        )
         expected_frames = max(1, config.max_episodes * config.frames_per_episode)
         survival_frac = min(1.0, max(0.0, result.frames / expected_frames))
         progress_score = max_x * self._progress_scale
+        score_gain_total = sum(
+            max(0.0, trial.get("score_gain", 0.0)) for trial in collector.trials
+        )
+        score_gain_score = score_gain_total * self._score_gain_scale
         durable_progress_bonus = (
             progress_score * survival_frac * self._durable_progress_weight
         )
         survival_score = survival_frac * self._survival_scale
-        fitness = reward_mean + progress_score + durable_progress_bonus + survival_score
+        terminal_score = (
+            trial_metrics.get("termination.level_clear", 0.0) * self._level_clear_bonus
+            - trial_metrics.get("termination.death", 0.0) * self._death_penalty
+            - trial_metrics.get("termination.stall", 0.0) * self._stall_penalty
+            - trial_metrics.get("termination.min_progress", 0.0)
+            * self._min_progress_penalty
+        )
+        button_overuse = max(
+            0.0,
+            trial_metrics.get("action_button_mean", 0.0) - self._button_overuse_threshold,
+        )
+        button_overuse_score = -button_overuse * self._button_overuse_penalty
+        horizontal_conflict = min(
+            trial_metrics.get("action_left_frac", 0.0),
+            trial_metrics.get("action_right_frac", 0.0),
+        )
+        horizontal_conflict_score = -horizontal_conflict * self._horizontal_conflict_penalty
+        fitness = (
+            reward_mean
+            + progress_score
+            + score_gain_score
+            + durable_progress_bonus
+            + survival_score
+            + terminal_score
+            + button_overuse_score
+            + horizontal_conflict_score
+        )
         metrics = {
             "reward_mean": reward_mean,
             "max_x_progress": max_x,
             "fitness_progress_score": progress_score,
+            "fitness_score_gain_score": score_gain_score,
             "fitness_survival_score": survival_score,
             "fitness_durable_progress_bonus": durable_progress_bonus,
+            "fitness_terminal_score": terminal_score,
+            "fitness_button_overuse_score": button_overuse_score,
+            "fitness_horizontal_conflict_score": horizontal_conflict_score,
+            "action_button_overuse": button_overuse,
+            "action_horizontal_conflict": horizontal_conflict,
+            "score_gain_total": score_gain_total,
             "survival_frac": survival_frac,
             "rollout_wall_seconds": elapsed,
             "rollout_fps": result.frames / elapsed if elapsed > 0.0 else 0.0,
             "effective_decide_ticks": float(config.decide_ticks),
-            **_mean_trial_metrics(
-                collector.trials,
-                keys=_numeric_trial_keys(collector.trials),
-            ),
+            "lamarckian_resume_requested": 1.0 if lamarckian_path else 0.0,
+            "lamarckian_resume_available": 1.0 if lamarckian_available else 0.0,
         }
+        metrics.update(_non_colliding_metrics(trial_metrics, existing=metrics))
         if genome_decide_ticks is not None:
             metrics["genome_decide_ticks"] = genome_decide_ticks
         return FitnessResult(
@@ -331,6 +398,18 @@ def _mean_trial_metrics(
 def _numeric_trial_keys(trials: list[dict[str, float]]) -> tuple[str, ...]:
     """Return stable numeric trial keys that should be averaged into fitness metrics."""
     return tuple(sorted({key for trial in trials for key in trial}))
+
+
+def _non_colliding_metrics(
+    metrics: dict[str, float],
+    *,
+    existing: dict[str, float],
+) -> dict[str, float]:
+    """Preserve primary rollout metrics and suffix averaged trial collisions."""
+    out: dict[str, float] = {}
+    for key, value in metrics.items():
+        out[key if key not in existing else f"{key}_mean"] = value
+    return out
 
 
 def _stable_genome_seed(genome: Any) -> int:
@@ -405,4 +484,4 @@ def _std(values: list[float]) -> float:
     if len(values) < 2:
         return 0.0
     mean = sum(values) / len(values)
-    return (sum((value - mean) ** 2 for value in values) / len(values)) ** 0.5
+    return float((sum((value - mean) ** 2 for value in values) / len(values)) ** 0.5)

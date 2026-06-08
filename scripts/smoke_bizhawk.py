@@ -31,7 +31,10 @@ from neuroforge.environments.games.smb3.hud import SMB3HudConfig, SMB3HudExtract
 
 #
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
-ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 3 (USA) (Rev 1).nes"  # noqa: E501
+ROM_PATH = (
+    r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)"
+    r"\Super Mario Bros. 3 (USA) (Rev 1).nes"
+)
 PORT = 8650
 # MANUAL_MODE=True: the bridge does NOT inject buttons - YOU play with the
 # keyboard/controller while we record frames + metrics. Most reliable way to
@@ -61,7 +64,7 @@ class DemoPolicy:
     def __init__(self) -> None:
         self._frame = -1
 
-    def act(self, observation: GameObservation) -> ControllerAction:  # noqa: ARG002
+    def act(self, observation: GameObservation) -> ControllerAction:
         self._frame += 1
         n = self._frame
         if n < 90:
@@ -81,7 +84,7 @@ def _save_frame_png(observation: GameObservation, index: int) -> None:
     """Best-effort: re-encode a received frame to a viewable PNG."""
     try:
         import torch
-        from torchvision.io import write_png  # pyright: ignore[reportMissingTypeStubs]
+        from torchvision.io import write_png
 
         frame = observation.frame
         tensor = (
@@ -91,7 +94,7 @@ def _save_frame_png(observation: GameObservation, index: int) -> None:
             .contiguous()
         )
         write_png(tensor, str(OUT_DIR / f"frame_{index:03d}.png"))
-    except Exception as exc:  # noqa: BLE001 - saving is a nicety, never fatal
+    except Exception as exc:
         print(f"  (could not save frame {index}: {exc})")
 
 

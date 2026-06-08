@@ -208,8 +208,7 @@ class NetworkFactory:
                 proj.state["bias"] = bias
             engine.add_projection(proj)
 
-        engine._clock.reset()  # pyright: ignore[reportPrivateUsage]
-        engine._built = True  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        engine.mark_built()
         return engine
 
 

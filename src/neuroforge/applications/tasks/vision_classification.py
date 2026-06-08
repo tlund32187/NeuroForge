@@ -31,7 +31,7 @@ from neuroforge.simulation.topology.specs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
     from neuroforge.contracts.applications.tasks import ILoss, IReadout
     from neuroforge.contracts.messaging import IEventBus
@@ -531,11 +531,15 @@ class VisionClassificationTask(BaseTask):
         device: Any,
         dtype: Any,
     ) -> SyntheticVisionBatch:
-        if not isinstance(batch, (tuple, list)) or len(batch) < 2:  # pyright: ignore[reportUnknownArgumentType]
+        if not isinstance(batch, (tuple, list)):
             msg = "Dataset loader must yield (images, labels) pairs"
             raise ValueError(msg)
-        images = cast("Any", batch[0])
-        labels = cast("Any", batch[1])
+        items = cast("Sequence[Any]", batch)
+        if len(items) < 2:
+            msg = "Dataset loader must yield (images, labels) pairs"
+            raise ValueError(msg)
+        images = items[0]
+        labels = items[1]
         if not hasattr(images, "to") or not hasattr(labels, "to"):
             msg = "Dataset batch tensors must support .to(device=..., dtype=...)"
             raise TypeError(msg)

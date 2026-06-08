@@ -185,7 +185,7 @@ class TestSurrogateGradientFlow:
             spike_sum = spike_sum + result.spikes["out"].sum()
 
         loss = (spike_sum - 5.0) ** 2
-        loss.backward()  # type: ignore[no-untyped-call]
+        torch.autograd.backward(loss)
 
         assert w.grad is not None, "weight should have received a gradient"
         assert w.grad.abs().item() > 0.0, "gradient should be nonzero"

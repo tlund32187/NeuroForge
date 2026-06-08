@@ -38,7 +38,7 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from aiohttp import web  # pyright: ignore[reportMissingImports]
+from aiohttp import web
 
 from neuroforge.contracts.messaging import EventTopic, MonitorEvent
 from neuroforge.messaging.bus import EventBus
@@ -68,7 +68,7 @@ _VISION_CONVERGENCE_ACCURACY = 0.9
 
 def _compute_asset_hash() -> str:
     """Hash all static files so the version changes on any edit."""
-    h = hashlib.md5()  # noqa: S324
+    h = hashlib.md5()
     for f in sorted(STATIC_DIR.glob("*")):
         if f.is_file():
             h.update(f.read_bytes())
@@ -1362,7 +1362,7 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
         if isinstance(resp, web.StreamResponse):
             resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             resp.headers["Pragma"] = "no-cache"
-        return resp  # type: ignore[no-any-return]
+        return cast("web.StreamResponse", resp)
 
     app = web.Application(middlewares=[_no_cache])
     app.router.add_get("/", _handle_index)
@@ -1390,7 +1390,7 @@ def start_server(*, host: str = "127.0.0.1", port: int = 8050) -> None:
     app.router.add_static("/static", STATIC_DIR, show_index=False)
 
     if port != requested_port:
-        print(  # noqa: T201
+        print(
             f"\n  Port {requested_port} is busy; using {port} instead."
         )
     print(f"\n  NeuroForge Dashboard -> http://{host}:{port}\n")

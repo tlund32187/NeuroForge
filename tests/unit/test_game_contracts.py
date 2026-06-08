@@ -24,7 +24,7 @@ def _frame(value: int = 0, *, frame_id: int = 0) -> ScreenFrame:
 @pytest.mark.unit
 def test_screen_frame_validates_payload_size_and_copies_bytes() -> None:
     raw = bytearray([1, 2, 3, 4])
-    frame = ScreenFrame(width=2, height=2, channels=1, data=raw)  # type: ignore[arg-type]
+    frame = ScreenFrame(width=2, height=2, channels=1, data=bytes(raw))
 
     raw[0] = 99
 

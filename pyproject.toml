@@ -58,6 +58,7 @@ known-first-party = ["neuroforge"]
 python_version = "3.11"
 strict = true
 warn_return_any = true
+warn_redundant_casts = false
 disallow_untyped_defs = true
 mypy_path = "src"
 packages = ["neuroforge", "tests"]

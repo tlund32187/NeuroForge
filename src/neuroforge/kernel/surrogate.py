@@ -14,63 +14,45 @@ __all__ = ["surrogate_spike"]
 
 
 def surrogate_spike(v_minus_thresh: Any, beta: float = 5.0) -> Any:
-    """Apply a surrogate spike function to ``v - v_thresh``.
-
-    Forward:  ``(v_minus_thresh >= 0).float()``  (hard Heaviside step).
-    Backward: fast-sigmoid derivative  ``beta / (2 * (1 + beta*|x|)^2)``.
-
-    Parameters
-    ----------
-    v_minus_thresh:
-        Tensor of (voltage − threshold) values.
-    beta:
-        Steepness of the surrogate gradient (default 5.0).
-
-    Returns
-    -------
-    Tensor:
-        Float tensor of 0.0 / 1.0 spikes, with surrogate gradient
-        attached for autograd.
-    """
+    """Apply a surrogate spike function to ``v - v_thresh``."""
     return _fast_sigmoid_spike(v_minus_thresh, beta)
 
 
 def _fast_sigmoid_spike(v_minus_thresh: Any, beta: float) -> Any:
-    """Dispatch to the custom autograd Function (lazy-built on first call)."""
-    global _FastSigmoidSpike  # noqa: PLW0603
+    """Dispatch to the custom autograd Function, built lazily on first call."""
+    global _FastSigmoidSpike
     if _FastSigmoidSpike is None:
         _FastSigmoidSpike = _build_autograd_fn()
     return _FastSigmoidSpike.apply(v_minus_thresh, beta)
 
 
-# Lazily populated by ``_build_autograd_fn`` on first use.
 _FastSigmoidSpike: Any = None
 
 
 def _build_autograd_fn() -> Any:
-    """Create the custom ``torch.autograd.Function`` subclass.
-
-    Built inside a function so ``torch`` is only imported when needed.
-    """
+    """Create the custom ``torch.autograd.Function`` subclass at runtime."""
     from neuroforge.kernel.torch_utils import require_torch
 
     torch = require_torch()
 
-    class FastSigmoidSpike(torch.autograd.Function):  # type: ignore[misc,name-defined]
-        """Custom autograd function — hard step fwd, fast-sigmoid bwd."""
+    def forward(ctx: Any, v_minus_thresh: Any, beta: float) -> Any:
+        spikes = (v_minus_thresh >= 0).to(v_minus_thresh.dtype)
+        ctx.save_for_backward(v_minus_thresh)
+        ctx.beta = beta
+        return spikes
 
-        @staticmethod
-        def forward(ctx: Any, v_minus_thresh: Any, beta: float) -> Any:  # noqa: ANN401
-            spikes = (v_minus_thresh >= 0).to(v_minus_thresh.dtype)
-            ctx.save_for_backward(v_minus_thresh)
-            ctx.beta = beta
-            return spikes
+    def backward(ctx: Any, grad_output: Any) -> tuple[Any, None]:
+        (v_minus_thresh,) = ctx.saved_tensors
+        beta: float = ctx.beta
+        grad = grad_output * beta / (2.0 * (1.0 + beta * v_minus_thresh.abs()) ** 2)
+        return grad, None
 
-        @staticmethod
-        def backward(ctx: Any, grad_output: Any) -> tuple[Any, None]:  # noqa: ANN401
-            (v_minus_thresh,) = ctx.saved_tensors
-            beta: float = ctx.beta
-            grad = grad_output * beta / (2.0 * (1.0 + beta * v_minus_thresh.abs()) ** 2)
-            return grad, None
-
-    return FastSigmoidSpike
+    return type(
+        "FastSigmoidSpike",
+        (torch.autograd.Function,),
+        {
+            "__doc__": "Custom autograd function: hard step fwd, fast-sigmoid bwd.",
+            "forward": staticmethod(forward),
+            "backward": staticmethod(backward),
+        },
+    )

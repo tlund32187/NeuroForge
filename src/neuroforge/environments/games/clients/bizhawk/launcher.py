@@ -14,7 +14,7 @@ When used, the launcher starts EmuHawk only *after* the bridge server is bound
 from __future__ import annotations
 
 import os
-import subprocess  # noqa: S404 — launching a user-specified emulator is the whole point
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -130,7 +130,7 @@ euroforge_bridge.lua``.
         if self.rom_path:
             cmd.append(str(self.rom_path))
         try:
-            self._process = subprocess.Popen(cmd, env=env)  # noqa: S603 — user-supplied paths
+            self._process = subprocess.Popen(cmd, env=env)
         except OSError as exc:
             msg = f"failed to launch EmuHawk: {exc}"
             raise BizHawkConnectionError(msg) from exc

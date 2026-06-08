@@ -63,6 +63,7 @@ def test_train_script_reads_env_overrides(
     assert module.RESUME is False
     assert checkpoint == module.CHECKPOINT
     assert module.USE_EVOLVED_GENOME is True
+    assert module.LAMARCKIAN_WRITEBACK is False
     assert pytest.approx(0.125) == module.CONSOLIDATION_STRENGTH
 
 
@@ -89,3 +90,12 @@ def test_train_script_rejects_invalid_small_env_values(
     assert module.BIZHAWK_SPEED_PERCENT == 400
     assert module.CHECKPOINT_EVERY == 1000
     assert pytest.approx(0.0) == module.CONSOLIDATION_STRENGTH
+
+
+@pytest.mark.unit
+def test_train_script_lamarckian_writeback_defaults_to_full_evolved_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVED_MODE", "full")
+    module = _load_train_script(monkeypatch)
+    assert module.LAMARCKIAN_WRITEBACK is True

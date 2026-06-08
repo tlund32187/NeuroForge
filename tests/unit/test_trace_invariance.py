@@ -12,16 +12,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import torch
 
-torch = pytest.importorskip("torch")
-
-from neuroforge.perception.vision.encoding import (  # noqa: E402
+from neuroforge.perception.vision.encoding import (
     TraceInvariantConfig,
     TraceInvariantLayer,
 )
 
 if TYPE_CHECKING:
     from torch import Tensor
+
+pytest.importorskip("torch")
 
 _N = 12
 
@@ -92,4 +93,4 @@ def test_reset_clears_the_trace() -> None:
     layer = TraceInvariantLayer(TraceInvariantConfig(n_inputs=_N, n_objects=4, seed=0))
     layer.observe(torch.ones(_N))
     layer.reset()
-    assert float(layer._trace.abs().sum()) == 0.0  # noqa: SLF001 - inspecting trace state
+    assert float(layer._trace.abs().sum()) == 0.0

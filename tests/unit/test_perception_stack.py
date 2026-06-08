@@ -8,7 +8,7 @@ the spiking policy end-to-end through the training task.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -20,15 +20,15 @@ if TYPE_CHECKING:
 
 pytest.importorskip("torch")
 
-from neuroforge.perception.vision.encoding import (  # noqa: E402
+from neuroforge.perception.vision.encoding import (
     PerceptionStack,
     PerceptionStackConfig,
     RetinaEncoder,
     RetinaEncoderConfig,
     representation_separability,
 )
-from neuroforge.perception.vision.encoding.frame_encoder import IFrameEncoder  # noqa: E402
-from neuroforge.perception.vision.encoding.frame_preprocess import (  # noqa: E402
+from neuroforge.perception.vision.encoding.frame_encoder import IFrameEncoder
+from neuroforge.perception.vision.encoding.frame_preprocess import (
     FramePreprocessConfig,
     FramePreprocessor,
 )
@@ -110,9 +110,9 @@ def test_stack_drives_the_policy_through_the_task() -> None:
 #
 
 
-def _small_stack(**kw: object) -> PerceptionStack:
+def _small_stack(**kw: Any) -> PerceptionStack:
     return PerceptionStack(
-        PerceptionStackConfig(retina=RetinaEncoderConfig(out_h=12, out_w=12), **kw),  # type: ignore[arg-type]
+        PerceptionStackConfig(retina=RetinaEncoderConfig(out_h=12, out_w=12), **kw),
     )
 
 
@@ -138,18 +138,18 @@ def test_features_learn_online_only_when_learning() -> None:
     frame = _frame(_scene(8, block=True), recolor=False)
 
     learning = _small_stack(features=True, learn=True)
-    assert learning._a1 is not None  # noqa: SLF001
-    before = learning._a1.weights.clone()  # noqa: SLF001
+    assert learning._a1 is not None
+    before = learning._a1.weights.clone()
     for _ in range(5):
         learning.to_drive(frame)
-    assert not torch.allclose(before, learning._a1.weights)  # noqa: SLF001 - it adapted
+    assert not torch.allclose(before, learning._a1.weights)
 
     frozen = _small_stack(features=True, learn=False)
-    assert frozen._a1 is not None  # noqa: SLF001
-    fixed = frozen._a1.weights.clone()  # noqa: SLF001
+    assert frozen._a1 is not None
+    fixed = frozen._a1.weights.clone()
     for _ in range(5):
         frozen.to_drive(frame)
-    assert torch.allclose(fixed, frozen._a1.weights)  # noqa: SLF001 - learn=False is frozen
+    assert torch.allclose(fixed, frozen._a1.weights)
 
 
 @pytest.mark.unit
@@ -157,16 +157,16 @@ def test_reset_persists_features_but_clears_trace() -> None:
     import torch
 
     stack = _small_stack(features=True, objects=True)
-    assert stack._a1 is not None and stack._a2 is not None  # noqa: SLF001
+    assert stack._a1 is not None and stack._a2 is not None
     frame = _frame(_scene(8, block=True), recolor=False)
     stack.to_drive(frame)
     stack.to_drive(frame)
-    weights = stack._a1.weights.clone()  # noqa: SLF001
+    weights = stack._a1.weights.clone()
 
     stack.reset()
 
-    assert torch.allclose(weights, stack._a1.weights)  # noqa: SLF001 - A1 keeps learning
-    assert float(stack._a2._trace.abs().sum()) == 0.0  # noqa: SLF001 - A2 trace cleared
+    assert torch.allclose(weights, stack._a1.weights)
+    assert float(stack._a2._trace.abs().sum()) == 0.0
 
 
 @pytest.mark.unit
@@ -180,5 +180,5 @@ def test_state_dict_round_trip() -> None:
 
     fresh = _small_stack(features=True, objects=True)
     fresh.load_state_dict(trained.state_dict())
-    assert trained._a1 is not None and fresh._a1 is not None  # noqa: SLF001
-    assert torch.allclose(trained._a1.weights, fresh._a1.weights)  # noqa: SLF001
+    assert trained._a1 is not None and fresh._a1 is not None
+    assert torch.allclose(trained._a1.weights, fresh._a1.weights)

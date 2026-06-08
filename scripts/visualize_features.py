@@ -4,7 +4,7 @@ Loads the perception state saved in the policy checkpoint (the A1 STDP feature
 detectors), renders each learned receptive field as a tile, and writes a PNG you
 can open. Run after some training with the feature stack enabled.
 
-  Run/▶ "NeuroForge: Visualize Features"  (or run from a terminal).
+  Run/play "NeuroForge: Visualize Features"  (or run from a terminal).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def main() -> int:
     from torchvision.io import write_png
 
     if not CHECKPOINT.exists():
-        print(f"No checkpoint at {CHECKPOINT} — train first.")
+        print(f"No checkpoint at {CHECKPOINT} - train first.")
         return 1
     payload = torch.load(str(CHECKPOINT), map_location="cpu", weights_only=False)
     encoder_state = payload.get("encoder")

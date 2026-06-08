@@ -287,7 +287,7 @@ class LogicGateTask(BaseTask):
         from neuroforge.biology.compartments.types import Compartment
         from neuroforge.biology.neurons.state import NeuronInputs, StepContext
 
-        pops = gn.engine._populations  # pyright: ignore[reportPrivateUsage]
+        pops = gn.engine._populations
 
         # Reset all neuron states and detach from prior graph.
         gn.engine.reset()
@@ -368,7 +368,7 @@ class LogicGateTask(BaseTask):
 
     #
 
-    def run(self) -> LogicGateResult:  # noqa: C901, PLR0912, PLR0915
+    def run(self) -> LogicGateResult:
         """Execute the training loop. Returns result with convergence status."""
         from neuroforge.construction.composition_root import DEFAULT_HUB
         from neuroforge.construction.gate_builder import build_gate_network

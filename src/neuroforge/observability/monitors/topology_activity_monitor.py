@@ -467,17 +467,17 @@ class TopologyActivityMonitor:
 
     @staticmethod
     def _as_list(value: Any) -> list[Any]:
-        if isinstance(value, list):
-            # pyright narrows Any-of-list to Unknown and needs the cast; mypy
-            # considers it redundant — suppress only mypy's redundant-cast.
-            return cast("list[Any]", value)  # type: ignore[redundant-cast]
+        value_obj: object = value
+        if isinstance(value_obj, list):
+            return cast("list[Any]", value_obj)
         return []
 
     @staticmethod
     def _as_dict(value: Any) -> dict[str, Any] | None:
-        if not isinstance(value, dict):
+        value_obj: object = value
+        if not isinstance(value_obj, dict):
             return None
-        source = cast("dict[Any, Any]", value)  # type: ignore[redundant-cast]
+        source = cast("dict[Any, Any]", value_obj)
         return {str(k): v for k, v in source.items()}
 
     @staticmethod

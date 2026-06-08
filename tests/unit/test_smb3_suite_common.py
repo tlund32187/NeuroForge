@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -18,7 +19,7 @@ def test_base_env_prepends_local_src(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     env = common.base_env(tmp_path)
 
-    assert env["PYTHONPATH"] == f"{tmp_path / 'src'}{common.os.pathsep}existing"
+    assert env["PYTHONPATH"] == f"{tmp_path / 'src'}{os.pathsep}existing"
 
 
 @pytest.mark.unit

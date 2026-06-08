@@ -78,7 +78,8 @@ class VisionBlockSpec:
                 f"{sorted(_VISION_BLOCK_TYPES)}; got {self.type!r}"
             )
             raise ValueError(msg)
-        if not isinstance(self.params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
+        params_value = cast("object", self.params)
+        if not isinstance(params_value, dict):
             msg = "VisionBlockSpec.params must be a dict[str, Any]"
             raise ValueError(msg)
         object.__setattr__(self, "type", block_type)
@@ -163,9 +164,10 @@ class VisionBackboneSpec:
             raise ValueError(msg)
         object.__setattr__(self, "type", backbone_type)
 
-        if not isinstance(self.input, VisionInputSpec):  # pyright: ignore[reportUnnecessaryIsInstance]
-            if isinstance(self.input, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
-                raw = cast("dict[object, Any]", self.input)
+        input_value = cast("object", self.input)
+        if not isinstance(input_value, VisionInputSpec):
+            if isinstance(input_value, dict):
+                raw = cast("dict[object, Any]", input_value)
                 try:
                     parsed_input = VisionInputSpec(
                         channels=raw["channels"],
@@ -195,19 +197,21 @@ class VisionBackboneSpec:
             raise ValueError(msg)
         object.__setattr__(self, "encoding_mode", encoding_mode)
 
-        if not isinstance(self.blocks, list):  # pyright: ignore[reportUnnecessaryIsInstance]
+        blocks_value = cast("object", self.blocks)
+        if not isinstance(blocks_value, list):
             msg = "VisionBackboneSpec.blocks must be a list[VisionBlockSpec]"
             raise ValueError(msg)
-        if not self.blocks:
+        raw_blocks = cast("list[Any]", blocks_value)
+        if not raw_blocks:
             msg = "VisionBackboneSpec.blocks must contain at least one block"
             raise ValueError(msg)
 
         parsed_blocks: list[VisionBlockSpec] = []
-        for idx, block in enumerate(self.blocks):
-            if isinstance(block, VisionBlockSpec):  # pyright: ignore[reportUnnecessaryIsInstance]
+        for idx, block in enumerate(raw_blocks):
+            if isinstance(block, VisionBlockSpec):
                 parsed_blocks.append(block)
                 continue
-            if isinstance(block, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
+            if isinstance(block, dict):
                 raw_block = cast("dict[object, Any]", block)
                 block_type = raw_block.get("type")
                 if block_type is None:

@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """Unit tests for task-emitted parameter/gradient scalar stats."""
 
 from __future__ import annotations

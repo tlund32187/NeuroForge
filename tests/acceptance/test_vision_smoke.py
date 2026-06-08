@@ -49,7 +49,7 @@ def test_vision_cli_runs_multiple_steps(tmp_path: Path) -> None:
         "--artifacts",
         str(artifacts_dir),
     ]
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(
         cmd,
         cwd=repo_root,
         env=env,

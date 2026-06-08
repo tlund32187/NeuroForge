@@ -12,6 +12,8 @@ backend, codec dispatch, and checkpoint resume.
 from __future__ import annotations
 
 import random
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -23,10 +25,15 @@ from neuroforge.neuroevolution import (
     HyperNEATGenome,
     HyperNEATReproduction,
     InnovationRegistry,
+    InputChannelLayout,
     SubstrateConfig,
     make_hyperneat_seed_population,
 )
 from neuroforge.neuroevolution.genomes.cppn import CPPN, CPPNConn, CPPNNode
+from neuroforge.neuroevolution.genomes.hyperneat import _select
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _seed(
@@ -53,6 +60,69 @@ def test_seed_genome_is_a_fully_connected_perceptron_cppn() -> None:
     # minimal CPPN: every input wired to every output, no hidden nodes yet.
     assert len(genome.cppn.hidden_nodes()) == 0
     assert len(genome.cppn.connections) == sub.query_dim() * len(genome.cppn.outputs)
+
+
+@pytest.mark.unit
+def test_explicit_input_layout_adds_semantic_query_features() -> None:
+    torch = pytest.importorskip("torch")
+    from neuroforge.neuroevolution.genomes.substrate import Substrate
+
+    sub = SubstrateConfig(
+        input_shape=(1, 1, 7),
+        input_layout=(
+            InputChannelLayout("feature", height=2, width=3, channel=-0.5, kind=-0.25),
+            InputChannelLayout("object", height=1, width=1, channel=0.5, kind=0.5),
+        ),
+        hidden_shape=(2, 2),
+    )
+
+    assert sub.input_count() == 7
+    assert sub.query_dim() == 7
+
+    substrate = Substrate(
+        sub,
+        n_input=sub.input_count(),
+        n_buttons=8,
+        motor_per_button=4,
+        torch=torch,
+        dev=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    features = substrate.query_features("input", "hidden")
+
+    assert tuple(features.shape) == (sub.input_count() * 4, 7)
+    hidden_count = 4
+    assert torch.allclose(features[: 6 * hidden_count, 5], torch.full((24,), -0.5))
+    assert torch.allclose(features[: 6 * hidden_count, 6], torch.full((24,), -0.25))
+    assert torch.allclose(features[6 * hidden_count :, 5], torch.full((4,), 0.5))
+    assert torch.allclose(features[6 * hidden_count :, 6], torch.full((4,), 0.5))
+
+
+@pytest.mark.unit
+def test_hyperneat_genome_expands_cppn_inputs_for_structured_substrate() -> None:
+    reg = InnovationRegistry()
+    genome = _seed(reg)
+    structured = SubstrateConfig(
+        input_shape=(1, 1, 1),
+        input_layout=(InputChannelLayout("motion", height=1, width=1, channel=0.0, kind=1.0),),
+    )
+
+    migrated = genome.with_substrate(structured, innovations=reg)
+
+    assert migrated.substrate == structured
+    assert migrated.cppn.inputs[: len(genome.cppn.inputs)] == genome.cppn.inputs
+    assert len(migrated.cppn.inputs) == structured.query_dim()
+    added = {
+        conn.src: conn
+        for conn in migrated.cppn.connections
+        if conn.src in migrated.cppn.inputs[len(genome.cppn.inputs) :]
+    }
+    assert set(added) == {"in5", "in6"}
+    assert all(conn.weight == pytest.approx(0.0) for conn in added.values())
+
+    restored = HyperNEATGenome.from_dict(migrated.to_dict())
+    assert restored.substrate == structured
+    assert restored.cppn.inputs == migrated.cppn.inputs
 
 
 @pytest.mark.unit
@@ -270,6 +340,25 @@ def test_engine_selects_for_cppn_structure() -> None:
 
 
 @pytest.mark.unit
+def test_hyperneat_parent_selection_preserves_negative_fitness_order() -> None:
+    class FirstPick(random.Random):
+        def random(self) -> float:
+            return 0.0
+
+        def choice(self, seq: Any) -> Any:
+            del seq
+            raise AssertionError("negative adjusted fitness should not flatten to random")
+
+    ranked = [
+        SimpleNamespace(adjusted_fitness=-2.0),
+        SimpleNamespace(adjusted_fitness=-8.0),
+        SimpleNamespace(adjusted_fitness=-20.0),
+    ]
+
+    assert _select(ranked, FirstPick()) is ranked[0]
+
+
+@pytest.mark.unit
 def test_hyperneat_genome_runs_through_the_game_training_backend() -> None:
     pytest.importorskip("torch")
     from neuroforge.applications.tasks.game_training import GameTrainingConfig
@@ -293,7 +382,7 @@ def test_hyperneat_genome_runs_through_the_game_training_backend() -> None:
 
 
 @pytest.mark.unit
-def test_hyperneat_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
+def test_hyperneat_evolution_resumes_from_checkpoint(tmp_path: Path) -> None:
     import json
 
     from neuroforge.neuroevolution import max_connection_innovation
@@ -301,7 +390,7 @@ def test_hyperneat_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
     def objective(genome: HyperNEATGenome) -> float:
         return float(len(genome.cppn.hidden_nodes()))
 
-    checkpoint = tmp_path / "evo.json"  # type: ignore[operator]
+    checkpoint = tmp_path / "evo.json"
 
     reg1 = InnovationRegistry()
     cfg1 = EvolutionConfig(
@@ -314,7 +403,7 @@ def test_hyperneat_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
         reproduction=HyperNEATReproduction(cfg1, reg1),
         seed_population=make_hyperneat_seed_population(reg1),
     ).run()
-    payload = json.loads(checkpoint.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
     assert payload["population"][0]["type"] == "hyperneat"
 
     resume_payloads = [*payload["population"], payload["best"]["genome"]]

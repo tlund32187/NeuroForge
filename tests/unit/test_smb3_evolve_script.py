@@ -50,10 +50,27 @@ def test_evolve_script_reads_env_overrides(
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_MUTATION_RATE", "0.2")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_MUTATION_POWER", "0.75")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_THRESHOLD", "0.55")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_TARGET_MIN", "4")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_TARGET_MAX", "8")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_THRESHOLD_ADJUSTMENT", "0.05")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SELECTION_MODE", "rank")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_TOURNAMENT_SIZE", "4")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_RANK_PRESSURE", "2.0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_WEIGHT", "4.5")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_K", "7")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_ARCHIVE_SIZE", "99")
+    monkeypatch.setenv(
+        "NEUROFORGE_SMB3_EVOLVE_NOVELTY_KEYS",
+        "max_x_progress,action_a_frac",
+    )
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS", "3")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_PROGRESS_SCALE", "120")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SURVIVAL_SCALE", "2")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_DURABLE_PROGRESS_WEIGHT", "1.5")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SCORE_GAIN_SCALE", "0.02")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_DEATH_PENALTY", "9")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_BUTTON_OVERUSE_PENALTY", "3")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_HORIZONTAL_CONFLICT_PENALTY", "5")
     monkeypatch.setenv("NEUROFORGE_SMB3_LAUNCH_EMUHAWK", "0")
 
     module = _load_evolve_script(monkeypatch)
@@ -69,14 +86,28 @@ def test_evolve_script_reads_env_overrides(
     assert pytest.approx(0.2) == module.MUTATION_RATE
     assert pytest.approx(0.75) == module.MUTATION_POWER
     assert pytest.approx(0.55) == module.SPECIES_THRESHOLD
+    assert module.SPECIES_TARGET_MIN == 4
+    assert module.SPECIES_TARGET_MAX == 8
+    assert pytest.approx(0.05) == module.SPECIES_THRESHOLD_ADJUSTMENT
+    assert module.SELECTION_MODE == "rank"
+    assert module.TOURNAMENT_SIZE == 4
+    assert pytest.approx(2.0) == module.RANK_SELECTION_PRESSURE
+    assert pytest.approx(4.5) == module.NOVELTY_WEIGHT
+    assert module.NOVELTY_K == 7
+    assert module.NOVELTY_ARCHIVE_SIZE == 99
+    assert module.NOVELTY_METRIC_KEYS == ("max_x_progress", "action_a_frac")
     assert module.EVAL_REPEATS == 3
     assert module.EVOLVE_PROFILE == "explore"
     assert module.EVOLVE_STALL_PATIENCE == 240
     assert module.EVOLVE_MIN_PROGRESS_FRAMES == 240
     assert module.EVOLVE_MAX_DECIDE_TICKS == 16
     assert pytest.approx(120.0) == module.FITNESS_PROGRESS_SCALE
+    assert pytest.approx(0.02) == module.FITNESS_SCORE_GAIN_SCALE
     assert pytest.approx(2.0) == module.FITNESS_SURVIVAL_SCALE
     assert pytest.approx(1.5) == module.FITNESS_DURABLE_PROGRESS_WEIGHT
+    assert pytest.approx(9.0) == module.FITNESS_DEATH_PENALTY
+    assert pytest.approx(3.0) == module.FITNESS_BUTTON_OVERUSE_PENALTY
+    assert pytest.approx(5.0) == module.FITNESS_HORIZONTAL_CONFLICT_PENALTY
     assert module.LAUNCH_EMUHAWK is False
 
 
@@ -89,6 +120,12 @@ def test_evolve_script_rejects_invalid_small_env_values(
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_FRAMES", "0")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SPECIES_THRESHOLD", "0")
     monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_EVAL_REPEATS", "0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_SELECTION_MODE", "bogus")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_TOURNAMENT_SIZE", "0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_RANK_PRESSURE", "0.5")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_WEIGHT", "-1")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_K", "0")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_NOVELTY_ARCHIVE_SIZE", "-1")
 
     module = _load_evolve_script(monkeypatch)
 
@@ -97,6 +134,12 @@ def test_evolve_script_rejects_invalid_small_env_values(
     assert module.EVAL_FRAMES_PER_EPISODE == 900
     assert pytest.approx(0.5) == module.SPECIES_THRESHOLD
     assert module.EVAL_REPEATS == 1
+    assert module.SELECTION_MODE == "tournament"
+    assert module.TOURNAMENT_SIZE == 3
+    assert pytest.approx(1.7) == module.RANK_SELECTION_PRESSURE
+    assert pytest.approx(3.0) == module.NOVELTY_WEIGHT
+    assert module.NOVELTY_K == 5
+    assert module.NOVELTY_ARCHIVE_SIZE == 256
 
 
 @pytest.mark.unit
@@ -113,6 +156,7 @@ def test_evolve_script_validate_profile_uses_fuller_defaults(
     assert module.EVOLVE_STALL_PATIENCE == 600
     assert module.EVOLVE_MIN_PROGRESS_FRAMES == 0
     assert module.EVOLVE_MAX_DECIDE_TICKS == 0
+    assert pytest.approx(0.0) == module.NOVELTY_WEIGHT
 
 
 @pytest.mark.unit
@@ -154,6 +198,37 @@ def test_worker_evaluator_uses_unique_port_and_error_path(
     cfg = cast("Any", captured[0])
     assert cfg.port == 9102
     assert str(tmp_path / "bizhawk" / "bridge_error_worker_2.log") == cfg.bridge_error_path
+
+
+@pytest.mark.unit
+def test_hyperneat_worker_uses_structured_perception_substrate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("torch")
+    monkeypatch.setenv("NEUROFORGE_SMB3_EVOLVE_GENOME", "hyperneat")
+    module = _load_evolve_script(monkeypatch)
+    captured_kwargs: list[dict[str, object]] = []
+
+    def fake_builder(_config: object, **kwargs: object) -> object:
+        captured_kwargs.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(module, "build_live_smb3_fitness_evaluator", fake_builder)
+    live_cfg = module.SMB3LiveFitnessConfig(
+        emuhawk_path="emu",
+        rom_path="rom",
+        lua_script="lua",
+        port=9100,
+    )
+
+    module._build_evaluator_for_worker(live_cfg, run_dir=tmp_path, worker_index=0)
+
+    assert module.SMB3_HYPERNEAT_SUBSTRATE.input_count() == 1584
+    assert module.SMB3_HYPERNEAT_SUBSTRATE.query_dim() == 7
+    encoder_factory = cast("Any", captured_kwargs[0]["encoder_factory"])
+    encoder = encoder_factory()
+    assert encoder.input_size == module.SMB3_HYPERNEAT_SUBSTRATE.input_count()
 
 
 @pytest.mark.unit

@@ -320,11 +320,11 @@ class BizHawkClient:
         return GameObservation(step=self._step_count, t=frame.t, frame=frame)
 
     def _send(self, msg_type: proto.MsgType, payload: bytes = b"") -> None:
-        assert self._transport is not None  # noqa: S101 - guarded by callers
+        assert self._transport is not None
         self._transport.send(proto.encode_message(msg_type, payload))
 
     def _recv_exactly(self, n: int) -> bytes:
-        assert self._transport is not None  # noqa: S101 - guarded by callers
+        assert self._transport is not None
         try:
             return self._transport.recv_exactly(n)
         except BizHawkConnectionError as exc:

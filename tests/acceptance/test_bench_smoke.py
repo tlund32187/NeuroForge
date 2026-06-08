@@ -50,7 +50,7 @@ euroforge bench` should complete and write benchmark artifacts."""
         "--artifacts",
         str(artifacts_dir),
     ]
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(
         cmd,
         cwd=repo_root,
         env=env,

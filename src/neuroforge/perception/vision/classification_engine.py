@@ -41,7 +41,7 @@ class VisionClassificationEngine(nn.Module):
         n_classes: int,
         readout: IReadout,
     ) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
         if not isinstance(backbone, nn.Module):
             msg = "Resolved vision backbone must be a torch.nn.Module"
             raise TypeError(msg)

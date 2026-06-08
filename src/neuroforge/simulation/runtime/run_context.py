@@ -55,7 +55,7 @@ class RunContext:
     cuda_version: str = ""
     hostname: str = ""
     platform: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
+    extra: dict[str, Any] = field(default_factory=lambda: {})
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dict (Path → str)."""
@@ -67,7 +67,7 @@ class RunContext:
 def _git_short_sha() -> str:
     """Return the short git SHA of HEAD, or ``'unknown'``."""
     try:
-        result = subprocess.run(  # noqa: S603, S607
+        result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,

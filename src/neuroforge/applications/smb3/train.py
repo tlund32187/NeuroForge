@@ -54,11 +54,15 @@ from neuroforge.environments.games.smb3.adapters.bizhawk_smb3_adapter import (
 )
 from neuroforge.environments.games.smb3.state import resume_status_lines
 from neuroforge.messaging.bus import EventBus
+from neuroforge.neuroevolution import attach_learned_checkpoint_to_evolution_checkpoint
 from neuroforge.observability.events.recorder import EventRecorderMonitor
 
 # Config: edit if your paths differ.
 EMUHAWK_PATH = r"C:\BizHawk\EmuHawk.exe"
-ROM_PATH = r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)\Super Mario Bros. 3 (USA) (Rev 1).nes"  # noqa: E501
+ROM_PATH = (
+    r"C:\BizHawk\ROM\Super Mario Bros. 3 (USA) (Rev 1)"
+    r"\Super Mario Bros. 3 (USA) (Rev 1).nes"
+)
 # Savestate placed at the START OF A LEVEL (see ONE-TIME SETUP in the docstring).
 # Add more paths to train through a curriculum of increasingly hard levels.
 SAVESTATE_PATHS: tuple[str, ...] = (
@@ -90,6 +94,10 @@ CHECKPOINT = Path(
 USE_EVOLVED_GENOME = env_bool("NEUROFORGE_SMB3_USE_EVOLVED", False)
 EVOLUTION_CHECKPOINT = os.environ.get("NEUROFORGE_SMB3_EVOLUTION_CHECKPOINT")
 EVOLVED_MODE = os.environ.get("NEUROFORGE_SMB3_EVOLVED_MODE", "compatible").strip().lower()
+LAMARCKIAN_WRITEBACK = env_bool(
+    "NEUROFORGE_SMB3_LAMARCKIAN_WRITEBACK",
+    EVOLVED_MODE == "full",
+)
 RESUME_CHECKPOINT = os.environ.get("NEUROFORGE_SMB3_RESUME_CHECKPOINT")
 CONSOLIDATION_STRENGTH = env_float(
     "NEUROFORGE_SMB3_CONSOLIDATION_STRENGTH",
@@ -180,6 +188,37 @@ etwork_builder`` that compiles its invented topology into the policy.
     return selection
 
 
+def _maybe_write_lamarckian_state(selection: Any) -> None:
+    """Attach the just-trained policy checkpoint to the selected evolution genome."""
+    if not LAMARCKIAN_WRITEBACK:
+        return
+    if not getattr(selection, "applied", False):
+        print("  Lamarckian writeback skipped: no evolved genome was selected.")
+        return
+    checkpoint_path = getattr(selection, "checkpoint_path", None)
+    if checkpoint_path is None:
+        print("  Lamarckian writeback skipped: no evolution checkpoint path.")
+        return
+    if not CHECKPOINT.exists():
+        print(f"  Lamarckian writeback skipped: learned checkpoint missing at {CHECKPOINT}.")
+        return
+    try:
+        summary = attach_learned_checkpoint_to_evolution_checkpoint(
+            checkpoint_path,
+            CHECKPOINT,
+            genome_id=str(getattr(selection, "genome_id", "")),
+            source="smb3_train",
+        )
+    except ValueError as exc:
+        print(f"  Lamarckian writeback skipped: {exc}")
+        return
+    print(
+        "  Lamarckian writeback: "
+        f"{summary['learned_checkpoint']} -> {summary['checkpoint_path']} "
+        f"(population matches={summary['population_updates']})",
+    )
+
+
 def main() -> int:
     print("=" * 70)
     print("NeuroForge - SMB3 online R-STDP training (Phase 4: in-level curriculum)")
@@ -199,6 +238,7 @@ def main() -> int:
     extractor = build_smb3_hud_extractor()
     print(f"  HUD digit OCR calibrated: {extractor.is_calibrated}")
     print(f"  BizHawk speed target: {BIZHAWK_SPEED_PERCENT}% | frameskip: {FRAMESKIP}")
+    print(f"  Lamarckian writeback: {LAMARCKIAN_WRITEBACK}")
     print("  Launching EmuHawk; the brain will start driving (and learning) shortly.\n")
 
     bus = EventBus()
@@ -273,6 +313,7 @@ def main() -> int:
         print("\n" + "=" * 70)
         print(f"  DONE: {result}")
         print(f"  Learned weights checkpointed to {CHECKPOINT}")
+        _maybe_write_lamarckian_state(selection)
         print(f"  Full metrics: {run_dir / 'events' / 'events.ndjson'}")
         print("=" * 70)
     except KeyboardInterrupt:

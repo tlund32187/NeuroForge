@@ -9,6 +9,7 @@ actually selects for structure.
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -22,6 +23,9 @@ from neuroforge.neuroevolution import (
     InnovationRegistry,
     make_graph_seed_population,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _seed(reg: InnovationRegistry, *, randomise: bool = False) -> GraphGenome:
@@ -206,7 +210,7 @@ def test_decode_genome_dispatches_by_type() -> None:
 
 
 @pytest.mark.unit
-def test_graph_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
+def test_graph_evolution_resumes_from_checkpoint(tmp_path: Path) -> None:
     import json
 
     from neuroforge.neuroevolution import max_connection_innovation
@@ -214,7 +218,7 @@ def test_graph_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
     def objective(genome: GraphGenome) -> float:
         return float(len(genome.hidden_nodes()))
 
-    checkpoint = tmp_path / "evo.json"  # type: ignore[operator]
+    checkpoint = tmp_path / "evo.json"
 
     reg1 = InnovationRegistry()
     cfg1 = EvolutionConfig(
@@ -227,7 +231,7 @@ def test_graph_evolution_resumes_from_checkpoint(tmp_path: object) -> None:
         reproduction=GraphReproduction(cfg1, reg1),
         seed_population=make_graph_seed_population(reg1),
     ).run()
-    payload = json.loads(checkpoint.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
     assert payload["population"][0]["type"] == "graph"  # graph genomes were checkpointed
 
     # Resume with a registry continued past the checkpoint's innovations.

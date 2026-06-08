@@ -1,4 +1,3 @@
-# pyright: basic
 """Generate the SMB3 HUD glyph atlas from the pixel-verified font.
 
 The 8x8 digit glyphs below were read directly from real SMB3 frames (white

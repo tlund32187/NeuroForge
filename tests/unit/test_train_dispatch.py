@@ -1,4 +1,3 @@
-# pyright: basic, reportMissingImports=false
 """Dashboard ``/api/train`` dispatch tests.
 
 These lock in the gate->handler routing that replaced the former if/elif chain
@@ -61,8 +60,8 @@ async def _train_and_collect(body: dict[str, Any], artifacts_root: Path) -> dict
     return {"run_id": run_id, "events": events}
 
 
-@pytest.fixture()
-def _fake_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+@pytest.fixture(name="_fake_training")
+def fake_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect run dirs to tmp and replace the real tasks with fast fakes."""
     import neuroforge.applications.tasks.logic_gates as logic_gates
     import neuroforge.applications.tasks.multi_gate as multi_gate

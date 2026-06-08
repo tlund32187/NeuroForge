@@ -22,7 +22,7 @@ def require_torch() -> Any:
     ImportError:
         If PyTorch is not installed.
     """
-    global _torch  # noqa: PLW0603
+    global _torch
     if _torch is None:
         try:
             import torch as _t

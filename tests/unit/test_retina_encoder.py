@@ -13,15 +13,16 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+import torch
 
 from neuroforge.contracts.applications.games import ScreenFrame
+from neuroforge.perception.vision.encoding import RetinaEncoder, RetinaEncoderConfig
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+    from torch import Tensor
 
-torch = pytest.importorskip("torch")
-
-from neuroforge.perception.vision.encoding import RetinaEncoder, RetinaEncoderConfig  # noqa: E402
+pytest.importorskip("torch")
 
 _H, _W = 56, 64
 
@@ -53,9 +54,8 @@ def _frame(
     return ScreenFrame(width=_W, height=_H, channels=3, data=data.tobytes())
 
 
-def _cos(a: object, b: object) -> float:
-    at, bt = a, b  # torch tensors
-    return float(torch.dot(at, bt) / (at.norm() * bt.norm() + 1e-9))  # type: ignore[attr-defined]
+def _cos(a: Tensor, b: Tensor) -> float:
+    return float(torch.dot(a, b) / (a.norm() * b.norm() + 1e-9))
 
 
 @pytest.mark.unit

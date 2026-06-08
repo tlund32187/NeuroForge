@@ -26,7 +26,7 @@ class StaticSynapseModel:
         use_active_edge_filter: bool = False,
         active_edge_max_fraction: float = 0.2,
         **_kwargs: object,
-    ) -> None:  # noqa: B027
+    ) -> None:
         """Create static synapse model.
 
         Parameters

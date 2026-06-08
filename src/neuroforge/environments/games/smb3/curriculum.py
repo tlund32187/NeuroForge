@@ -74,7 +74,7 @@ class SMB3Curriculum:
         """Number of configured savestate stages."""
         return len(self._stages)
 
-    def savestate_for(self, episode: int) -> str | None:  # noqa: ARG002
+    def savestate_for(self, episode: int) -> str | None:
         """Return the current stage's savestate, or ``None`` if there are none."""
         if not self._stages:
             return None

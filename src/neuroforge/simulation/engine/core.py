@@ -155,9 +155,13 @@ class CoreEngine:
         for proj in self._proj_list:
             proj.state = proj.model.init_state(proj.topology, device, dtype)
 
+        self.mark_built()
+        return self
+
+    def mark_built(self) -> None:
+        """Mark externally initialized engine state as ready to run."""
         self._clock.reset()
         self._built = True
-        return self
 
     def reset(self) -> None:
         """Reset all states and the clock."""

@@ -55,7 +55,7 @@ def test_vision_bench_multi_seed_sweep_writes_aggregate(tmp_path: Path) -> None:
         "--seeds",
         "0,1,2",
     ]
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(
         cmd,
         cwd=repo_root,
         env=env,

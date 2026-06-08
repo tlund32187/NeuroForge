@@ -95,6 +95,7 @@ class GraphGenome:
     connections: tuple[ConnGene, ...]
     hyperparams: tuple[Gene, ...]
     parent_ids: tuple[str, ...] = ()
+    learned_checkpoint_path: str = ""
 
     # -- construction --------------------------------------------------
 
@@ -180,6 +181,10 @@ class GraphGenome:
             parent_ids=parent_ids if parent_ids is not None else (self.id,),
         )
 
+    def with_learned_checkpoint(self, path: str) -> GraphGenome:
+        """Return this genome with an inherited learned-weight checkpoint path."""
+        return dataclasses.replace(self, learned_checkpoint_path=str(path))
+
     # -- variation -----------------------------------------------------
 
     def mutate(
@@ -223,7 +228,8 @@ class GraphGenome:
             nodes=tuple(nodes),
             connections=tuple(connections),
             hyperparams=hyperparams,
-            parent_ids=(self.id,),
+            parent_ids=self.parent_ids if self.parent_ids else (self.id,),
+            learned_checkpoint_path=self.learned_checkpoint_path,
         )
 
     def crossover(
@@ -260,6 +266,7 @@ class GraphGenome:
             connections=tuple(child_conns),
             hyperparams=hyperparams or self.hyperparams,
             parent_ids=(self.id, other.id),
+            learned_checkpoint_path=_inherit_learned_checkpoint(self, other, rng),
         )
 
     def distance(self, other: GraphGenome) -> float:
@@ -332,7 +339,7 @@ class GraphGenome:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
-        return {
+        payload: dict[str, Any] = {
             "type": "graph",
             "id": self.id,
             "generation": self.generation,
@@ -341,6 +348,9 @@ class GraphGenome:
             "connections": [dataclasses.asdict(conn) for conn in self.connections],
             "hyperparams": [dataclasses.asdict(gene) for gene in self.hyperparams],
         }
+        if self.learned_checkpoint_path:
+            payload["learned_checkpoint_path"] = self.learned_checkpoint_path
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> GraphGenome:
@@ -383,6 +393,7 @@ class GraphGenome:
                 if isinstance(parents, list)
                 else ()
             ),
+            learned_checkpoint_path=_learned_checkpoint_path_from_payload(payload),
         )
 
     # -- internals -----------------------------------------------------
@@ -476,9 +487,14 @@ class GraphReproduction:
         ]
         while len(children) < cfg.population_size:
             child_index = len(children)
-            parent_a = _select_parent(evaluated, rng)
+            parent_a = _select_parent(evaluated, rng, cfg)
             if rng.random() < cfg.crossover_rate:
-                parent_b = _select_parent(evaluated, rng)
+                parent_b = _select_distinct_parent(
+                    evaluated,
+                    rng,
+                    exclude_genome_id=str(parent_a.genome.id),
+                    config=cfg,
+                )
                 child = parent_a.genome.crossover(
                     parent_b.genome,
                     child_id=f"g{generation}_{child_index}",
@@ -517,7 +533,17 @@ def make_graph_seed_population(
     return seed
 
 
-def _select_parent(evaluated: list[Any], rng: random.Random) -> Any:
+def _select_parent(evaluated: list[Any], rng: random.Random, config: Any | None = None) -> Any:
+    if config is not None and hasattr(config, "selection_mode"):
+        from neuroforge.neuroevolution.search.engine import select_parent_by_mode
+
+        return select_parent_by_mode(
+            evaluated,
+            rng,
+            mode=str(config.selection_mode),
+            tournament_size=int(config.tournament_size),
+            rank_pressure=float(config.rank_selection_pressure),
+        )
     min_fit = min(item.adjusted_fitness for item in evaluated)
     weights = [item.adjusted_fitness - min_fit + 1e-9 for item in evaluated]
     total = sum(weights)
@@ -530,3 +556,49 @@ def _select_parent(evaluated: list[Any], rng: random.Random) -> Any:
         if acc >= pick:
             return item
     return evaluated[-1]
+
+
+def _select_distinct_parent(
+    evaluated: list[Any],
+    rng: random.Random,
+    *,
+    exclude_genome_id: str,
+    config: Any | None = None,
+) -> Any:
+    for _ in range(8):
+        candidate = _select_parent(evaluated, rng, config)
+        if str(candidate.genome.id) != exclude_genome_id:
+            return candidate
+    for candidate in evaluated:
+        if str(candidate.genome.id) != exclude_genome_id:
+            return candidate
+    msg = "distinct crossover parent not found"
+    raise RuntimeError(msg)
+
+
+def _learned_checkpoint_path_from_payload(payload: dict[str, Any]) -> str:
+    """Return the optional learned-policy checkpoint path from a genome payload."""
+    raw = payload.get("learned_checkpoint_path", "")
+    if isinstance(raw, str):
+        return raw
+    state = payload.get("learned_state")
+    if isinstance(state, dict):
+        path = cast("dict[str, Any]", state).get("policy_checkpoint", "")
+        return path if isinstance(path, str) else ""
+    return ""
+
+
+def _inherit_learned_checkpoint(
+    left: GraphGenome,
+    right: GraphGenome,
+    rng: random.Random,
+) -> str:
+    """Choose one available learned checkpoint during crossover inheritance."""
+    paths = tuple(
+        path
+        for path in (left.learned_checkpoint_path, right.learned_checkpoint_path)
+        if path
+    )
+    if not paths:
+        return ""
+    return rng.choice(paths)

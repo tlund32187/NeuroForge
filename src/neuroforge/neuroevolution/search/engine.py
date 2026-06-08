@@ -9,14 +9,15 @@ crossover, and mutation.
 from __future__ import annotations
 
 import json
+import math
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from neuroforge.contracts.applications.evolution import (
     FitnessResult,
@@ -32,12 +33,10 @@ from neuroforge.neuroevolution.io.serde import (
     rng_state_to_json,
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
 __all__ = [
     "EvaluatedGenome",
     "EvaluationProgress",
+    "AdaptiveSpeciation",
     "EvolutionConfig",
     "EvolutionEngine",
     "EvolutionState",
@@ -45,8 +44,10 @@ __all__ = [
     "ProgressCallback",
     "SimpleReproduction",
     "SimpleSpeciation",
+    "SpeciesAwareReproduction",
     "default_seed_population",
     "evolution_config_to_dict",
+    "select_parent_by_mode",
 ]
 
 
@@ -69,8 +70,29 @@ class EvolutionConfig:
     resume: bool = False
     max_workers: int = 1
     preserve_global_best: bool = True
+    selection_mode: str = "tournament"
+    tournament_size: int = 3
+    rank_selection_pressure: float = 1.7
+    novelty_weight: float = 0.0
+    novelty_k: int = 5
+    novelty_archive_size: int = 256
+    novelty_metric_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        selection_mode = self.selection_mode.strip().lower()
+        if selection_mode not in {"roulette", "rank", "tournament"}:
+            msg = "EvolutionConfig.selection_mode must be roulette, rank, or tournament"
+            raise ValueError(msg)
+        object.__setattr__(self, "selection_mode", selection_mode)
+        object.__setattr__(
+            self,
+            "novelty_metric_keys",
+            tuple(
+                str(key).strip()
+                for key in self.novelty_metric_keys
+                if str(key).strip()
+            ),
+        )
         if self.population_size < 2:
             msg = "EvolutionConfig.population_size must be >= 2"
             raise ValueError(msg)
@@ -94,6 +116,21 @@ class EvolutionConfig:
         if self.max_workers < 1:
             msg = "EvolutionConfig.max_workers must be >= 1"
             raise ValueError(msg)
+        if self.tournament_size < 1:
+            msg = "EvolutionConfig.tournament_size must be >= 1"
+            raise ValueError(msg)
+        if self.rank_selection_pressure < 1.0:
+            msg = "EvolutionConfig.rank_selection_pressure must be >= 1"
+            raise ValueError(msg)
+        if self.novelty_weight < 0.0:
+            msg = "EvolutionConfig.novelty_weight must be >= 0"
+            raise ValueError(msg)
+        if self.novelty_k < 1:
+            msg = "EvolutionConfig.novelty_k must be >= 1"
+            raise ValueError(msg)
+        if self.novelty_archive_size < 0:
+            msg = "EvolutionConfig.novelty_archive_size must be >= 0"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,13 +139,14 @@ class EvaluatedGenome:
 
     ``genome`` is typed loosely so any genome implementing the evolvable surface
     (``distance``/``crossover``/``mutate``/``as_offspring``/``content_key``) works
-    — that is what lets a structural graph genome share this engine.
+    That is what lets a structural graph genome share this engine.
     """
 
     genome: Any
     result: FitnessResult
     species_id: int
     adjusted_fitness: float
+    species_uid: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +159,8 @@ class EvaluationProgress:
     population_size: int
     genome: PolicyGenome
     completed: int
+    species_id: int
+    species_uid: int
     result: FitnessResult | None = None
     error: str | None = None
 
@@ -156,8 +196,8 @@ class EvolutionState:
 @dataclass(slots=True)
 class _Species:
     id: int
-    representative: PolicyGenome
-    members: list[PolicyGenome] = field(default_factory=list[PolicyGenome])
+    representative: Any
+    members: list[Any] = field(default_factory=list[Any])
 
 
 class SimpleSpeciation:
@@ -166,7 +206,7 @@ class SimpleSpeciation:
     def __init__(self, *, threshold: float) -> None:
         self._threshold = float(threshold)
 
-    def assign(self, genomes: list[PolicyGenome]) -> dict[str, int]:
+    def assign(self, genomes: list[Any]) -> dict[str, int]:
         """Return ``genome_id -> species_id``."""
         species: list[_Species] = []
         assignments: dict[str, int] = {}
@@ -185,10 +225,72 @@ class SimpleSpeciation:
         return assignments
 
 
-class SimpleReproduction:
-    """Default reproduction: elitism + fitness-proportionate selection + variation.
+class AdaptiveSpeciation:
+    """Compatibility speciation with a threshold that tracks a target range.
 
-    Genome-agnostic — it only calls the genome's own ``as_offspring`` / ``crossover``
+    A fixed threshold is brittle for open-ended structure search: the same value
+    can collapse a run into one species early and fragment it later. This assigner
+    uses the current threshold for the generation, then nudges it for the next
+    generation based on the observed species count.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: float,
+        target_min: int = 6,
+        target_max: int = 12,
+        adjustment: float = 0.08,
+        min_threshold: float = 1e-6,
+        max_threshold: float = 100.0,
+    ) -> None:
+        if threshold <= 0.0:
+            msg = "AdaptiveSpeciation.threshold must be > 0"
+            raise ValueError(msg)
+        if target_min < 1 or target_max < target_min:
+            msg = "AdaptiveSpeciation target range must satisfy 1 <= min <= max"
+            raise ValueError(msg)
+        self._threshold = float(threshold)
+        self._target_min = int(target_min)
+        self._target_max = int(target_max)
+        self._adjustment = max(0.0, float(adjustment))
+        self._min_threshold = max(1e-12, float(min_threshold))
+        self._max_threshold = max(self._min_threshold, float(max_threshold))
+        self._last_species_count = 0
+
+    @property
+    def threshold(self) -> float:
+        """Threshold that will be used for the next assignment."""
+        return self._threshold
+
+    @property
+    def last_species_count(self) -> int:
+        """Species count observed during the previous assignment."""
+        return self._last_species_count
+
+    def assign(self, genomes: list[Any]) -> dict[str, int]:
+        """Return ``genome_id -> species_id`` and adapt for the next generation."""
+        assignments = SimpleSpeciation(threshold=self._threshold).assign(genomes)
+        species_count = len(set(assignments.values()))
+        self._last_species_count = species_count
+        self._adapt(species_count)
+        return assignments
+
+    def _adapt(self, species_count: int) -> None:
+        if species_count < self._target_min:
+            self._threshold *= max(0.0, 1.0 - self._adjustment)
+        elif species_count > self._target_max:
+            self._threshold *= 1.0 + self._adjustment
+        self._threshold = min(
+            self._max_threshold,
+            max(self._min_threshold, self._threshold),
+        )
+
+
+class SimpleReproduction:
+    """Default reproduction: elitism + configurable selection + variation.
+
+    Genome-agnostic: it only calls the genome's own ``as_offspring`` / ``crossover``
     / ``mutate``, so the same strategy reproduces hyperparameter and structural
     genomes alike. Injectable via :class:`EvolutionEngine` for custom schemes.
     """
@@ -209,7 +311,11 @@ class SimpleReproduction:
             child_index = len(children)
             parent_a = self._select_parent(evaluated, rng)
             if rng.random() < cfg.crossover_rate:
-                parent_b = self._select_parent(evaluated, rng)
+                parent_b = self._select_distinct_parent(
+                    evaluated,
+                    rng,
+                    exclude_genome_id=str(parent_a.genome.id),
+                )
                 child = parent_a.genome.crossover(
                     parent_b.genome,
                     child_id=f"g{generation}_{child_index}",
@@ -231,22 +337,189 @@ class SimpleReproduction:
             )
         return children
 
-    @staticmethod
     def _select_parent(
-        evaluated: list[EvaluatedGenome], rng: random.Random,
+        self, evaluated: list[EvaluatedGenome], rng: random.Random,
     ) -> EvaluatedGenome:
-        min_fit = min(item.adjusted_fitness for item in evaluated)
-        weights = [item.adjusted_fitness - min_fit + 1e-9 for item in evaluated]
-        total = sum(weights)
-        if total <= 0.0:
-            return rng.choice(evaluated)
-        pick = rng.random() * total
-        acc = 0.0
-        for item, weight in zip(evaluated, weights, strict=True):
-            acc += weight
-            if acc >= pick:
-                return item
-        return evaluated[-1]
+        return select_parent_by_mode(
+            evaluated,
+            rng,
+            mode=self._cfg.selection_mode,
+            tournament_size=self._cfg.tournament_size,
+            rank_pressure=self._cfg.rank_selection_pressure,
+        )
+
+    def _select_distinct_parent(
+        self,
+        evaluated: list[EvaluatedGenome],
+        rng: random.Random,
+        *,
+        exclude_genome_id: str,
+    ) -> EvaluatedGenome:
+        for _ in range(8):
+            candidate = self._select_parent(evaluated, rng)
+            if str(candidate.genome.id) != exclude_genome_id:
+                return candidate
+        for candidate in evaluated:
+            if str(candidate.genome.id) != exclude_genome_id:
+                return candidate
+        msg = "distinct crossover parent not found"
+        raise RuntimeError(msg)
+
+
+MutationHook = Callable[
+    [Any, str, int, random.Random, float, float],
+    Any,
+]
+
+
+class SpeciesAwareReproduction:
+    """Reproduce within species and allocate offspring per species quality.
+
+    This is still genome-agnostic, but unlike :class:`SimpleReproduction` it
+    protects each active species with at least one child and mostly mates parents
+    inside their species. Structural genomes can inject a mutation hook so NEAT
+    innovation registries stay consistent.
+    """
+
+    def __init__(
+        self,
+        config: EvolutionConfig,
+        *,
+        mutate_child: MutationHook | None = None,
+        species_elite_count: int = 1,
+    ) -> None:
+        if species_elite_count < 0:
+            msg = "SpeciesAwareReproduction.species_elite_count must be >= 0"
+            raise ValueError(msg)
+        self._cfg = config
+        self._mutate_child = mutate_child
+        self._species_elite_count = int(species_elite_count)
+
+    def next_generation(
+        self, evaluated: list[EvaluatedGenome], *, generation: int, rng: random.Random,
+    ) -> list[Any]:
+        """Return a child population using species-aware allocation."""
+        if not evaluated:
+            return []
+        groups = _species_groups(evaluated)
+        allocations = _species_allocations(groups, self._cfg.population_size)
+        children: list[Any] = []
+        for species_id, members in groups:
+            requested = allocations.get(species_id, 0)
+            if requested <= 0:
+                continue
+            children.extend(
+                self._species_children(
+                    members,
+                    count=requested,
+                    generation=generation,
+                    rng=rng,
+                    child_offset=len(children),
+                )
+            )
+        while len(children) < self._cfg.population_size:
+            child = self._make_child(
+                evaluated,
+                generation=generation,
+                rng=rng,
+                child_index=len(children),
+            )
+            children.append(child)
+        return children[: self._cfg.population_size]
+
+    def _species_children(
+        self,
+        members: list[EvaluatedGenome],
+        *,
+        count: int,
+        generation: int,
+        rng: random.Random,
+        child_offset: int,
+    ) -> list[Any]:
+        ranked = sorted(members, key=lambda item: item.result.fitness, reverse=True)
+        out: list[Any] = []
+        elites = min(self._species_elite_count, count, len(ranked))
+        for item in ranked[:elites]:
+            out.append(
+                item.genome.as_offspring(
+                    child_id=f"g{generation}_{child_offset + len(out)}",
+                    generation=generation,
+                )
+            )
+        while len(out) < count:
+            child = self._make_child(
+                ranked,
+                generation=generation,
+                rng=rng,
+                child_index=child_offset + len(out),
+            )
+            out.append(child)
+        return out
+
+    def _make_child(
+        self,
+        pool: list[EvaluatedGenome],
+        *,
+        generation: int,
+        rng: random.Random,
+        child_index: int,
+    ) -> Any:
+        parent_a = select_parent_by_mode(
+            pool,
+            rng,
+            mode=self._cfg.selection_mode,
+            tournament_size=self._cfg.tournament_size,
+            rank_pressure=self._cfg.rank_selection_pressure,
+        )
+        child_id = f"g{generation}_{child_index}"
+        if rng.random() < self._cfg.crossover_rate and len(pool) > 1:
+            parent_b = _select_distinct_parent_by_mode(
+                pool,
+                rng,
+                exclude_genome_id=str(parent_a.genome.id),
+                mode=self._cfg.selection_mode,
+                tournament_size=self._cfg.tournament_size,
+                rank_pressure=self._cfg.rank_selection_pressure,
+            )
+            child = parent_a.genome.crossover(
+                parent_b.genome,
+                child_id=child_id,
+                generation=generation,
+                rng=rng,
+            )
+        else:
+            child = parent_a.genome.as_offspring(child_id=child_id, generation=generation)
+        return self._mutate(
+            child,
+            child_id=child.id,
+            generation=generation,
+            rng=rng,
+        )
+
+    def _mutate(
+        self,
+        child: Any,
+        *,
+        child_id: str,
+        generation: int,
+        rng: random.Random,
+    ) -> Any:
+        if self._mutate_child is not None:
+            return self._mutate_child(
+                child,
+                child_id,
+                generation,
+                rng,
+                self._cfg.mutation_rate,
+                self._cfg.mutation_power,
+            )
+        return child.mutate(
+            child_id=child_id,
+            generation=generation,
+            rng=rng,
+            rate=self._cfg.mutation_rate,
+            power=self._cfg.mutation_power,
+        )
 
 
 def default_seed_population(size: int, rng: random.Random) -> list[Any]:
@@ -255,6 +528,61 @@ def default_seed_population(size: int, rng: random.Random) -> list[Any]:
         PolicyGenome.seed(f"g0_{idx}", generation=0, rng=rng, randomise=idx != 0)
         for idx in range(size)
     ]
+
+
+class _NoveltyArchive:
+    """Small behavior archive used to add novelty pressure to selection fitness."""
+
+    def __init__(self, *, keys: tuple[str, ...], k: int, max_size: int) -> None:
+        self._keys = keys
+        self._k = max(1, int(k))
+        self._max_size = max(0, int(max_size))
+        self._archive: list[tuple[float, ...]] = []
+
+    def apply(self, results: list[FitnessResult], *, weight: float) -> list[FitnessResult]:
+        """Return results with novelty metrics and an optional selection bonus."""
+        if not self._keys:
+            return results
+        descriptors = [self._descriptor(result) for result in results]
+        scores = [
+            self._score_descriptor(descriptor, descriptors, index=index)
+            for index, descriptor in enumerate(descriptors)
+        ]
+        self._remember(descriptors)
+        weighted = max(0.0, float(weight))
+        return [
+            _with_novelty_metrics(result, novelty_score=score, novelty_weight=weighted)
+            for result, score in zip(results, scores, strict=True)
+        ]
+
+    def _descriptor(self, result: FitnessResult) -> tuple[float, ...]:
+        return tuple(_safe_metric(result.metrics.get(key, 0.0)) for key in self._keys)
+
+    def _score_descriptor(
+        self,
+        descriptor: tuple[float, ...],
+        peers: list[tuple[float, ...]],
+        *,
+        index: int,
+    ) -> float:
+        neighbors = [
+            candidate for peer_index, candidate in enumerate(peers) if peer_index != index
+        ]
+        neighbors.extend(self._archive)
+        if not neighbors:
+            return 0.0
+        distances = sorted(_descriptor_distance(descriptor, candidate) for candidate in neighbors)
+        nearest = distances[: min(self._k, len(distances))]
+        return sum(nearest) / max(1, len(nearest))
+
+    def _remember(self, descriptors: list[tuple[float, ...]]) -> None:
+        if self._max_size <= 0:
+            self._archive.clear()
+            return
+        self._archive.extend(descriptors)
+        overflow = len(self._archive) - self._max_size
+        if overflow > 0:
+            del self._archive[:overflow]
 
 
 class EvolutionEngine:
@@ -280,6 +608,17 @@ class EvolutionEngine:
         # bug that stopped best-fitness from ratcheting). Identical genomes within
         # a run are deduped too.
         self._fitness_cache: dict[str, FitnessResult] = {}
+        self._novelty_archive = (
+            _NoveltyArchive(
+                keys=self._cfg.novelty_metric_keys,
+                k=self._cfg.novelty_k,
+                max_size=self._cfg.novelty_archive_size,
+            )
+            if self._cfg.novelty_metric_keys
+            else None
+        )
+        self._next_species_uid = 0
+        self._species_representative_by_uid: dict[int, Any] = {}
 
     def initial_state(self) -> EvolutionState:
         """Create a fresh population or load one from checkpoint."""
@@ -295,6 +634,10 @@ class EvolutionEngine:
     ) -> tuple[list[EvaluatedGenome], GenerationSummary]:
         """Evaluate the current population and return sorted results."""
         assignments = self._speciation.assign(state.population)
+        species_uid_by_local = self._assign_species_uids(state.population, assignments)
+        species_uid_assignments = {
+            genome.id: species_uid_by_local[assignments[genome.id]] for genome in state.population
+        }
         species_sizes: dict[int, int] = {}
         for species_id in assignments.values():
             species_sizes[species_id] = species_sizes.get(species_id, 0) + 1
@@ -302,8 +645,11 @@ class EvolutionEngine:
         results = self._evaluate_population(
             state.population,
             generation=state.generation,
+            species_assignments=assignments,
+            species_uid_assignments=species_uid_assignments,
             progress_callback=progress_callback,
         )
+        results = self._with_novelty(results)
         evaluated: list[EvaluatedGenome] = []
         for genome, result in zip(state.population, results, strict=True):
             species_id = assignments[genome.id]
@@ -313,6 +659,7 @@ class EvolutionEngine:
                     genome=genome,
                     result=result,
                     species_id=species_id,
+                    species_uid=species_uid_assignments[genome.id],
                     adjusted_fitness=adjusted,
                 )
             )
@@ -331,11 +678,18 @@ class EvolutionEngine:
         )
         return evaluated, summary
 
+    def _with_novelty(self, results: list[FitnessResult]) -> list[FitnessResult]:
+        if self._novelty_archive is None:
+            return results
+        return self._novelty_archive.apply(results, weight=self._cfg.novelty_weight)
+
     def _evaluate_population(
         self,
         population: list[PolicyGenome],
         *,
         generation: int,
+        species_assignments: dict[str, int] | None,
+        species_uid_assignments: dict[str, int] | None,
         progress_callback: ProgressCallback | None,
     ) -> list[FitnessResult]:
         """Evaluate genomes, optionally in parallel, preserving population order."""
@@ -365,6 +719,12 @@ class EvolutionEngine:
         ) -> None:
             if progress_callback is None:
                 return
+            species_id = -1
+            species_uid = -1
+            if species_assignments is not None:
+                species_id = int(species_assignments.get(genome.id, -1))
+            if species_uid_assignments is not None:
+                species_uid = int(species_uid_assignments.get(genome.id, -1))
             progress_callback(
                 EvaluationProgress(
                     phase=phase,
@@ -375,6 +735,8 @@ class EvolutionEngine:
                     completed=completed_count,
                     result=result,
                     error=error,
+                    species_id=species_id,
+                    species_uid=species_uid,
                 )
             )
 
@@ -483,8 +845,19 @@ class EvolutionEngine:
                 "episodes": state.best.result.episodes,
                 "frames": state.best.result.frames,
                 "species_id": state.best.species_id,
+                "species_uid": state.best.species_uid,
                 "adjusted_fitness": state.best.adjusted_fitness,
             }
+        species_tracking = {
+            "next_uid": self._next_species_uid,
+            "representatives": [
+                {
+                    "uid": uid,
+                    "genome": representative.to_dict(),
+                }
+                for uid, representative in sorted(self._species_representative_by_uid.items())
+            ],
+        }
         return {
             "schema_version": _CHECKPOINT_SCHEMA_VERSION,
             "generation": state.generation,
@@ -493,6 +866,7 @@ class EvolutionEngine:
             "rng_state": rng_state_to_json(self._rng.getstate()),
             "population": [genome.to_dict() for genome in state.population],
             "best": best_payload,
+            "species_tracking": species_tracking,
         }
 
     def load_state(self, path: str | Path) -> EvolutionState:
@@ -541,9 +915,73 @@ class EvolutionEngine:
                 genome=genome,
                 result=result,
                 species_id=int(best_obj.get("species_id", 0)),
+                species_uid=int(best_obj.get("species_uid", -1)),
                 adjusted_fitness=float(best_obj.get("adjusted_fitness", result.fitness)),
             )
+        tracking_raw = payload.get("species_tracking")
+        if isinstance(tracking_raw, dict):
+            tracking = cast("dict[str, Any]", tracking_raw)
+            self._next_species_uid = int(tracking.get("next_uid", 0))
+            restored: dict[int, Any] = {}
+            reps_raw = tracking.get("representatives", [])
+            if isinstance(reps_raw, Sequence):
+                for item in cast("Sequence[object]", reps_raw):
+                    if not isinstance(item, dict):
+                        continue
+                    entry = cast("dict[str, Any]", item)
+                    genome_raw = entry.get("genome")
+                    if not isinstance(genome_raw, dict):
+                        continue
+                    uid = int(entry.get("uid", -1))
+                    if uid < 0:
+                        continue
+                    restored[uid] = decode_genome(cast_json_object(genome_raw))
+            self._species_representative_by_uid = restored
+            self._next_species_uid = max(
+                self._next_species_uid,
+                max(self._species_representative_by_uid.keys(), default=-1) + 1,
+            )
         return state
+
+    def _assign_species_uids(
+        self,
+        population: list[Any],
+        assignments: dict[str, int],
+    ) -> dict[int, int]:
+        local_representatives: dict[int, Any] = {}
+        for genome in population:
+            local_id = int(assignments[genome.id])
+            if local_id not in local_representatives:
+                local_representatives[local_id] = genome
+        available = set(self._species_representative_by_uid.keys())
+        matched: dict[int, int] = {}
+        threshold = self._species_match_threshold()
+        for local_id in sorted(local_representatives):
+            representative = local_representatives[local_id]
+            best_uid = -1
+            best_distance = float("inf")
+            for uid in sorted(available):
+                previous = self._species_representative_by_uid[uid]
+                distance = float(representative.distance(previous))
+                if distance < best_distance:
+                    best_distance = distance
+                    best_uid = uid
+            if best_uid >= 0 and best_distance <= threshold:
+                matched[local_id] = best_uid
+                available.remove(best_uid)
+            else:
+                matched[local_id] = self._next_species_uid
+                self._next_species_uid += 1
+        self._species_representative_by_uid = {
+            uid: local_representatives[local_id] for local_id, uid in matched.items()
+        }
+        return matched
+
+    def _species_match_threshold(self) -> float:
+        threshold = getattr(self._speciation, "threshold", self._cfg.species_threshold)
+        if isinstance(threshold, int | float) and not isinstance(threshold, bool):
+            return float(max(1e-12, threshold))
+        return float(max(1e-12, self._cfg.species_threshold))
 
     def _checkpoint_path(self) -> Path | None:
         if self._cfg.checkpoint_path is None:
@@ -557,7 +995,7 @@ class EvolutionEngine:
         state: EvolutionState,
         generation: int,
     ) -> list[Any]:
-        """Reserve one future slot for the best raw-fitness genome seen so far."""
+        """Reserve one future slot for the best reported-fitness genome seen so far."""
         if not self._cfg.preserve_global_best or state.best is None or not population:
             return population
         best_genome = state.best.genome
@@ -570,9 +1008,11 @@ class EvolutionEngine:
 
 
 def _content_key(genome: PolicyGenome) -> str:
-    """Cache key over gene content; falls back to id for genomes without one."""
+    """Cache key over gene content plus inherited learned-state artifact."""
     content_key = getattr(genome, "content_key", None)
-    return str(content_key()) if callable(content_key) else genome.id
+    base = str(content_key()) if callable(content_key) else genome.id
+    learned = getattr(genome, "learned_checkpoint_path", "")
+    return f"{base}|learned={learned}" if isinstance(learned, str) and learned else base
 
 
 def _as_global_best_offspring(genome: Any, *, generation: int) -> Any:
@@ -589,7 +1029,181 @@ def _as_global_best_offspring(genome: Any, *, generation: int) -> Any:
 
 def evolution_config_to_dict(config: EvolutionConfig) -> dict[str, Any]:
     """Return the checkpoint-relevant evolution config as JSON-safe metadata."""
-    return dict(asdict(config))
+    data = dict(asdict(config))
+    data["novelty_metric_keys"] = list(config.novelty_metric_keys)
+    return data
+
+
+def _species_groups(evaluated: list[EvaluatedGenome]) -> list[tuple[int, list[EvaluatedGenome]]]:
+    """Return evaluated genomes grouped by species, strongest species first."""
+    grouped: dict[int, list[EvaluatedGenome]] = {}
+    for item in evaluated:
+        grouped.setdefault(item.species_id, []).append(item)
+    return sorted(
+        grouped.items(),
+        key=lambda pair: max(item.result.fitness for item in pair[1]),
+        reverse=True,
+    )
+
+
+def _species_allocations(
+    groups: list[tuple[int, list[EvaluatedGenome]]],
+    population_size: int,
+) -> dict[int, int]:
+    """Allocate offspring counts across species while preserving diversity."""
+    if population_size <= 0 or not groups:
+        return {}
+    active = groups[:population_size]
+    allocations = {species_id: 1 for species_id, _members in active}
+    remaining = population_size - len(active)
+    if remaining <= 0:
+        return allocations
+
+    scores = [sum(item.adjusted_fitness for item in members) for _sid, members in active]
+    weights = _shifted_weights(scores)
+    total = sum(weights)
+    if total <= 0.0:
+        weights = [1.0 for _score in scores]
+        total = float(len(weights))
+    quotas = [remaining * weight / total for weight in weights]
+    floors = [int(quota) for quota in quotas]
+    for (species_id, _members), count in zip(active, floors, strict=True):
+        allocations[species_id] += count
+    leftover = remaining - sum(floors)
+    order = sorted(
+        range(len(active)),
+        key=lambda idx: quotas[idx] - floors[idx],
+        reverse=True,
+    )
+    for idx in order[:leftover]:
+        species_id = active[idx][0]
+        allocations[species_id] += 1
+    return allocations
+
+
+def _select_adjusted_parent(
+    evaluated: list[EvaluatedGenome],
+    rng: random.Random,
+) -> EvaluatedGenome:
+    """Fitness-proportionate parent selection over shifted adjusted fitness."""
+    weights = _shifted_weights([item.adjusted_fitness for item in evaluated])
+    total = sum(weights)
+    if total <= 0.0:
+        return rng.choice(evaluated)
+    pick = rng.random() * total
+    acc = 0.0
+    for item, weight in zip(evaluated, weights, strict=True):
+        acc += weight
+        if acc >= pick:
+            return item
+    return evaluated[-1]
+
+
+def select_parent_by_mode(
+    evaluated: list[EvaluatedGenome],
+    rng: random.Random,
+    *,
+    mode: str,
+    tournament_size: int,
+    rank_pressure: float,
+) -> EvaluatedGenome:
+    """Select one parent using the configured selection strategy."""
+    if not evaluated:
+        msg = "cannot select from an empty evaluated population"
+        raise ValueError(msg)
+    if mode == "tournament":
+        return _select_tournament_parent(evaluated, rng, tournament_size=tournament_size)
+    if mode == "rank":
+        return _select_rank_parent(evaluated, rng, pressure=rank_pressure)
+    return _select_adjusted_parent(evaluated, rng)
+
+
+def _select_distinct_parent_by_mode(
+    evaluated: list[EvaluatedGenome],
+    rng: random.Random,
+    *,
+    exclude_genome_id: str,
+    mode: str,
+    tournament_size: int,
+    rank_pressure: float,
+) -> EvaluatedGenome:
+    for _ in range(8):
+        candidate = select_parent_by_mode(
+            evaluated,
+            rng,
+            mode=mode,
+            tournament_size=tournament_size,
+            rank_pressure=rank_pressure,
+        )
+        if str(candidate.genome.id) != exclude_genome_id:
+            return candidate
+    for candidate in evaluated:
+        if str(candidate.genome.id) != exclude_genome_id:
+            return candidate
+    msg = "distinct crossover parent not found"
+    raise RuntimeError(msg)
+
+
+def _select_tournament_parent(
+    evaluated: list[EvaluatedGenome],
+    rng: random.Random,
+    *,
+    tournament_size: int,
+) -> EvaluatedGenome:
+    """Select the strongest genome from a random tournament sample."""
+    size = min(max(1, tournament_size), len(evaluated))
+    contenders = (
+        list(evaluated) if size >= len(evaluated) else rng.sample(evaluated, size)
+    )
+    return max(
+        contenders,
+        key=lambda item: (item.adjusted_fitness, item.result.fitness),
+    )
+
+
+def _select_rank_parent(
+    evaluated: list[EvaluatedGenome],
+    rng: random.Random,
+    *,
+    pressure: float,
+) -> EvaluatedGenome:
+    """Rank-based parent selection that ignores absolute score magnitude."""
+    ranked = sorted(evaluated, key=lambda item: item.adjusted_fitness)
+    if len(ranked) == 1:
+        return ranked[0]
+    span = len(ranked) - 1
+    weights = [
+        1.0 + (max(1.0, pressure) - 1.0) * rank / span
+        for rank in range(len(ranked))
+    ]
+    selected = _weighted_pick(ranked, weights, rng)
+    return selected if selected is not None else ranked[-1]
+
+
+def _weighted_pick(
+    items: list[EvaluatedGenome],
+    weights: list[float],
+    rng: random.Random,
+) -> EvaluatedGenome | None:
+    """Pick one item from non-negative weights."""
+    total = sum(max(0.0, weight) for weight in weights)
+    if total <= 0.0:
+        return None
+    pick = rng.random() * total
+    acc = 0.0
+    for item, weight in zip(items, weights, strict=True):
+        acc += max(0.0, weight)
+        if acc >= pick:
+            return item
+    return items[-1] if items else None
+
+
+def _shifted_weights(values: list[float]) -> list[float]:
+    """Return non-negative weights that preserve ordering, even below zero."""
+    if not values:
+        return []
+    minimum = min(values)
+    return [value - minimum + 1e-9 for value in values]
 
 
 def _complete_results(results: list[FitnessResult | None]) -> list[FitnessResult]:
@@ -599,6 +1213,45 @@ def _complete_results(results: list[FitnessResult | None]) -> list[FitnessResult
         msg = f"missing fitness results for population index(es): {missing}"
         raise RuntimeError(msg)
     return [result for result in results if result is not None]
+
+
+def _with_novelty_metrics(
+    result: FitnessResult,
+    *,
+    novelty_score: float,
+    novelty_weight: float,
+) -> FitnessResult:
+    """Return a result whose fitness includes a novelty bonus."""
+    objective = float(result.fitness)
+    novelty = max(0.0, float(novelty_score))
+    bonus = novelty * max(0.0, float(novelty_weight))
+    metrics = dict(result.metrics)
+    metrics["fitness_objective"] = objective
+    metrics["novelty_score"] = novelty
+    metrics["novelty_weight"] = max(0.0, float(novelty_weight))
+    metrics["fitness_novelty_bonus"] = bonus
+    metrics["fitness_selection"] = objective + bonus
+    return FitnessResult(
+        fitness=objective + bonus,
+        metrics=metrics,
+        episodes=result.episodes,
+        frames=result.frames,
+    )
+
+
+def _safe_metric(value: object) -> float:
+    """Return a finite float for behavior descriptors."""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        out = float(value)
+        return out if math.isfinite(out) else 0.0
+    return 0.0
+
+
+def _descriptor_distance(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    """Euclidean distance between same-length behavior descriptors."""
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right, strict=True)))
 
 
 def _with_evaluation_metrics(

@@ -15,6 +15,10 @@ def _module_missing(name: str) -> bool:
         return True
 
 
+def _assign_frozen_attr(target: object, name: str, value: object) -> None:
+    setattr(target, name, value)
+
+
 @pytest.mark.unit
 def test_contracts_tree_contains_expected_modules() -> None:
     root = Path(__file__).parents[2] / "src" / "neuroforge" / "contracts"
@@ -174,11 +178,11 @@ def test_dtos_are_frozen() -> None:
 
     ctx = StepContext(step=0, dt=0.001, t=0.0)
     with pytest.raises(AttributeError):
-        ctx.step = 1  # type: ignore[misc]
+        _assign_frozen_attr(ctx, "step", 1)
 
     cfg = SimulationConfig()
     with pytest.raises(AttributeError):
-        cfg.dt = 0.01  # type: ignore[misc]
+        _assign_frozen_attr(cfg, "dt", 0.01)
 
     result = StepResult(step=0, t=0.0, spikes={})
     assert result.extra == {}
